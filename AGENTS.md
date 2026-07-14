@@ -1,0 +1,54 @@
+# Agent Guidelines for converge-miniapp
+
+## Scope
+
+These instructions apply to the entire repository.
+
+## Project direction
+
+- Build a deliberately small XMTP messaging app that runs as a Farcaster Mini App.
+- Borrow the visual language and interaction quality of the sibling `../converge.cv` project without copying its full feature set or architecture by default.
+- Treat `features.md` as the living product scope, decision log, and delivery tracker.
+- Cloudflare is the preferred initial hosting direction. Keep the architecture portable enough to compare it honestly with Vercel before the hosting choice becomes expensive to reverse.
+
+## Working agreement
+
+- Start by reading this file, `features.md`, the current Git status, and any task-specific docs.
+- Work in small, coherent tasks. Verify each task, commit it, and push it to GitHub before starting the next task.
+- Keep unrelated changes out of the same commit and preserve user-authored changes already in the worktree.
+- Record decisions, successful approaches, failed experiments, and important collaborator preferences while they are fresh.
+- Prefer repeatable CLI commands and repo-local configuration over undocumented dashboard steps.
+- Use GitHub CLI and HTTPS-backed GitHub authentication for repository operations; do not spend time debugging SSH first.
+- If requirements are uncertain, write the uncertainty into `features.md` as an open decision instead of silently turning an assumption into scope.
+
+## Product guardrails
+
+- Keep the first release narrow: launching, establishing the user's identity, viewing conversations, reading messages, and sending a message must feel excellent before adding breadth.
+- Use current official Farcaster, XMTP, and hosting-provider documentation for integration details that can drift.
+- Never describe transport encryption as anonymity. Be precise about what XMTP protects and what metadata may remain visible.
+- Never send private keys, message plaintext, or decrypted attachments to the app backend, logs, analytics, or error reporting.
+- Prefer on-device storage for XMTP client state and decrypted content. Any server-side data collection must be minimal, documented, and user-removable.
+- Treat wallet signatures and permission prompts as costly interactions: explain them in plain language and request them only when needed.
+- Design mobile-first for an embedded Mini App, including safe areas, constrained viewport heights, touch targets, keyboard behavior, loading states, and host-app dismissal/re-entry.
+- Maintain usable browser behavior outside Farcaster for development and recovery, but do not let the standalone mode complicate the Mini App MVP.
+
+## Design direction
+
+- Inspect the current `../converge.cv` implementation before making visual claims; filenames and past screenshots are not a substitute for the live code.
+- Reuse design tokens or small presentational patterns deliberately, not whole feature modules.
+- Preserve the sibling app's warmth, clarity, and identity-forward feel while reducing navigation, settings, explanatory copy, and secondary actions.
+- Accessibility is part of the design: preserve contrast, visible focus, reduced-motion support, readable type, and semantic controls.
+
+## Documentation and delivery
+
+- Keep completed, planned, deferred, and rejected work visibly distinct in `features.md`.
+- Every feature needs testable acceptance criteria before implementation starts.
+- Document any required Cloudflare resources, secrets, migrations, domains, and deployment commands in the repository as they are introduced.
+- Once the app is scaffolded, replace the provisional verification notes here with the exact install, typecheck, lint, test, build, local-preview, and deploy commands that have actually passed.
+- At the current documentation-only stage, verify changes with `git diff --check` and review all staged content before committing.
+
+## Current boundaries
+
+- Do not implement product code until the initial feature plan is reviewed or the user explicitly asks to proceed.
+- Do not assume push notifications require the same runtime as the web app; XMTP message observation and Farcaster notification delivery need a separate compatibility review.
+- Do not commit secrets, generated credentials, local databases, dependency directories, build output, or temporary research artifacts.
