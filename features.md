@@ -222,14 +222,12 @@ This journey assumes the same origin still has its existing local database. A fi
 
 ### Journey B: first XMTP setup
 
-1. App shows the current Farcaster profile and wallet address in a compact identity card.
-2. App says that XMTP needs a wallet signature to create or access an encrypted messaging inbox and that this is not a transaction.
-3. User chooses **Open my inbox**.
-4. App determines whether the wallet behaves as an EOA or a supported smart contract wallet and constructs the correct XMTP signer.
-5. Wallet presents any required signature prompts.
-6. App creates or resumes the inbox and installation, saves local state, performs the initial sync, offers best-effort cross-installation history recovery when applicable, and enters inbox/empty state.
+1. After host capability detection, the app immediately begins opening XMTP with the single EVM account supplied by Farcaster; it shows no wallet, key, or inbox chooser.
+2. App determines whether that account behaves as an EOA or a supported smart contract wallet and constructs the correct XMTP signer.
+3. The host presents only the wallet approvals required by XMTP setup. The app identifies them as XMTP signatures and says they are not transactions.
+4. App creates or resumes the inbox and installation, saves local state, performs the initial sync, offers best-effort cross-installation history recovery when applicable, and enters inbox/empty state.
 
-Success condition: the user knows which identity was used and can retry or leave safely after rejection.
+Success condition: setup requires no product decision, never substitutes an app-owned key, and stops in an explicit retry state after rejection.
 
 ### Journey C: read and reply
 
@@ -359,7 +357,7 @@ Requirements:
 - Determine EOA versus supported ERC-1271 smart contract wallet behavior before creating the XMTP signer.
 - Use the exact chain ID expected for a smart wallet and keep it consistent on future sessions.
 - Convert provider signatures into the byte format required by the current XMTP Browser SDK.
-- Explain registration/installation signatures before requesting them.
+- Explain registration/installation signatures in the progress state shown with the host approval; do not add a preliminary onboarding choice.
 - Handle rejection, unsupported wallet behavior, chain mismatch, provider disconnect, and account change.
 - Set a production `appVersion` and explicitly select XMTP `dev` or `production`; never let the SDK default choose release behavior.
 
@@ -1126,6 +1124,12 @@ Extended locally on 2026-07-14:
 - XMTP client initialization is bounded to 30 seconds; a timed-out or otherwise unreachable hidden Worker retains the origin lease and requires reload, while any late-returned Client is closed;
 - stream teardown always terminates the Client Worker before the caller releases the OPFS lease, even if SDK stream cleanup rejects or never settles; and
 - nested/structured-clone-shaped SDK errors are reduced to curated wallet, network, storage, installation-limit, and permanent inbox-update states without returning raw WASM messages, paths, or inbox IDs to the UI.
+
+Extended locally on 2026-07-15:
+
+- embedded startup automatically opens XMTP with the Farcaster host's preferred EVM account after capability detection, without an app-level wallet/key/inbox choice;
+- React Strict Mode replay cancels the scheduled first setup before wallet access and produces one live host-wallet/session attempt; and
+- rejection and terminal safety states do not auto-loop, while an explicit retry remains available where retrying is safe.
 
 The pinned Browser SDK still requires a document restart if its internal Worker fails during `Client.init()` before returning a closable Client. Registration itself is app-owned and closes safely on wallet rejection. Real desktop/iOS/Android signatures, OPFS re-entry, SCW continuity, storage eviction, and near-limit inbox cases remain required evidence; origin-only code cannot deterministically distinguish a first visit from complete site-data eviction.
 

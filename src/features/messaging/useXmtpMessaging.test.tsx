@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type {
@@ -131,6 +132,48 @@ describe('useXmtpMessaging', () => {
       provider,
       signer: {},
     })
+  })
+
+  it('automatically opens one host-wallet session through Strict Mode replay', async () => {
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(
+      () => useXmtpMessaging({ autoConnect: true }),
+      { wrapper: StrictMode },
+    )
+
+    await waitFor(() => expect(result.current.connection).toEqual({
+      error: null,
+      phase: 'ready',
+    }))
+
+    expect(mocks.connectHostWallet).toHaveBeenCalledOnce()
+    expect(mocks.createSession).toHaveBeenCalledOnce()
+  })
+
+  it('stops automatic setup after rejection and retries only on request', async () => {
+    const session = createSession()
+    mocks.connectHostWallet
+      .mockRejectedValueOnce({ code: 4001, message: 'User rejected the request.' })
+      .mockResolvedValueOnce({
+        address,
+        chainId: 10n,
+        kind: 'EOA',
+        provider,
+        signer: {},
+      })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging({ autoConnect: true }))
+
+    await waitFor(() => expect(result.current.connection.phase).toBe('error'))
+    expect(result.current.connection.error).toMatch(/wallet request was cancelled/i)
+    expect(mocks.connectHostWallet).toHaveBeenCalledOnce()
+
+    await act(async () => result.current.connect())
+
+    expect(result.current.connection.phase).toBe('ready')
+    expect(mocks.connectHostWallet).toHaveBeenCalledTimes(2)
+    expect(mocks.createSession).toHaveBeenCalledOnce()
   })
 
   it('stops before wallet access when secure browser storage is unsupported', async () => {

@@ -51,7 +51,11 @@ const initialConnection: ConnectionState = {
   phase: 'idle',
 }
 
-export function useXmtpMessaging() {
+type UseXmtpMessagingOptions = {
+  autoConnect?: boolean
+}
+
+export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOptions = {}) {
   const mountedRef = useRef(true)
   const connectionAttemptRef = useRef(0)
   const cleanupPromiseRef = useRef<Promise<void> | null>(null)
@@ -977,6 +981,12 @@ export function useXmtpMessaging() {
       void releaseResources()
     }
   }, [releaseResources])
+
+  useEffect(() => {
+    if (!autoConnect) return
+    const timer = window.setTimeout(() => void connect(), 0)
+    return () => window.clearTimeout(timer)
+  }, [autoConnect, connect])
 
   return {
     activeConversation,

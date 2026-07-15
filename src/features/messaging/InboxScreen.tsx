@@ -1,6 +1,6 @@
 import {
   ArrowDownUp,
-  LogOut,
+  CircleUserRound,
   MessageCircleMore,
   Plus,
   RefreshCw,
@@ -16,7 +16,6 @@ type InboxScreenProps = {
   address: `0x${string}`
   conversations: ConversationSummary[]
   environment: string
-  onDisconnect: () => void
   onNewDm: () => void
   onOpen: (conversationId: string) => void
   onRefresh: () => void
@@ -34,7 +33,6 @@ export function InboxScreen({
   address,
   conversations,
   environment,
-  onDisconnect,
   onNewDm,
   onOpen,
   onRefresh,
@@ -56,9 +54,23 @@ export function InboxScreen({
             <span>{shortIdentity(address)} · {environment}</span>
           </div>
         </div>
-        <button className="icon-button" type="button" onClick={onDisconnect} aria-label="Disconnect XMTP inbox">
-          <LogOut aria-hidden="true" />
-        </button>
+        <details className="identity-menu">
+          <summary className="icon-button" aria-label="Identity and privacy">
+            <CircleUserRound aria-hidden="true" />
+          </summary>
+          <section className="identity-menu__panel" aria-labelledby="identity-menu-title">
+            <p className="eyebrow">Connected identity</p>
+            <h2 id="identity-menu-title">Farcaster wallet</h2>
+            <code>{address}</code>
+            <p>{environment}</p>
+            <div className="identity-menu__privacy">
+              <strong>Local message privacy</strong>
+              <span>
+                Host profile details are unverified display hints; this wallet selects the XMTP identity. Browser message storage is local but not encrypted at rest. XMTP history recovery is best effort. Use a device and browser profile you trust.
+              </span>
+            </div>
+          </section>
+        </details>
       </header>
 
       {streamHealth !== 'live' ? (

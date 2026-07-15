@@ -1,12 +1,9 @@
 import {
   AlertTriangle,
-  LockKeyhole,
   PanelsTopLeft,
-  ShieldCheck,
   X,
 } from 'lucide-react'
 
-import { Avatar } from '../../components/Avatar'
 import { Button } from '../../components/Button'
 import { StatePanel } from '../../components/StatePanel'
 import { useMiniAppBack } from '../../app/useMiniAppBack'
@@ -64,7 +61,7 @@ const connectionCopy: Partial<Record<ConnectionPhase, {
 }
 
 export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppProps) {
-  const messaging = useXmtpMessaging()
+  const messaging = useXmtpMessaging({ autoConnect: canUseWallet })
   useMiniAppBack(
     canUseBack,
     messaging.connection.phase === 'ready' && messaging.view !== 'inbox',
@@ -72,12 +69,23 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
   )
 
   if (messaging.connection.phase === 'idle') {
+    if (!canUseWallet) {
+      return (
+        <StatePanel
+          description="This Farcaster client does not expose the host wallet access XMTP needs. Converge Mini will not substitute another wallet or generate a private key."
+          eyebrow="Host wallet unavailable"
+          icon={<AlertTriangle aria-hidden="true" />}
+          title="This Farcaster client cannot open XMTP"
+        />
+      )
+    }
+
     return (
-      <IdentityWelcome
-        canUseWallet={canUseWallet}
-        connecting={false}
-        onConnect={messaging.connect}
-        user={user}
+      <StatePanel
+        busy
+        description="Converge Mini is preparing the XMTP inbox for the account supplied by Farcaster. Approve only the XMTP signature request shown by your host; it is not a transaction."
+        eyebrow="Private inbox"
+        title="Opening your inbox"
       />
     )
   }
@@ -121,7 +129,6 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
   if (messaging.connection.phase === 'unsupported-browser') {
     return (
       <StatePanel
-        actions={<Button variant="ghost" onClick={messaging.disconnect}>Back</Button>}
         description={messaging.connection.error ?? 'This browser cannot safely open XMTP local storage.'}
         eyebrow="Unsupported browser storage"
         icon={<AlertTriangle aria-hidden="true" />}
@@ -136,7 +143,6 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
         actions={(
           <>
             <Button onClick={() => window.location.reload()}>Reload Mini App</Button>
-            <Button variant="ghost" onClick={messaging.disconnect}>Back</Button>
           </>
         )}
         description={messaging.connection.error ?? 'The local XMTP database could not open safely.'}
@@ -150,7 +156,6 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
   if (messaging.connection.phase === 'installation-limit') {
     return (
       <StatePanel
-        actions={<Button variant="ghost" onClick={messaging.disconnect}>Back</Button>}
         description={messaging.connection.error ?? 'Revoke an old installation in another XMTP client before returning.'}
         eyebrow="XMTP installation limit"
         icon={<AlertTriangle aria-hidden="true" />}
@@ -162,7 +167,6 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
   if (messaging.connection.phase === 'inbox-update-limit') {
     return (
       <StatePanel
-        actions={<Button variant="ghost" onClick={messaging.disconnect}>Back</Button>}
         description={messaging.connection.error ?? 'This inbox cannot accept more identity updates.'}
         eyebrow="Permanent XMTP inbox limit"
         icon={<AlertTriangle aria-hidden="true" />}
@@ -175,10 +179,7 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
     return (
       <StatePanel
         actions={(
-          <>
-            <Button onClick={messaging.connect}>Try again</Button>
-            <Button variant="ghost" onClick={messaging.disconnect}>Reset connection</Button>
-          </>
+          <Button onClick={messaging.connect}>Try again</Button>
         )}
         description={messaging.connection.error ?? 'Close this view and try opening the inbox again.'}
         eyebrow="Connection stopped"
@@ -212,7 +213,6 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
           address={messaging.address}
           conversations={messaging.conversations}
           environment={`${messaging.environment} · ${messaging.walletKind ?? 'wallet'}`}
-          onDisconnect={messaging.disconnect}
           onNewDm={() => messaging.setView('new-dm')}
           onOpen={messaging.openConversation}
           onRefresh={messaging.refresh}
@@ -248,67 +248,5 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
         />
       ) : null}
     </div>
-  )
-}
-
-type IdentityWelcomeProps = Pick<MessagingAppProps, 'canUseWallet' | 'user'> & {
-  connecting: boolean
-  onConnect: () => void
-}
-
-function IdentityWelcome({ canUseWallet, connecting, onConnect, user }: IdentityWelcomeProps) {
-  const name = user.displayName ?? user.username ?? `Farcaster user ${user.fid}`
-
-  return (
-    <section className="welcome" aria-labelledby="welcome-title">
-      <div className="welcome__glow" aria-hidden="true" />
-      <div className="welcome__identity">
-        <Avatar name={name} src={user.pfpUrl} size="large" />
-        <div>
-          <p className="eyebrow">Farcaster host profile</p>
-          <h1 id="welcome-title">Hi, {name}</h1>
-          {user.username ? <p className="welcome__username">@{user.username}</p> : null}
-        </div>
-      </div>
-
-      <p className="welcome__lead">Your private XMTP inbox, without leaving Farcaster.</p>
-
-      <div className="trust-list" aria-label="Connection details">
-        <div className="trust-row">
-          <span className="trust-row__icon"><LockKeyhole aria-hidden="true" /></span>
-          <div>
-            <strong>Wallet signatures, clearly explained</strong>
-            <span>We explain XMTP setup before your wallet opens. Setup can require more than one approval.</span>
-          </div>
-        </div>
-        <div className="trust-row">
-          <span className="trust-row__icon"><ShieldCheck aria-hidden="true" /></span>
-          <div>
-            <strong>Your messages stay yours</strong>
-            <span>Keys and decrypted message content remain in this browser.</span>
-          </div>
-        </div>
-      </div>
-
-      <Button
-        busy={connecting}
-        className="welcome__button"
-        disabled={!canUseWallet}
-        onClick={onConnect}
-      >
-        <LockKeyhole aria-hidden="true" />
-        Open private inbox
-      </Button>
-
-      <div className={`capability-note ${canUseWallet ? 'capability-note--ready' : ''}`}>
-        <span className="status-dot" aria-hidden="true" />
-        {canUseWallet
-          ? 'Farcaster wallet support is ready.'
-          : 'This Farcaster client does not expose the wallet access XMTP needs.'}
-      </div>
-      <p className="storage-disclosure">
-        Host profile details are unverified display hints; your wallet selects the XMTP identity. Browser message storage is local but not encrypted at rest. XMTP device history sync can re-encrypt and upload history for recovery by your other installations. Use a device and browser profile you trust.
-      </p>
-    </section>
   )
 }
