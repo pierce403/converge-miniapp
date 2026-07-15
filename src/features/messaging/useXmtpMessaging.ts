@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { HostWalletConnection } from '../../lib/xmtp/signer'
 import type { XmtpLease } from '../../lib/xmtp/lease'
-import type { XmtpMessagingSession } from '../../lib/xmtp/session'
+import type {
+  XmtpIdentityRelationship,
+  XmtpMessagingSession,
+} from '../../lib/xmtp/session'
 import {
   classifyXmtpFailure,
   type XmtpFailureKind,
@@ -582,6 +585,14 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
     }
   }, [releaseResources, startMessageStream, updateNotice])
 
+  const inspectIdentityRelationship = useCallback(async (
+    candidateAddress: `0x${string}`,
+  ): Promise<XmtpIdentityRelationship> => {
+    const session = sessionRef.current
+    if (!session) throw new Error('Open the XMTP inbox before checking another identity.')
+    return session.inspectIdentityRelationship(candidateAddress)
+  }, [])
+
   const openConversation = useCallback(async (
     conversationId: string,
     seed?: ActiveConversation,
@@ -1001,6 +1012,7 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
     loadingConversation,
     loadingOlder,
     hasOlderMessages,
+    inspectIdentityRelationship,
     loadOlderMessages,
     messages,
     notice,

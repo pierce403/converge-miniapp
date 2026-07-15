@@ -1,14 +1,19 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { MessagingApp } from './MessagingApp'
 
 const mocks = vi.hoisted(() => ({
+  ens: vi.fn(),
   messaging: vi.fn(),
 }))
 
 vi.mock('./useXmtpMessaging', () => ({
   useXmtpMessaging: mocks.messaging,
+}))
+
+vi.mock('../identity/useEnsIdentity', () => ({
+  useEnsIdentity: mocks.ens,
 }))
 
 vi.mock('../../app/useMiniAppBack', () => ({
@@ -21,6 +26,7 @@ describe('MessagingApp storage and installation states', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.messaging.mockReturnValue(readyMessaging())
+    mocks.ens.mockReturnValue(readyEns())
   })
 
   it('starts host-wallet setup without presenting an onboarding choice', () => {
@@ -124,6 +130,44 @@ describe('MessagingApp storage and installation states', () => {
     expect(screen.getByText('Local message privacy')).toBeInTheDocument()
     expect(screen.getByText(/browser message storage is local but not encrypted at rest/i)).toBeInTheDocument()
   })
+
+  it('offers a forward-verified ENS name only when it is already this inbox', () => {
+    const setPreference = vi.fn().mockResolvedValue(undefined)
+    mocks.ens.mockReturnValue(readyEns({
+      candidate: {
+        address: '0x1111111111111111111111111111111111111111',
+        name: 'pierce.eth',
+      },
+      relationship: 'same-inbox',
+      setPreference,
+    }))
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    expect(screen.getByRole('dialog', {
+      name: 'Use pierce.eth for this inbox?',
+    })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'No thanks' }))
+    expect(setPreference).toHaveBeenCalledWith('dismissed')
+  })
+
+  it('keeps separate ENS inboxes out of the automatic offer and explains the menu action', () => {
+    mocks.ens.mockReturnValue(readyEns({
+      candidate: {
+        address: '0x1111111111111111111111111111111111111111',
+        name: 'separate.eth',
+      },
+      preference: 'dismissed',
+      relationship: 'different-inbox',
+    }))
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Connect ENS inbox' }))
+    expect(screen.getByText(/separate XMTP inbox/i)).toBeInTheDocument()
+    expect(screen.getByText(/cannot be merged/i)).toBeInTheDocument()
+  })
 })
 
 function readyMessaging() {
@@ -138,6 +182,7 @@ function readyMessaging() {
     disconnect: vi.fn(),
     environment: 'dev',
     hasOlderMessages: false,
+    inspectIdentityRelationship: vi.fn(),
     loadOlderMessages: vi.fn(),
     loadingConversation: false,
     loadingOlder: false,
@@ -156,5 +201,18 @@ function readyMessaging() {
     streamHealth: 'live',
     view: 'inbox',
     walletKind: 'EOA',
+  }
+}
+
+function readyEns(overrides: Record<string, unknown> = {}) {
+  return {
+    candidate: null,
+    clearPreference: vi.fn().mockResolvedValue(undefined),
+    preference: null,
+    refresh: vi.fn(),
+    relationship: null,
+    setPreference: vi.fn().mockResolvedValue(undefined),
+    status: 'none',
+    ...overrides,
   }
 }

@@ -3,10 +3,16 @@ import {
   PanelsTopLeft,
   X,
 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '../../components/Button'
 import { StatePanel } from '../../components/StatePanel'
 import { useMiniAppBack } from '../../app/useMiniAppBack'
+import {
+  useEnsIdentity,
+  type EnsCandidate,
+  type EnsPreference,
+} from '../identity/useEnsIdentity'
 import { ConversationScreen } from './ConversationScreen'
 import { InboxScreen } from './InboxScreen'
 import { NewDmScreen } from './NewDmScreen'
@@ -61,7 +67,13 @@ const connectionCopy: Partial<Record<ConnectionPhase, {
 }
 
 export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppProps) {
+  const [ensPromptSuppressed, setEnsPromptSuppressed] = useState(false)
   const messaging = useXmtpMessaging({ autoConnect: canUseWallet })
+  const ensIdentity = useEnsIdentity({
+    enabled: messaging.connection.phase === 'ready' && messaging.address !== null,
+    fid: user.fid,
+    inspectRelationship: messaging.inspectIdentityRelationship,
+  })
   useMiniAppBack(
     canUseBack,
     messaging.connection.phase === 'ready' && messaging.view !== 'inbox',
@@ -191,8 +203,40 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
 
   if (messaging.connection.phase !== 'ready' || !messaging.address) return null
 
+  const setEnsPreference = async (choice: Exclude<EnsPreference, null>) => {
+    try {
+      await ensIdentity.setPreference(choice)
+    } catch (error) {
+      messaging.setNotice(error instanceof Error
+        ? error.message
+        : 'The ENS preference could not be saved.')
+    }
+  }
+  const clearEnsPreference = async () => {
+    setEnsPromptSuppressed(true)
+    try {
+      await ensIdentity.clearPreference()
+    } catch (error) {
+      messaging.setNotice(error instanceof Error
+        ? error.message
+        : 'The saved ENS preference could not be deleted.')
+    }
+  }
+  const canOfferEns = ensIdentity.candidate &&
+    ensIdentity.preference === null &&
+    !ensPromptSuppressed &&
+    (ensIdentity.relationship === 'active-address' ||
+      ensIdentity.relationship === 'same-inbox')
+
   return (
     <div className={`messaging-app ${messaging.notice ? 'messaging-app--notice' : ''}`}>
+      {canOfferEns && ensIdentity.candidate && messaging.view === 'inbox' ? (
+        <EnsIdentityOffer
+          candidate={ensIdentity.candidate}
+          onAccept={() => setEnsPreference('accepted')}
+          onDecline={() => setEnsPreference('dismissed')}
+        />
+      ) : null}
       {messaging.storageDurability === 'best-effort' ? (
         <div className="storage-warning" role="status">
           <AlertTriangle aria-hidden="true" />
@@ -212,11 +256,15 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
         <InboxScreen
           address={messaging.address}
           conversations={messaging.conversations}
+          ensIdentity={ensIdentity}
           environment={`${messaging.environment} · ${messaging.walletKind ?? 'wallet'}`}
+          onClearEnsPreference={() => void clearEnsPreference()}
           onNewDm={() => messaging.setView('new-dm')}
           onOpen={messaging.openConversation}
           onRefresh={messaging.refresh}
+          onRefreshEns={ensIdentity.refresh}
           onRetryLiveUpdates={messaging.retryLiveUpdates}
+          onUseEns={() => void setEnsPreference('accepted')}
           profile={user}
           refreshing={messaging.refreshing}
           streamHealth={messaging.streamHealth}
@@ -248,5 +296,77 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
         />
       ) : null}
     </div>
+  )
+}
+
+type EnsIdentityOfferProps = {
+  candidate: EnsCandidate
+  onAccept: () => Promise<void>
+  onDecline: () => Promise<void>
+}
+
+function EnsIdentityOffer({ candidate, onAccept, onDecline }: EnsIdentityOfferProps) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const [saving, setSaving] = useState(false)
+
+  const save = async (action: () => Promise<void>) => {
+    if (saving) return
+    setSaving(true)
+    try {
+      await action()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    if (typeof dialog.showModal === 'function') dialog.showModal()
+    else dialog.setAttribute('open', '')
+
+    return () => {
+      if (typeof dialog.close === 'function') dialog.close()
+      else dialog.removeAttribute('open')
+    }
+  }, [])
+
+  return (
+    <dialog
+      aria-describedby="ens-offer-description"
+      aria-labelledby="ens-offer-title"
+      className="ens-offer"
+      onCancel={(event) => {
+        event.preventDefault()
+        void save(onDecline)
+      }}
+      ref={dialogRef}
+    >
+      <section
+        className="ens-offer__card"
+      >
+        <p className="eyebrow">ENS identity found</p>
+        <h2 id="ens-offer-title">Use {candidate.name} for this inbox?</h2>
+        <p id="ens-offer-description">
+          This forward-verified ENS primary name resolves to an address already in this XMTP inbox. Using it changes the label only; no key or message history moves.
+        </p>
+        <div className="ens-offer__actions">
+          <Button
+            autoFocus
+            busy={saving}
+            onClick={() => void save(onAccept)}
+          >
+            Use ENS name
+          </Button>
+          <Button
+            disabled={saving}
+            variant="ghost"
+            onClick={() => void save(onDecline)}
+          >
+            No thanks
+          </Button>
+        </div>
+      </section>
+    </dialog>
   )
 }

@@ -6,20 +6,26 @@ import {
   RefreshCw,
   WifiOff,
 } from 'lucide-react'
+import { useState } from 'react'
 
 import { Avatar } from '../../components/Avatar'
 import { Button } from '../../components/Button'
+import type { EnsIdentityState } from '../identity/useEnsIdentity'
 import type { ConversationSummary, StreamHealth } from './types'
 import { conversationTime, shortIdentity } from './format'
 
 type InboxScreenProps = {
   address: `0x${string}`
   conversations: ConversationSummary[]
+  ensIdentity: EnsIdentityState
   environment: string
   onNewDm: () => void
   onOpen: (conversationId: string) => void
+  onClearEnsPreference: () => void
   onRefresh: () => void
+  onRefreshEns: () => void
   onRetryLiveUpdates: () => void
+  onUseEns: () => void
   profile: {
     displayName?: string
     pfpUrl?: string
@@ -32,16 +38,27 @@ type InboxScreenProps = {
 export function InboxScreen({
   address,
   conversations,
+  ensIdentity,
   environment,
   onNewDm,
   onOpen,
+  onClearEnsPreference,
   onRefresh,
+  onRefreshEns,
   onRetryLiveUpdates,
+  onUseEns,
   profile,
   refreshing,
   streamHealth,
 }: InboxScreenProps) {
-  const name = profile.displayName ?? profile.username ?? shortIdentity(address)
+  const [reviewingEns, setReviewingEns] = useState(false)
+  const ensConnected = ensIdentity.preference === 'accepted' && (
+    ensIdentity.relationship === 'active-address' ||
+    ensIdentity.relationship === 'same-inbox'
+  )
+  const name = ensConnected && ensIdentity.candidate
+    ? ensIdentity.candidate.name
+    : profile.displayName ?? profile.username ?? shortIdentity(address)
 
   return (
     <section className="messaging-screen inbox-screen" aria-labelledby="inbox-title">
@@ -63,6 +80,14 @@ export function InboxScreen({
             <h2 id="identity-menu-title">Farcaster wallet</h2>
             <code>{address}</code>
             <p>{environment}</p>
+            <EnsMenuIdentity
+              identity={ensIdentity}
+              onClearPreference={onClearEnsPreference}
+              onRefresh={onRefreshEns}
+              onReview={() => setReviewingEns((current) => !current)}
+              onUse={onUseEns}
+              reviewing={reviewingEns}
+            />
             <div className="identity-menu__privacy">
               <strong>Local message privacy</strong>
               <span>
@@ -147,5 +172,89 @@ export function InboxScreen({
         </div>
       )}
     </section>
+  )
+}
+
+type EnsMenuIdentityProps = {
+  identity: EnsIdentityState
+  onClearPreference: () => void
+  onRefresh: () => void
+  onReview: () => void
+  onUse: () => void
+  reviewing: boolean
+}
+
+function EnsMenuIdentity({
+  identity,
+  onClearPreference,
+  onRefresh,
+  onReview,
+  onUse,
+  reviewing,
+}: EnsMenuIdentityProps) {
+  const candidate = identity.candidate
+  const alreadyConnected = identity.relationship === 'active-address' ||
+    identity.relationship === 'same-inbox'
+
+  if (!candidate) {
+    return (
+      <div className="identity-menu__ens">
+        <strong>ENS inbox</strong>
+        <span>{identity.preference === 'dismissed' && identity.status === 'idle'
+          ? 'You declined the automatic ENS offer on this device.'
+          : identity.status === 'checking'
+          ? 'Checking your Farcaster primary address…'
+          : identity.status === 'none'
+            ? 'No forward-verified ENS primary name was found.'
+            : 'ENS identity discovery is unavailable right now.'}</span>
+        <button type="button" onClick={onRefresh} disabled={identity.status === 'checking'}>
+          Check ENS identity
+        </button>
+        {identity.preference !== null ? (
+          <button type="button" onClick={onClearPreference}>
+            Delete saved ENS choice
+          </button>
+        ) : null}
+      </div>
+    )
+  }
+
+  return (
+    <div className="identity-menu__ens">
+      <strong>{candidate.name}</strong>
+      <code>{candidate.address}</code>
+      {alreadyConnected ? (
+        <>
+          <span>
+            {identity.relationship === 'active-address'
+              ? 'This name resolves to the Farcaster wallet already opening XMTP.'
+              : 'This address is already associated with the active XMTP inbox.'}
+          </span>
+          {identity.preference === 'accepted' ? (
+            <span className="identity-menu__connected">ENS name in use</span>
+          ) : (
+            <button type="button" onClick={onUse}>Use ENS name</button>
+          )}
+        </>
+      ) : (
+        <>
+          <button type="button" onClick={onReview}>Connect ENS inbox</button>
+          {reviewing ? (
+            <span className="identity-menu__warning">
+              {identity.relationship === 'different-inbox'
+                ? 'This address belongs to a separate XMTP inbox. XMTP inboxes and their message histories cannot be merged.'
+                : identity.relationship === 'no-inbox'
+                  ? 'Farcaster does not expose this ENS address as a signer, so Converge Mini cannot safely add it to the active inbox.'
+                  : 'XMTP could not verify how this address relates to the active inbox. No identity was changed.'}
+            </span>
+          ) : null}
+        </>
+      )}
+      {identity.preference !== null ? (
+        <button type="button" onClick={onClearPreference}>
+          Delete saved ENS choice
+        </button>
+      ) : null}
+    </div>
   )
 }

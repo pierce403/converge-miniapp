@@ -600,6 +600,39 @@ img { max-width: 100%; }
   font-size: 0.7rem;
 }
 
+.identity-menu__ens {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid rgb(96 165 250 / 18%);
+}
+
+.identity-menu__ens > strong { color: var(--primary-100); font-size: 0.78rem; }
+.identity-menu__ens > span { color: rgb(219 234 254 / 78%); font-size: 0.68rem; line-height: 1.4; }
+
+.identity-menu__ens > button {
+  min-height: 38px;
+  margin-top: 4px;
+  padding: 7px 10px;
+  border: 1px solid rgb(96 165 250 / 28%);
+  border-radius: 10px;
+  color: var(--primary-100);
+  background: rgb(30 64 175 / 32%);
+  cursor: pointer;
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+
+.identity-menu__ens > button:hover:not(:disabled) {
+  border-color: rgb(251 146 60 / 48%);
+  background: rgb(30 64 175 / 52%);
+}
+
+.identity-menu__ens > button:disabled { cursor: wait; opacity: 0.6; }
+.identity-menu__ens .identity-menu__connected { color: #bbf7d0; font-weight: 750; }
+.identity-menu__ens .identity-menu__warning { color: var(--accent-200); }
+
 .identity-menu__privacy {
   display: grid;
   gap: 5px;
@@ -610,6 +643,59 @@ img { max-width: 100%; }
 
 .identity-menu__privacy strong { color: var(--primary-100); font-size: 0.76rem; }
 .identity-menu__privacy span { color: rgb(219 234 254 / 78%); font-size: 0.68rem; line-height: 1.45; }
+
+.ens-offer {
+  position: fixed;
+  z-index: 12;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  box-sizing: border-box;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  border: 0;
+  border-radius: 22px;
+  color: inherit;
+  background: rgb(3 12 35 / 76%);
+  backdrop-filter: blur(8px);
+}
+
+.ens-offer:not([open]) { display: none; }
+.ens-offer::backdrop { background: transparent; }
+
+.ens-offer__card {
+  width: min(100%, 420px);
+  padding: 22px;
+  border: 1px solid rgb(96 165 250 / 34%);
+  border-radius: 20px;
+  background: linear-gradient(155deg, rgb(11 31 74 / 98%), rgb(30 58 138 / 98%));
+  box-shadow: 0 24px 64px rgb(0 0 0 / 48%);
+}
+
+.ens-offer__card h2 {
+  margin: 5px 0 10px;
+  color: var(--primary-50);
+  font-size: 1.25rem;
+  letter-spacing: -0.025em;
+}
+
+.ens-offer__card > p:not(.eyebrow) {
+  margin: 0;
+  color: var(--primary-200);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.ens-offer__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 18px;
+}
 
 .connection-banner {
   display: flex;

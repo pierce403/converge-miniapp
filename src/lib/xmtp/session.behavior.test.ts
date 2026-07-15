@@ -85,6 +85,7 @@ function client(conversation: Dm) {
       syncAll: vi.fn(),
     },
     env: 'dev',
+    fetchInboxIdByIdentifier: vi.fn(),
     inboxId: 'own-inbox',
     preferences: {
       getInboxStates: vi.fn().mockResolvedValue([{
@@ -200,6 +201,27 @@ describe('XmtpMessagingSession behavior', () => {
     const resumedSession = await XmtpMessagingSession.create(signer, address)
     await expect(resumedSession.requestHistorySync()).resolves.toBe(false)
     expect(resumedClient.sendSyncRequest).not.toHaveBeenCalled()
+  })
+
+  it('classifies ENS addresses without mutating either XMTP inbox', async () => {
+    const fakeClient = client(dm())
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    await expect(session.inspectIdentityRelationship(address)).resolves.toBe(
+      'active-address',
+    )
+    expect(fakeClient.fetchInboxIdByIdentifier).not.toHaveBeenCalled()
+
+    fakeClient.fetchInboxIdByIdentifier
+      .mockResolvedValueOnce('own-inbox')
+      .mockResolvedValueOnce('another-inbox')
+      .mockResolvedValueOnce(undefined)
+    const candidate = '0x1111111111111111111111111111111111111111'
+
+    await expect(session.inspectIdentityRelationship(candidate)).resolves.toBe('same-inbox')
+    await expect(session.inspectIdentityRelationship(candidate)).resolves.toBe('different-inbox')
+    await expect(session.inspectIdentityRelationship(candidate)).resolves.toBe('no-inbox')
   })
 
   it('reads the cached inbox before synchronizing and rereads afterward', async () => {

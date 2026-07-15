@@ -1,3 +1,9 @@
+import {
+  discoverEnsIdentity,
+  type EnsDiscovery,
+} from './ens.js'
+import { verifyQuickAuthToken } from './quickAuth.js'
+
 const securityHeaders = {
   'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
   'referrer-policy': 'no-referrer',
@@ -25,13 +31,33 @@ const bootstrapManifestJsonHeaders = {
 
 const BASE64URL_VALUE = /^[A-Za-z0-9_-]+$/
 
-export type AppEnv = Env & {
+export type AppEnv = {
+  APP_ENV: Env['APP_ENV']
+  APP_VERSION: Env['APP_VERSION']
+  CANONICAL_ORIGIN: Env['CANONICAL_ORIGIN']
+  CF_VERSION_METADATA: Env['CF_VERSION_METADATA']
+  ENS_MAINNET_RPC_URLS?: Env['ENS_MAINNET_RPC_URLS']
   FARCASTER_ACCOUNT_ASSOCIATION_HEADER?: string
   FARCASTER_ACCOUNT_ASSOCIATION_PAYLOAD?: string
   FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE?: string
+  PREFERENCES?: D1Database
 }
 
-export function handleRequest(request: Request, env: AppEnv): Response {
+export type WorkerDependencies = {
+  discoverEnsIdentity: (fid: number, rpcUrls: string) => Promise<EnsDiscovery>
+  verifyQuickAuthToken: (token: string, domain: string) => Promise<number>
+}
+
+const defaultDependencies: WorkerDependencies = {
+  discoverEnsIdentity,
+  verifyQuickAuthToken,
+}
+
+export async function handleRequest(
+  request: Request,
+  env: AppEnv,
+  dependencies: WorkerDependencies = defaultDependencies,
+): Promise<Response> {
   const url = new URL(request.url)
 
   if (url.pathname === '/.well-known/farcaster.json') {
@@ -56,6 +82,14 @@ export function handleRequest(request: Request, env: AppEnv): Response {
     )
   }
 
+  if (
+    url.pathname === '/api/me/ens' ||
+    url.pathname === '/api/me/ens-preference' ||
+    url.pathname === '/api/me'
+  ) {
+    return identityApi(request, env, dependencies)
+  }
+
   if (url.pathname.startsWith('/api/')) {
     return Response.json(
       {
@@ -66,6 +100,139 @@ export function handleRequest(request: Request, env: AppEnv): Response {
   }
 
   return new Response(null, { status: 404, headers: securityHeaders })
+}
+
+async function identityApi(
+  request: Request,
+  env: AppEnv,
+  dependencies: WorkerDependencies,
+): Promise<Response> {
+  const url = new URL(request.url)
+  const canonicalDomain = new URL(env.CANONICAL_ORIGIN).host
+  if (env.APP_ENV === 'production' && url.host !== canonicalDomain) {
+    return jsonError('not_found', 404)
+  }
+  const authDomain = env.APP_ENV === 'production' ? canonicalDomain : url.host
+
+  if (url.pathname === '/api/me/ens' && request.method !== 'GET') {
+    return methodNotAllowed('GET')
+  }
+  if (url.pathname === '/api/me/ens-preference' && request.method !== 'PUT') {
+    return methodNotAllowed('PUT')
+  }
+  if (url.pathname === '/api/me' && request.method !== 'DELETE') {
+    return methodNotAllowed('DELETE')
+  }
+
+  const token = bearerToken(request)
+  if (!token) return jsonError('unauthorized', 401)
+
+  let fid: number
+  try {
+    fid = await dependencies.verifyQuickAuthToken(token, authDomain)
+  } catch {
+    return jsonError('unauthorized', 401)
+  }
+
+  try {
+    if (!env.PREFERENCES) {
+      return jsonError('identity_unavailable', 503)
+    }
+
+    if (url.pathname === '/api/me/ens') {
+      if (!env.ENS_MAINNET_RPC_URLS) {
+        return jsonError('identity_unavailable', 503)
+      }
+      const [preference, discovery] = await Promise.all([
+        readEnsPreference(env.PREFERENCES, fid),
+        dependencies.discoverEnsIdentity(fid, env.ENS_MAINNET_RPC_URLS),
+      ])
+      return Response.json(
+        {
+          ens: discovery.candidate,
+          preference,
+          status: discovery.status,
+        },
+        { headers: noStoreJsonHeaders },
+      )
+    }
+
+    if (url.pathname === '/api/me/ens-preference') {
+      const choice = await preferenceChoice(request)
+      if (!choice) return jsonError('invalid_request', 400)
+      await env.PREFERENCES.prepare(`
+        INSERT INTO ens_identity_preferences (fid, choice, updated_at)
+        VALUES (?1, ?2, unixepoch())
+        ON CONFLICT(fid) DO UPDATE SET
+          choice = excluded.choice,
+          updated_at = excluded.updated_at
+      `).bind(fid, choice).run()
+      return new Response(null, {
+        status: 204,
+        headers: { ...securityHeaders, 'cache-control': 'no-store' },
+      })
+    }
+
+    await env.PREFERENCES.prepare(
+      'DELETE FROM ens_identity_preferences WHERE fid = ?1',
+    ).bind(fid).run()
+    return new Response(null, {
+      status: 204,
+      headers: { ...securityHeaders, 'cache-control': 'no-store' },
+    })
+  } catch {
+    return jsonError('identity_unavailable', 503)
+  }
+}
+
+async function readEnsPreference(
+  database: D1Database,
+  fid: number,
+): Promise<'accepted' | 'dismissed' | null> {
+  const row = await database.prepare(
+    'SELECT choice FROM ens_identity_preferences WHERE fid = ?1',
+  ).bind(fid).first<{ choice: unknown }>()
+  return row?.choice === 'accepted' || row?.choice === 'dismissed'
+    ? row.choice
+    : null
+}
+
+async function preferenceChoice(
+  request: Request,
+): Promise<'accepted' | 'dismissed' | null> {
+  if (request.headers.get('content-type')?.split(';')[0]?.trim() !== 'application/json') {
+    return null
+  }
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return null
+  }
+  if (!body || typeof body !== 'object' || !('choice' in body)) return null
+  return body.choice === 'accepted' || body.choice === 'dismissed'
+    ? body.choice
+    : null
+}
+
+function bearerToken(request: Request): string | null {
+  const authorization = request.headers.get('authorization')
+  const match = authorization?.match(/^Bearer ([^\s]{1,8192})$/)
+  return match?.[1] ?? null
+}
+
+function methodNotAllowed(allow: string): Response {
+  return Response.json(
+    { error: 'method_not_allowed' },
+    {
+      status: 405,
+      headers: { ...noStoreJsonHeaders, allow },
+    },
+  )
+}
+
+function jsonError(error: string, status: number): Response {
+  return Response.json({ error }, { status, headers: noStoreJsonHeaders })
 }
 
 function farcasterManifest(request: Request, env: AppEnv): Response {

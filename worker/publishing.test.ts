@@ -37,7 +37,7 @@ const bootstrapEnv = {
 
 describe('Farcaster publishing contract', () => {
   it('serves schema-valid metadata before account association is configured', async () => {
-    const response = handleRequest(
+    const response = await handleRequest(
       new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
       bootstrapEnv,
     )
@@ -55,7 +55,7 @@ describe('Farcaster publishing contract', () => {
   })
 
   it('matches the official manifest schema', async () => {
-    const response = handleRequest(
+    const response = await handleRequest(
       new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
       env,
     )
@@ -80,6 +80,15 @@ describe('Farcaster publishing contract', () => {
     expect(parsedFrame.success, parsedFrame.error?.message).toBe(true)
     expect(miniapp.button.action.url).toBe('https://miniapp.converge.cv/')
     expect(frame.version).toBe('1')
+  })
+
+  it('allows only the exact Farcaster Quick Auth origin in the static CSP', async () => {
+    const headers = await readFile(resolve('public', '_headers'), 'utf8')
+
+    expect(headers).toContain(
+      "connect-src 'self' https://auth.farcaster.xyz https://*.xmtp.network:*",
+    )
+    expect(headers).not.toContain('https://*.farcaster.xyz')
   })
 
   it('ships opaque PNG publishing assets at the declared dimensions', async () => {

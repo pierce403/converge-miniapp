@@ -49,6 +49,12 @@ export type ConversationLoad = {
   messages: MessageItem[]
 }
 
+export type XmtpIdentityRelationship =
+  | 'active-address'
+  | 'same-inbox'
+  | 'different-inbox'
+  | 'no-inbox'
+
 export class XmtpClientInitializationError extends Error {
   constructor(cause: unknown) {
     super('XMTP could not initialize its local browser client.', { cause })
@@ -121,6 +127,20 @@ export class XmtpMessagingSession {
 
   get environment(): XmtpEnv {
     return this.client.env ?? configuredEnvironment()
+  }
+
+  async inspectIdentityRelationship(
+    address: `0x${string}`,
+  ): Promise<XmtpIdentityRelationship> {
+    if (address.toLowerCase() === this.address.toLowerCase()) {
+      return 'active-address'
+    }
+
+    const targetInboxId = await this.client.fetchInboxIdByIdentifier(
+      ethereumIdentifier(address),
+    )
+    if (!targetInboxId) return 'no-inbox'
+    return targetInboxId === this.inboxId ? 'same-inbox' : 'different-inbox'
   }
 
   async requestHistorySync(): Promise<boolean> {

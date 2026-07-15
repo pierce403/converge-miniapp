@@ -3,8 +3,10 @@ import { expect, test } from '@playwright/test'
 test('standalone shell fits an embedded mobile viewport', async ({ page }) => {
   const response = await page.goto('/')
 
-  expect(response?.headers()['content-security-policy']).toContain(
-    "script-src 'self' 'wasm-unsafe-eval'",
+  const contentSecurityPolicy = response?.headers()['content-security-policy']
+  expect(contentSecurityPolicy).toContain("script-src 'self' 'wasm-unsafe-eval'")
+  expect(contentSecurityPolicy).toContain(
+    "connect-src 'self' https://auth.farcaster.xyz",
   )
   expect(response?.headers()['x-content-type-options']).toBe('nosniff')
 

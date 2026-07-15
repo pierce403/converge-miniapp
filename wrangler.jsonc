@@ -15,10 +15,19 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*", "/.well-known/farcaster.json"]
   },
+  "d1_databases": [
+    {
+      "binding": "PREFERENCES",
+      "database_name": "converge-miniapp-preferences",
+      "database_id": "17e24c29-b63b-4b77-b88b-b6e725a34a4d",
+      "migrations_dir": "migrations"
+    }
+  ],
   "vars": {
     "APP_ENV": "production",
     "APP_VERSION": "0.1.0",
-    "CANONICAL_ORIGIN": "https://miniapp.converge.cv"
+    "CANONICAL_ORIGIN": "https://miniapp.converge.cv",
+    "ENS_MAINNET_RPC_URLS": "https://ethereum-rpc.publicnode.com,https://eth.llamarpc.com"
   },
   "version_metadata": {
     "binding": "CF_VERSION_METADATA"
@@ -33,10 +42,19 @@
       "name": "converge-miniapp-preview",
       "workers_dev": true,
       "routes": [],
+      "d1_databases": [
+        {
+          "binding": "PREFERENCES",
+          "database_name": "converge-miniapp-preview-preferences",
+          "database_id": "abc733c8-1305-4320-a752-a19e5b72b566",
+          "migrations_dir": "migrations"
+        }
+      ],
       "vars": {
         "APP_ENV": "preview",
         "APP_VERSION": "0.1.0",
-        "CANONICAL_ORIGIN": "http://localhost:5173"
+        "CANONICAL_ORIGIN": "http://localhost:5173",
+        "ENS_MAINNET_RPC_URLS": "https://ethereum-rpc.publicnode.com,https://eth.llamarpc.com"
       },
       "version_metadata": {
         "binding": "CF_VERSION_METADATA"

@@ -2,7 +2,7 @@
 
 > Working title: **Converge Mini**
 > Status: implementation in progress
-> Last reviewed: 2026-07-14
+> Last reviewed: 2026-07-15
 > Canonical scope: this file
 > Canonical production origin: `https://miniapp.converge.cv`
 
@@ -56,9 +56,10 @@ When this document says **first release**, **MVP**, or **P0**, it means exactly 
 - Plain-text message history, compose, send, deduplication, failure, and retry.
 - Compact Converge-derived blue/orange visual system with mobile, keyboard, safe-area, and accessibility basics.
 - Production deployment at `https://miniapp.converge.cv` using Cloudflare Workers Static Assets plus a small Worker API.
+- A post-inbox, Quick Auth-protected ENS primary-name offer that remembers the Farcaster account's accepted/dismissed choice without changing XMTP keys or message history.
 - A production XMTP Gateway/payer solution as required by the current official design; this remains blocked until the pinned Browser SDK path is proven.
 
-The following are **not required for the first release**: Farcaster Quick Auth, D1, handle/name search, message-request management, Mini App notification permissions, incoming-message notifications, a settings sheet, or a share action beyond the required root embed. Their detailed requirements remain in this plan so adding them later does not blur the security boundary.
+Quick Auth and D1 are required only for that named ENS preference flow. The following are **not required for the first release**: general Farcaster handle/name search, persisted identity links, message-request management, Mini App notification permissions, incoming-message notifications, an expanded settings sheet, or a share action beyond the required root embed. Their detailed requirements remain in this plan so adding them later does not blur the security boundary.
 
 ## Decisions already captured
 
@@ -73,6 +74,10 @@ The following are **not required for the first release**: Farcaster Quick Auth, 
 | Use `miniapp.converge.cv` as the stable Mini App identity | Committed | Farcaster binds manifest ownership, embeds, notifications, browser persistence, and discovery to this exact hostname. |
 | Use “Converge Mini” as the working public name | Committed | The name can be revisited before broad discovery without changing the canonical hostname. |
 | Keep P0 recipient entry address-first | Committed | ENS/Farcaster handle resolution remains P1 and must not block interoperable direct messaging. |
+| Open XMTP immediately with Farcaster's preferred host account | Committed | No app-level wallet, key, or inbox chooser is shown before the host/XMTP approvals needed to open that account. |
+| Treat a verified ENS name as a safe label, not a migration | Committed | Offer it automatically only when the Farcaster primary address is the active XMTP address or already belongs to the active inbox. Acceptance changes presentation only. |
+| Never merge or silently relink separate XMTP inboxes | Committed | A different ENS-address inbox gets an explanation in the identity menu; no account, recovery identity, key, or history is moved. |
+| Remember the ENS choice by trusted Farcaster FID | Committed | Quick Auth supplies the authoritative FID; D1 stores only `accepted` or `dismissed` plus an update timestamp. |
 | Use Git and GitHub from the beginning | Committed | Each coherent task is verified, committed, and pushed before the next task begins. |
 
 ### Important backend clarification
@@ -264,6 +269,18 @@ Success condition: no conversation is created against an unresolved or unreachab
 
 This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is proven.
 
+### Journey G: optional ENS identity label
+
+1. The XMTP inbox opens first with Farcaster's preferred host-provided EVM account; ENS discovery never blocks this path.
+2. Once XMTP is ready, the app obtains Quick Auth for the protected identity call. A host with no current token may ask for a Farcaster sign-in approval at this point; that approval is not a wallet/key/inbox product decision and cannot block the already-usable XMTP inbox. The Worker verifies the exact-domain token and derives the trusted FID from its subject.
+3. The Worker fetches that FID's official Farcaster primary Ethereum address, looks up its ENS primary name, and forward-resolves the name back to the same address.
+4. The browser compares that address with the active signer and its current XMTP inbox without mutating either.
+5. If the address is active or already belongs to the same inbox and no preference exists, the app asks once whether to use the ENS name as the inbox label. **Use ENS name** or **No thanks** is saved account-wide as `accepted` or `dismissed`.
+6. A dismissal prevents future automatic prompts, but the identity/privacy menu keeps the ENS option available. D1 stores the account-wide choice, while a local dismissal bit also skips repeat background Quick Auth on that browser.
+7. If the address belongs to a different XMTP inbox, has no inbox, or cannot be checked, the app does not interrupt the user. The menu explains the exact boundary and changes nothing.
+
+Success condition: the optional flow never moves a key, recovery identity, inbox, installation, conversation, or message history, and failure never blocks messaging.
+
 ## First-release feature matrix
 
 | Area | Feature | Priority | Status | Definition of done |
@@ -272,10 +289,12 @@ This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is p
 | Shell | Mobile safe areas, keyboard, and constrained viewport | P0 | Committed | Core flows work in host webviews without clipped header/composer or body-scroll traps. |
 | Publishing | Signed `/.well-known/farcaster.json` | P0 | Verified production | Farcaster's public debugger verifies schema, signature, FID ownership, and the exact production domain. |
 | Publishing | Root `fc:miniapp` share embed | P0 | Committed | Root URL renders a valid 3:2 feed card and launches the app. |
-| Identity | Farcaster Quick Auth session | P1 | Later | Add only when a protected API, directory, identity link, or notification feature needs trusted FID. |
-| Identity | Host EVM wallet connection | P0 | Implemented locally | Host provider and lifecycle teardown are implemented; real Farcaster desktop/iOS/Android proof remains. |
+| Identity | Farcaster Quick Auth session | P1 | Implemented locally | Exact issuer, expiry, audience/domain, and positive-FID subject verification protects the ENS preference API; canonical-host proof remains. |
+| Identity | Host EVM wallet connection | P0 | Implemented locally | The host's preferred account opens automatically with no wallet/key chooser; lifecycle teardown is implemented and real Farcaster desktop/iOS/Android proof remains. |
 | Identity | EOA and supported SCW XMTP signer | P0 | Implemented locally | EOA/SCW construction is unit-tested; real host signature traces remain. |
 | Identity | Stable XMTP inbox/installation reuse | P0 | Implemented locally | Persistent OPFS defaults and a single-owner Web Lock exist; host re-entry proof remains. |
+| Identity | Forward-verified ENS primary-name offer | P1 | Implemented locally | Trusted-FID discovery, reverse/forward ENS proof, read-only XMTP relationship checks, remembered acceptance/dismissal, safe label-only use, and truthful separate-inbox states are tested; canonical-host proof remains. |
+| Identity | Compact identity/privacy menu | P0 | Implemented locally | Active wallet, network, local-storage disclosure, ENS recheck, label selection/deletion, and non-migration explanations remain available after onboarding. |
 | Inbox | Allowed DM conversation list | P0 | Implemented locally | Allowed-only cached-first sync/list/stream UI exists; dev-network and offline host acceptance remain. |
 | Inbox | Separate message requests | P1 | Later | Unknown contacts stay excluded from the P0 allowed list; later accept/decline updates consent. |
 | Compose | Address-first recipient reachability | P0 | Implemented locally | Normalized Ethereum address is checked with `canMessage()` before DM creation. |
@@ -289,13 +308,13 @@ This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is p
 | Design | Converge-derived compact visual system | P0 | Implemented locally | Palette, bubbles, surfaces, inputs, focus states, and empty states are implemented; embedded-device review remains. |
 | Backend | Cloudflare Worker Static Assets | P0 | Deployed | The Worker, `miniapp.converge.cv` Custom Domain, and Farcaster ownership are live; Cloudflare Workers Builds deploys verified `main` commits. Production XMTP remains a separate release gate. |
 | Backend | Authenticated XMTP payer Gateway | P0 | Blocked | Current Browser SDK must prove Gateway selection/auth, per-user quotas, viable container hosting, and one funded production send. |
-| Backend | Protected API and minimal identity data | P1 | Later | Quick Auth-protected API is added only for a named product flow; D1 stores no keys or plaintext messages. |
+| Backend | Protected API and minimal identity data | P1 | Implemented locally | Exact-host Quick Auth routes and isolated production/preview D1 bindings store only ENS `accepted`/`dismissed` choice by FID; migration and production route proof remain. |
 | Backend | Notification token data model | P1 | Later | D1 stores only verified, protected notification lifecycle data after notifications are promoted. |
 | Operations | Redacted logs, health, and error visibility | P0 | Committed | Failures are diagnosable without leaking message content, tokens, or full wallet identifiers. |
 | Notifications | Add Mini App and store notification permission | P1 | Proposed | Signed webhooks are verified and token lifecycle is correct. |
 | Notifications | Notify on incoming XMTP message | P1 | Spike | Privacy-safe bridge works while client is closed without user decryption keys. |
 | Sharing | Share app with Farcaster compose action | P1 | Later | User can share a generic app card without leaking private conversation details. |
-| Settings | Minimal privacy/identity/about sheet | P1 | Later | Shows active identities, storage facts, notification state, version, and deletion controls. |
+| Settings | Expanded privacy/identity/about sheet | P1 | Later | Add trusted profile/FID, inbox/installation details, version, notifications, and broader future account-data controls beyond the implemented compact menu. |
 
 ## Detailed feature requirements
 
@@ -327,15 +346,17 @@ This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is p
 - Permit local development with an injected/test wallet path only in development configuration.
 - Never silently substitute a generated production identity just because host wallet access is missing.
 
-### 2. Farcaster identity presentation and optional trusted auth
+### 2. Farcaster identity presentation and trusted ENS preference
 
-#### Trusted session (P1 unless a protected API is promoted)
+#### Trusted session (promoted for the ENS preference flow)
 
 - Use Farcaster Quick Auth for API calls that need a trusted user.
 - Verify JWT signature, expiry, and exact domain/audience on the backend.
 - Use the verified FID from the JWT subject; do not accept an FID supplied in request JSON or query parameters as authority.
 - Keep the session token short-lived and in memory where practical.
 - Make public/static app operation independent of Quick Auth when no protected API is needed.
+- Start the protected ENS request only after the XMTP inbox is ready so Quick Auth or directory failure cannot block messaging onboarding.
+- Do not describe Quick Auth as guaranteed silent: the pinned SDK can invoke the host's Farcaster sign-in action when no valid in-memory token exists. Treat that approval as part of the optional post-inbox identity flow, never the XMTP setup flow.
 
 #### Profile display
 
@@ -343,6 +364,23 @@ This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is p
 - Pair the Farcaster profile with the active wallet/XMTP identity in onboarding and the privacy sheet.
 - Truncate addresses visually but make full identifiers copyable from the detail sheet.
 - Do not claim that the Farcaster profile “is” the XMTP inbox.
+
+#### ENS primary-name discovery and preference
+
+The implemented definition of “an ENS name connected to Farcaster” is deliberately narrow: the authenticated FID's official Farcaster primary Ethereum address has an ENS primary name whose forward resolution returns that exact address.
+
+Requirements:
+
+- Fetch the Farcaster primary address on the Worker from the Quick Auth-verified FID; never authorize this lookup with host context or a client-supplied FID.
+- Normalize the ENS primary name and require reverse and forward mainnet resolution to agree before returning a candidate.
+- Return only a public name/address candidate, discovery status, and current preference; use `Cache-Control: no-store`, fail closed on auth/binding errors, and return no candidate when directory or resolver evidence is unavailable.
+- Check the candidate against the active XMTP client in the browser. Classify it as the active address, another address in the same inbox, a different inbox, or no inbox without invoking an inbox update.
+- Automatically offer the name only for the active-address/same-inbox cases and only while the trusted FID has no saved choice.
+- Persist only `accepted` or `dismissed` by trusted FID. Do not persist the address, ENS name, XMTP inbox ID, Quick Auth token, or any message data.
+- A dismissal suppresses later automatic prompts. Store a non-authoritative local dismissal bit so the same browser also skips repeat background Quick Auth; keep manual discovery and **Use ENS name** available from the identity/privacy menu.
+- Let the user delete the saved choice from that menu through the authenticated API. This restores the unset state and makes the safe offer eligible again.
+- Treat acceptance as presentation state only. It changes the inbox label, not the XMTP recovery identity, signer, accounts, installation, or history.
+- Let lookup failure degrade to an unavailable menu state without interrupting the active inbox.
 
 ### 3. Wallet-backed XMTP identity
 
@@ -366,6 +404,17 @@ Requirements:
 - If the host wallet account changes, stop streams and close the old client before opening another identity.
 - Never display cached messages from one identity under another profile.
 - Require explicit confirmation before associating additional wallet identities with the same XMTP inbox; this is Later unless needed for host compatibility.
+
+#### ENS and XMTP migration boundary
+
+Farcaster supplies one preferred EIP-1193 account to this Mini App. It does not provide a safe signer inventory for a “primary” and separate embedded-wallet/Warplet address, so Converge Mini does not present those as selectable keys.
+
+The current implementation never adds, removes, or reassigns an XMTP account:
+
+- If the verified ENS address is active or already belongs to the same inbox, the app can safely use its name as a label.
+- If it belongs to a different inbox, the app explains that existing XMTP inboxes and their message histories cannot be merged. It does not call the state an available migration.
+- If it has no inbox, the Farcaster host still does not expose that ENS address as a signer, so the app cannot prove and add it safely.
+- A future first-registration flow targeting another recovery identity would require that identity's signer before registration, explicit user intent, and a separately reviewed protocol. It is not a post-registration migration and is not silently inferred from ENS ownership.
 
 #### Explicitly rejected default
 
@@ -434,7 +483,7 @@ P0 requirements:
 - Explain “not on XMTP yet” separately from network failure or invalid input.
 - Prevent starting a DM with the current identity.
 - Deduplicate an existing DM and open it rather than creating a confusing duplicate.
-- Do not require ENS resolution in the first release.
+- Do not require ENS resolution to start a DM in the first release; the optional own-inbox label flow is separate from recipient resolution.
 
 P1 Farcaster search requirements:
 
@@ -559,11 +608,11 @@ Before implementation, prove an architecture that:
 
 XMTP push HMAC keys are privacy-sensitive filtering material, but they are not message-decryption keys. They still need encryption, rotation, deletion, strict access control, and a precise disclosure. Current official push examples do not establish the required Browser SDK flow, so do not promise per-message Farcaster notifications until it is proven on the target hosts. Use a generic inbox notification target by default; exact-conversation routing requires a separate metadata/privacy review and an opaque mapping.
 
-### 11. Minimal settings and privacy sheet (P1)
+### 11. Identity/privacy menu and expanded settings sheet
 
-Use a modal/sheet rather than a permanent navigation destination.
+The implemented compact menu is available from the inbox header rather than as a permanent navigation destination. It shows the active Farcaster wallet, XMTP environment/wallet kind, local-storage disclosure, and the ENS discovery/relationship state. It can rerun discovery, opt into a safe ENS label after a prior dismissal, delete the saved ENS choice, or explain why a separate ENS inbox cannot be connected or merged.
 
-Include:
+The expanded P1 modal/sheet remains Later. Include:
 
 - Farcaster profile and trusted FID;
 - active wallet address and XMTP inbox ID;
@@ -574,6 +623,8 @@ Include:
 - privacy policy, source repository, version, and network environment;
 - delete server-side account metadata action; and
 - a separate, carefully worded local-data/reconnect action only when the SDK supports a safe implementation.
+
+The visible **Delete saved ENS choice** control calls protected `DELETE /api/me`, removes the authenticated FID's preference, and returns the optional offer to its unset state. Future broader account-data semantics remain part of the expanded sheet.
 
 Do not claim that closing `Client` deletes the Browser SDK database; current SDK behavior only terminates its worker.
 
@@ -709,32 +760,38 @@ This is the implementation target. Protocol surfaces that still require live-hos
 - Verify those headers on the actual deployed HTML, JavaScript, WebAssembly, manifest, image, and API responses rather than assuming one Worker middleware covers every Static Assets path.
 - Configure observability sampling and redaction explicitly; do not rely on provider defaults for request bodies, search inputs, tokens, or identifiers.
 
-### Likely first-party endpoints
+### First-party endpoints
 
 | Method/path | Auth | Purpose | MVP status |
 | --- | --- | --- | --- |
 | `GET /.well-known/farcaster.json` | Public | Signed Mini App manifest. | P0 |
-| `GET /health` | Public/minimal | Deployment health/version without sensitive dependency detail. | P0 |
-| `GET /api/me` | Quick Auth | Verify FID and return the minimal trusted app profile/identity state. | P1, only with protected API |
+| `GET /api/health` | Public/minimal | Deployment health/version without sensitive dependency detail. | Deployed |
+| `GET /api/me/ens` | Quick Auth | Discover the verified FID's forward-verified ENS primary-name candidate and return its saved preference. | Implemented locally |
+| `PUT /api/me/ens-preference` | Quick Auth | Idempotently save `accepted` or `dismissed` for the verified FID. | Implemented locally |
+| `DELETE /api/me` | Quick Auth | Delete the verified FID's saved ENS preference. | Implemented locally with menu control |
 | `POST /api/resolve` | Quick Auth + rate limit | Resolve a bounded Farcaster search body to candidate verified identities without putting raw queries in URLs/history/referrers. | P1 |
 | `POST /api/identity/link` | Quick Auth + proof | Store a verified FID/wallet/inbox mapping after a separately specified proof protocol. | P1 spike; do not implement yet |
-| `DELETE /api/me` | Quick Auth + confirmation | Delete first-party mappings/preferences/tokens. | P1, design now |
 | `POST /api/farcaster/webhook` | Signed event verification | Apply add/remove/notification token lifecycle. | P1 |
 | `POST /api/xmtp-push-subscriptions` | Quick Auth + identity proof | Register/rotate encrypted XMTP topic/HMAC filtering material only after Browser SDK feasibility is proven. | P1 spike; blocked |
 | `POST /api/notifications/test` | Admin-only | Verify notification plumbing without exposing an open sender. | P1 |
 
-No endpoint accepts a wallet private key, XMTP private key, decrypted message, draft, message search query, or raw local database.
+The implemented identity routes require the exact canonical hostname in production and the exact rendered host outside production, derive the FID only from a verified Quick Auth JWT subject, use prepared D1 statements, and return no-store responses. Auth and binding failures fail closed; unavailable Farcaster/ENS evidence returns no candidate and never authorizes an identity change. No endpoint accepts a wallet private key, XMTP private key, decrypted message, draft, message search query, or raw local database.
 
-### Minimal D1 model (P1, only when a named flow requires it)
+### Minimal D1 model
 
-#### `users`
+#### `ens_identity_preferences` (implemented locally)
 
-- trusted `fid` primary key;
-- created/updated timestamps;
-- optional product preference flags; and
-- deletion timestamp if a short tombstone is needed for idempotency.
+- trusted positive `fid` primary key;
+- `choice`, constrained to `accepted` or `dismissed`; and
+- `updated_at` Unix timestamp.
 
-#### `identity_links`
+There is no stored ENS name, wallet address, XMTP inbox/installation ID, Quick Auth token, profile record, or tombstone. The candidate is re-resolved when requested. `PUT /api/me/ens-preference` replaces the row idempotently and `DELETE /api/me` removes it.
+
+Production and preview use separate `PREFERENCES` D1 databases and the same repository migration under `migrations/`.
+
+### Planned D1 models (not created)
+
+#### `identity_links` (P1 spike)
 
 - trusted `fid`;
 - normalized public wallet identifier;
@@ -771,7 +828,8 @@ The identity-link endpoint is intentionally gated on a separate protocol specifi
 
 ### Data retention
 
-- Identity mapping lasts only while the user uses the service or until deletion.
+- The ENS accepted/dismissed choice lasts until the user replaces it or invokes the authenticated deletion route. It contains no resolved name/address or XMTP identity.
+- Any future identity mapping lasts only while the user uses the service or until deletion.
 - Invalid notification tokens are removed promptly.
 - Rotated/disabled XMTP push topics and HMAC filtering material are deleted promptly and never retained in ordinary logs or backups beyond the documented recovery window.
 - Delivery attempt data gets a short, documented retention window.
@@ -903,7 +961,10 @@ Prefer aggregate operational metrics. Any product analytics provider must surviv
 ### Unit tests
 
 - identity normalization and FID/wallet/inbox separation;
-- Quick Auth middleware and audience/domain failures when a P1 protected API exists;
+- Quick Auth signature, issuer, expiry, exact audience/domain, and invalid-FID failures;
+- official Farcaster primary-address parsing plus ENS reverse/forward-match and provider-failure states;
+- read-only active-address, same-inbox, different-inbox, and no-inbox classification;
+- one-time ENS discovery under React Strict Mode, accepted/dismissed preference writes, and nonblocking failure;
 - webhook verification/lifecycle transitions when P1 notifications exist;
 - recipient resolution and stale-result cancellation;
 - consent/list filtering;
@@ -923,7 +984,7 @@ Prefer aggregate operational metrics. Any product analytics provider must surviv
 - OPFS lock/takeover behavior.
 - accept/decline message request when the P1 request feature is implemented.
 - reachable and unreachable recipient flows.
-- Worker + D1 auth/mapping/deletion path.
+- Worker + D1 authenticated ENS preference and deletion path.
 - signed Farcaster webhook and notification token invalidation when P1 notifications are implemented.
 
 ### Browser/end-to-end tests
@@ -1129,7 +1190,11 @@ Extended locally on 2026-07-15:
 
 - embedded startup automatically opens XMTP with the Farcaster host's preferred EVM account after capability detection, without an app-level wallet/key/inbox choice;
 - React Strict Mode replay cancels the scheduled first setup before wallet access and produces one live host-wallet/session attempt; and
-- rejection and terminal safety states do not auto-loop, while an explicit retry remains available where retrying is safe.
+- rejection and terminal safety states do not auto-loop, while an explicit retry remains available where retrying is safe;
+- after the inbox is ready, an exact-domain Quick Auth call derives the trusted FID and discovers its official Farcaster primary Ethereum address plus a reverse/forward-verified ENS primary name;
+- the active XMTP client checks that public address without an inbox update, and the one-time offer appears only when it is the active address or already in the same inbox;
+- D1 remembers `accepted` or `dismissed` account-wide, a browser-local dismissal hint avoids repeat background Quick Auth on the same device, the compact identity/privacy menu keeps the option available, and failed writes leave the choice visible; and
+- acceptance changes only the inbox label, while different-inbox, no-inbox, and unavailable states explain the boundary and never merge, migrate, add, or remove an XMTP identity.
 
 The pinned Browser SDK still requires a document restart if its internal Worker fails during `Client.init()` before returning a closable Client. Registration itself is app-owned and closes safely on wallet rejection. Real desktop/iOS/Android signatures, OPFS re-entry, SCW continuity, storage eviction, and near-limit inbox cases remain required evidence; origin-only code cannot deterministically distinguish a first visit from complete site-data eviction.
 
@@ -1138,6 +1203,7 @@ Deliverables:
 - host wallet connection;
 - XMTP signer/create/resume state machine;
 - identity presentation and signature explanations;
+- optional verified ENS label, remembered preference, and identity-menu re-entry;
 - OPFS single-connection guard;
 - identity-change teardown; and
 - storage/installation error states.
@@ -1145,7 +1211,7 @@ Deliverables:
 Exit criteria:
 
 - first and returning flows work on target hosts;
-- existing installations resume without new signatures; and
+- existing installations resume without new XMTP wallet signatures; optional post-inbox Quick Auth may still require a Farcaster sign-in approval when no current token or local dismissal exists; and
 - no server/log path sees private keys or message content.
 
 ### Task 5: allowed inbox and live receive — implemented locally, network proof pending
@@ -1238,9 +1304,11 @@ Exit criteria:
 
 ### Task 8: trusted Farcaster directory search (optional P1)
 
+Reusable substrate implemented locally for the Task 4 ENS preference flow: exact-domain Quick Auth verification and a bounded official Farcaster primary-address lookup. General handle/name search, caching, rate limits, and recipient selection remain optional P1 work and must not reuse the ENS label flow as an unproven messaging destination.
+
 Deliverables:
 
-- Quick Auth verification API;
+- reuse the verified Quick Auth boundary;
 - selected Farcaster directory integration;
 - handle/name search and verified identity resolution;
 - privacy/rate-limit controls; and
@@ -1290,7 +1358,7 @@ These features should be reconsidered only after P0 quality and usage justify th
 | --- | --- | --- | --- |
 | Farcaster notifications for incoming XMTP messages | P1 | Spike | A privacy-safe closed-client observer is proven. |
 | Generic app sharing/compose action | P1 | Later | Root embed and core retention are stable. |
-| Minimal identity/privacy settings sheet | P1 | Later | Core identity states are stable enough to expose accurately. |
+| Expanded identity/privacy settings sheet | P1 | Later | The compact menu and ENS-choice deletion are shipped locally; add trusted profile/inbox details and future account-data controls when needed. |
 | Read receipts | P2 | Later | Consent, cross-client semantics, and network cost are acceptable. |
 | Reactions and replies | P2 | Later | Unsupported fallback and text DMs are robust. |
 | Image/file attachments | P2 | Later | Encryption, off-network storage, consent, moderation, CSP, and cost are designed. |
@@ -1299,6 +1367,7 @@ These features should be reconsidered only after P0 quality and usage justify th
 | Typing indicators | P2 | Later | Message costs and privacy justify ephemeral traffic. |
 | Full-text local search | P2 | Later | A safe local index/storage design exists. |
 | Multiple wallet identities per inbox | P2 | Later | Real users need it and recovery/update limits are addressed. |
+| Merge or migrate two existing XMTP inboxes | P2 | Blocked | XMTP exposes no safe inbox/history merge; reconsider only if protocol semantics and both signer proofs make the result explicit and portable. |
 | Installation management UI | P1 | Later | Error-only recovery is insufficient. |
 | History backup/recovery UX | P2 | Later | Current XMTP history-sync model is stable and understandable. |
 | Block/mute/report controls | P2 | Later | Abuse model and XMTP semantics are defined; decline remains available now. |
@@ -1313,8 +1382,8 @@ These features should be reconsidered only after P0 quality and usage justify th
 ### Activation
 
 - Proposed beta target: at least 90% of sessions on the explicitly supported host/version matrix reach a readable inbox or honest empty state, excluding intentional wallet rejection.
-- Returning-installation test: 20 of 20 ordinary close/reopen cycles per supported host require zero signatures and retain the same installation ID.
-- First setup uses no signatures beyond those required by the pinned XMTP signer flow, verified against recorded EOA and supported-SCW traces.
+- Returning-installation test: 20 of 20 ordinary close/reopen cycles per supported host require zero new XMTP wallet signatures and retain the same installation ID; Quick Auth approval behavior is recorded separately.
+- First XMTP setup uses no signatures beyond those required by the pinned XMTP signer flow. Optional post-inbox Quick Auth approval is measured separately and never blocks the inbox or introduces a wallet/key/inbox choice.
 - Every wallet rejection, chain mismatch, provider disconnect, and unsupported-wallet fixture reaches its named recovery state rather than a generic spinner.
 
 ### Messaging quality
@@ -1347,7 +1416,7 @@ The first public release is blocked until all are true:
 - An existing XMTP identity resumes without consuming a new installation in the normal path.
 - Allowed conversations, sync, stream, send, failure, and retry pass end-to-end tests.
 - Message-request consent tests pass if that P1 feature is included in the release.
-- Quick Auth trust-boundary tests pass if any P1 protected API is included in the release.
+- Quick Auth trust-boundary, ENS forward-verification, exact-host API, D1 preference, and deletion tests pass.
 - Farcaster webhook signature and token-lifecycle tests pass if notifications are included in the release.
 - No backend/log/analytics path receives private keys or message plaintext.
 - Production domain, account association, manifest, embeds, assets, and headers pass validation.
@@ -1368,6 +1437,8 @@ Notifications for incoming XMTP messages are not a gate unless they are explicit
 | Farcaster wallet is an unsupported/misdetected SCW | Setup/signatures fail | Test real hosts/accounts; detect code/chain correctly; capability-gate unsupported cases. |
 | FID/profile is confused with XMTP identity | Messages go to wrong/unreachable address | Trusted resolution, clear identity UI, `canMessage()` before creation, proof before caching links. |
 | Host context is trusted as auth | Account spoofing/backend data exposure | Quick Auth verification on server; context only for provisional display. |
+| ENS name is mistaken for a migrated XMTP identity | User expects another inbox or history to appear | Offer only an active/same-inbox label; classify the address read-only; explain different/no-inbox states; never mutate or describe a merge. |
+| ENS/Farcaster discovery is unavailable or inconsistent | Optional prompt fails or presents a spoofed name | Require trusted FID, official primary address, reverse-plus-forward ENS match, no-store responses, provider failover, and nonblocking failure. |
 | Storage clearing creates installations | Ten-installation and 256-update limits are consumed | Persist/reuse DB, detect storage loss, never revoke automatically, recovery tooling and dedicated test wallets. |
 | Same wallet is mistaken for guaranteed history recovery | New Mini App installation appears empty or misleads the user | Separate same-origin resume from cross-install history sync; require another compatible installation online; label recovery best-effort and disclose the re-encrypted history service. |
 | Incoming notification bridge is not viable in Workers/Browser SDK | Closed-app message notifications unavailable | Keep P1 spike; generic notifications only; separate observer/container architecture if proven. |
@@ -1388,6 +1459,7 @@ These are deliberately not guessed into existence.
 6. **Public standalone mode:** After development fallback is stable, should non-Farcaster visitors be able to connect a wallet and message?
 7. **Directory/backend dependency:** Is a managed Farcaster data provider acceptable if it materially simplifies reliable handle search and webhook verification?
 8. **Gateway hosting split:** After the feasibility spike, compare Cloudflare Containers and an external container host for the XMTP payer Gateway.
+9. **Future ENS signer flow:** If users must target an ENS-controlled recovery identity before first XMTP registration, how will the app obtain that address's signer and present the irreversible identity choice without reintroducing a key/wallet picker? This is not an existing-inbox merge.
 
 ## Cloudflare versus Vercel comparison criteria for later
 
@@ -1409,7 +1481,7 @@ Avoid choosing based only on frontend deploy ergonomics; the evolving XMTP Gatew
 
 ## Source notes
 
-Current integration facts in this plan were checked on 2026-07-14 against primary documentation:
+Current integration facts in this plan were checked through 2026-07-15 against primary documentation:
 
 - [Farcaster Mini Apps getting started](https://miniapps.farcaster.xyz/docs/getting-started)
 - [Farcaster Mini App specification](https://miniapps.farcaster.xyz/docs/specification)
@@ -1417,12 +1489,15 @@ Current integration facts in this plan were checked on 2026-07-14 against primar
 - [Farcaster sharing guide](https://miniapps.farcaster.xyz/docs/guides/sharing)
 - [Farcaster wallet integration](https://miniapps.farcaster.xyz/docs/guides/wallets)
 - [Farcaster Quick Auth](https://miniapps.farcaster.xyz/docs/sdk/quick-auth)
+- [Farcaster authentication guide](https://miniapps.farcaster.xyz/docs/guides/auth)
 - [Farcaster Mini App context](https://miniapps.farcaster.xyz/docs/sdk/context)
 - [Farcaster notifications](https://miniapps.farcaster.xyz/docs/guides/notifications)
 - [XMTP Browser SDK](https://docs.xmtp.org/chat-apps/sdks/browser)
 - [XMTP Browser SDK official repository notes](https://github.com/xmtp/xmtp-js/tree/main/sdks/browser-sdk)
 - [XMTP signer creation](https://docs.xmtp.org/chat-apps/core-messaging/create-a-signer)
 - [XMTP client creation and browser storage warning](https://docs.xmtp.org/chat-apps/core-messaging/create-a-client)
+- [XMTP inbox identity management](https://docs.xmtp.org/chat-apps/core-messaging/manage-inboxes)
+- [ENS primary-name and forward-verification guidance](https://docs.ens.domains/web/reverse/)
 - [XMTP inboxes, identities, and installations](https://docs.xmtp.org/chat-apps/core-messaging/manage-inboxes)
 - [XMTP history sync](https://docs.xmtp.org/chat-apps/list-stream-sync/history-sync)
 - [XMTP optimistic message sending](https://docs.xmtp.org/chat-apps/core-messaging/send-messages)
