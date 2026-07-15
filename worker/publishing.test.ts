@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 
 import {
   domainManifestSchema,
+  domainMiniAppConfigSchema,
   safeParseFrameEmbed,
   safeParseMiniAppEmbed,
 } from '@farcaster/miniapp-core'
@@ -27,7 +28,32 @@ const env = {
   FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE: 'signature_value',
 } satisfies AppEnv
 
+const bootstrapEnv = {
+  APP_ENV: env.APP_ENV,
+  APP_VERSION: env.APP_VERSION,
+  CANONICAL_ORIGIN: env.CANONICAL_ORIGIN,
+  CF_VERSION_METADATA: env.CF_VERSION_METADATA,
+} satisfies AppEnv
+
 describe('Farcaster publishing contract', () => {
+  it('serves schema-valid metadata before account association is configured', async () => {
+    const response = handleRequest(
+      new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
+      bootstrapEnv,
+    )
+    const manifest = await response.json() as {
+      accountAssociation?: unknown
+      miniapp?: unknown
+    }
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(manifest.accountAssociation).toBeUndefined()
+    const parsed = domainMiniAppConfigSchema.safeParse(manifest.miniapp)
+    expect(parsed.success, parsed.error?.message).toBe(true)
+    expect(parsed.data?.noindex).toBe(true)
+  })
+
   it('matches the official manifest schema', async () => {
     const response = handleRequest(
       new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
@@ -37,6 +63,10 @@ describe('Farcaster publishing contract', () => {
 
     const parsed = domainManifestSchema.safeParse(manifest)
     expect(parsed.success, parsed.error?.message).toBe(true)
+    expect(parsed.data?.miniapp?.noindex).toBe(true)
+    expect(response.headers.get('cache-control')).toBe(
+      'public, max-age=300, must-revalidate',
+    )
   })
 
   it('keeps modern and compatibility embeds schema-valid', async () => {

@@ -1207,13 +1207,14 @@ Exit criteria:
 Implemented locally on 2026-07-14:
 
 - a schema-tested dynamic `/.well-known/farcaster.json` with canonical metadata and fail-closed account-association configuration;
+- a fetchable, no-store metadata-only bootstrap manifest when ownership is absent, with no `accountAssociation` and `noindex: true`; partial, malformed, and wrong-domain association configuration still fails closed;
 - opaque account-association signatures are preserved exactly as returned by Farcaster while the signed payload is decoded to enforce the exact canonical domain;
 - current root `fc:miniapp` and compatibility `fc:frame` embeds plus opaque, dimension-tested PNG assets;
 - static/Worker security headers, immutable hashed-asset caching, preview `noindex`, and explicit Worker-first API/manifest routing;
 - Cloudflare version metadata in the tested health response; and
 - operator, rollback, security, and privacy/data-inventory documentation.
 
-The Worker and canonical Custom Domain are deployed. Remaining: configure the exact-domain Farcaster account association, validate the canonical manifest/embed in Farcaster, and complete the payer-Gateway proof below.
+The Worker and canonical Custom Domain are deployed. Remaining: use the bootstrap manifest to configure the exact-domain Farcaster account association, validate the owned manifest/embed in Farcaster, deliberately enable discovery only when launch-ready, and complete the payer-Gateway proof below.
 
 Deliverables:
 

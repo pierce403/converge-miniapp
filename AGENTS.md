@@ -57,6 +57,7 @@ These instructions apply to the entire repository.
 ## Current boundaries
 
 - Product implementation is authorized. Keep each coherent task independently verified, committed, and pushed.
+- Keep the production Farcaster manifest fetchable before ownership bootstrap: with no association values configured, serve metadata without `accountAssociation`, force `noindex: true`, and use `Cache-Control: no-store` so ownership verification cannot race a cached unsigned response. Partial, malformed, or wrong-domain association configuration must still fail closed; include ownership only after all three exact-domain values validate.
 - Treat Farcaster account-association signatures as opaque strings. Validate the base64url payload and exact canonical domain, but do not impose a signature alphabet beyond the current Farcaster schema.
 - Do not assume push notifications require the same runtime as the web app; XMTP message observation and Farcaster notification delivery need a separate compatibility review.
 - Do not commit secrets, generated credentials, local databases, dependency directories, build output, or temporary research artifacts.

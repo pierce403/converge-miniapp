@@ -75,10 +75,39 @@ describe('Farcaster manifest', () => {
     })
   })
 
-  it('fails closed when exact-domain account association is absent', async () => {
+  it('serves a noindex bootstrap manifest when account association is absent', async () => {
     const response = handleRequest(
       new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
       environment(),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('access-control-allow-origin')).toBe('*')
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    await expect(response.json()).resolves.toMatchObject({
+      miniapp: {
+        canonicalDomain: 'miniapp.converge.cv',
+        noindex: true,
+      },
+    })
+
+    const head = handleRequest(
+      new Request('https://miniapp.converge.cv/.well-known/farcaster.json', {
+        method: 'HEAD',
+      }),
+      environment(),
+    )
+    expect(head.status).toBe(200)
+    expect(head.headers.get('cache-control')).toBe('no-store')
+    expect(await head.text()).toBe('')
+  })
+
+  it('fails closed when account association is only partially configured', async () => {
+    const response = handleRequest(
+      new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
+      environment({
+        FARCASTER_ACCOUNT_ASSOCIATION_HEADER: association.FARCASTER_ACCOUNT_ASSOCIATION_HEADER,
+      }),
     )
 
     expect(response.status).toBe(503)
@@ -143,7 +172,9 @@ describe('Farcaster manifest', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('access-control-allow-origin')).toBe('*')
-    expect(response.headers.get('cache-control')).toContain('max-age=300')
+    expect(response.headers.get('cache-control')).toBe(
+      'public, max-age=300, must-revalidate',
+    )
     await expect(response.json()).resolves.toMatchObject({
       accountAssociation: {
         header: 'header_value',
@@ -155,6 +186,7 @@ describe('Farcaster manifest', () => {
         heroImageUrl: 'https://miniapp.converge.cv/hero-1200x630.png',
         homeUrl: 'https://miniapp.converge.cv/',
         iconUrl: 'https://miniapp.converge.cv/icon-1024.png',
+        noindex: true,
         requiredCapabilities: ['wallet.getEthereumProvider'],
         version: '1',
       },
@@ -169,6 +201,9 @@ describe('Farcaster manifest', () => {
       environment(association),
     )
     expect(head.status).toBe(200)
+    expect(head.headers.get('cache-control')).toBe(
+      'public, max-age=300, must-revalidate',
+    )
     expect(await head.text()).toBe('')
 
     const post = handleRequest(

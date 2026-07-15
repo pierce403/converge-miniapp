@@ -18,6 +18,11 @@ const manifestJsonHeaders = {
   'content-type': 'application/json; charset=utf-8',
 }
 
+const bootstrapManifestJsonHeaders = {
+  ...manifestJsonHeaders,
+  'cache-control': 'no-store',
+}
+
 const BASE64URL_VALUE = /^[A-Za-z0-9_-]+$/
 
 export type AppEnv = Env & {
@@ -91,7 +96,7 @@ function farcasterManifest(request: Request, env: AppEnv): Response {
   }
 
   const association = accountAssociation(env, canonicalDomain)
-  if (!association) {
+  if (association.state === 'invalid') {
     return Response.json(
       { error: 'manifest_not_configured' },
       { status: 503, headers: noStoreJsonHeaders },
@@ -99,7 +104,9 @@ function farcasterManifest(request: Request, env: AppEnv): Response {
   }
 
   const body = {
-    accountAssociation: association,
+    ...(association.state === 'valid'
+      ? { accountAssociation: association.value }
+      : {}),
     miniapp: {
       canonicalDomain,
       description: 'A focused, private XMTP inbox that runs inside Farcaster.',
@@ -107,7 +114,7 @@ function farcasterManifest(request: Request, env: AppEnv): Response {
       homeUrl: `${origin}/`,
       iconUrl: `${origin}/icon-1024.png`,
       name: 'Converge Mini',
-      noindex: false,
+      noindex: true,
       ogDescription: 'A focused XMTP inbox inside Farcaster.',
       ogImageUrl: `${origin}/hero-1200x630.png`,
       ogTitle: 'Converge Mini',
@@ -122,11 +129,14 @@ function farcasterManifest(request: Request, env: AppEnv): Response {
       version: '1',
     },
   }
+  const responseHeaders = association.state === 'valid'
+    ? manifestJsonHeaders
+    : bootstrapManifestJsonHeaders
 
   if (request.method === 'HEAD') {
-    return new Response(null, { headers: manifestJsonHeaders })
+    return new Response(null, { headers: responseHeaders })
   }
-  return Response.json(body, { headers: manifestJsonHeaders })
+  return Response.json(body, { headers: responseHeaders })
 }
 
 function accountAssociation(env: AppEnv, canonicalDomain: string) {
@@ -134,13 +144,17 @@ function accountAssociation(env: AppEnv, canonicalDomain: string) {
   const payload = env.FARCASTER_ACCOUNT_ASSOCIATION_PAYLOAD?.trim()
   const signature = env.FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE?.trim()
 
+  if (!header && !payload && !signature) {
+    return { state: 'absent' } as const
+  }
+
   if (
     !header ||
     !payload ||
     !signature ||
     !BASE64URL_VALUE.test(header) ||
     !BASE64URL_VALUE.test(payload)
-  ) return null
+  ) return { state: 'invalid' } as const
 
   const decodedPayload = decodeBase64UrlJson(payload)
   if (
@@ -148,9 +162,12 @@ function accountAssociation(env: AppEnv, canonicalDomain: string) {
     decodedPayload === null ||
     !('domain' in decodedPayload) ||
     decodedPayload.domain !== canonicalDomain
-  ) return null
+  ) return { state: 'invalid' } as const
 
-  return { header, payload, signature }
+  return {
+    state: 'valid',
+    value: { header, payload, signature },
+  } as const
 }
 
 function decodeBase64UrlJson(value: string): unknown {

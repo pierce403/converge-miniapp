@@ -36,7 +36,7 @@ test('standalone shell fits an embedded mobile viewport', async ({ page }) => {
   expect(embeds.map((embed) => embed.version)).toEqual(['1', '1'])
 })
 
-test('Worker health is versioned and an unsigned manifest fails closed', async ({ request }) => {
+test('Worker health is versioned and a noncanonical-host manifest fails closed', async ({ request }) => {
   const health = await request.get('/api/health')
   expect(health.status()).toBe(200)
   expect(await health.json()).toMatchObject({

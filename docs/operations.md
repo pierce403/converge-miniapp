@@ -29,7 +29,7 @@ Production delivery has one owner:
 
 The hosted shell and first-party health endpoint are live, but the public Mini App release remains intentionally blocked:
 
-- The three exact-domain Farcaster account-association values are not configured. `/.well-known/farcaster.json` therefore continues to fail closed with `503 manifest_not_configured`.
+- The three exact-domain Farcaster account-association values are not configured. `/.well-known/farcaster.json` therefore serves a metadata-only bootstrap document with `noindex: true` and no `accountAssociation`; it makes no ownership claim and is not ready for discovery.
 - The authenticated, quota-enforced XMTP payer Gateway and its CSP origins remain unconfigured. Production messaging therefore continues to fail closed.
 - Real Farcaster desktop, iOS, and Android wallet/WebView validation remains required before launch.
 
@@ -47,6 +47,8 @@ When the payer Gateway is ready, set `VITE_XMTP_GATEWAY_HOST` as a Cloudflare pr
 
 Generate the ownership object in Farcaster's Mini App Manifest Tool for the exact domain `miniapp.converge.cv`. Apex, `www`, and any preview hostname are different app identities.
 
+Before ownership exists, the production endpoint deliberately returns `200` with schema-valid `miniapp` metadata, no `accountAssociation`, `noindex: true`, and `Cache-Control: no-store`. This lets Farcaster's Manifest Tool fetch the domain to bootstrap ownership without publishing an unsigned ownership claim or caching it across the association reverify step. If any association value is present but the set is incomplete, malformed, or signed for another domain, the endpoint returns `503 manifest_not_configured` instead of silently falling back to bootstrap metadata.
+
 Configure the returned `header`, `payload`, and `signature` as Worker runtime secrets without committing them. These are Cloudflare runtime values, not GitHub Actions secrets:
 
 ```sh
@@ -55,7 +57,7 @@ npx wrangler secret put FARCASTER_ACCOUNT_ASSOCIATION_PAYLOAD --config wrangler.
 npx wrangler secret put FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE --config wrangler.jsonc
 ```
 
-These values are a public signed ownership proof, not a signing key. The endpoint intentionally returns `503 manifest_not_configured` until all three values are present and syntactically valid. It never serves an apparently valid manifest with placeholder ownership.
+These values are a public signed ownership proof, not a signing key. The endpoint includes `accountAssociation` only after all three values are present, syntactically valid, and the payload names the exact canonical domain. The manifest remains `noindex: true` through prelaunch; enabling discovery requires a separate reviewed release change.
 
 After configuring them, verify:
 
@@ -65,7 +67,7 @@ curl -fsS https://miniapp.converge.cv/api/health
 curl -fsSI https://miniapp.converge.cv/
 ```
 
-Then run the official Farcaster Manifest and Embed tools against the canonical root URL. Confirm the icon, splash, feed card, exact-domain ownership, required wallet capability, and launch behavior.
+Then run the official Farcaster Manifest and Embed tools against the canonical root URL. Confirm the response includes the exact account association, icon, splash, feed card, exact-domain ownership, required wallet capability, and launch behavior.
 
 ## Security and observability
 
