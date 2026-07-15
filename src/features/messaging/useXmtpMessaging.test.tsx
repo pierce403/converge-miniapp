@@ -220,6 +220,21 @@ describe('useXmtpMessaging', () => {
     expect(lease.release).toHaveBeenCalledOnce()
   })
 
+  it('presents a missing payer Gateway as non-retryable configuration', async () => {
+    const lease = { release: vi.fn().mockResolvedValue(undefined) }
+    const error = new Error('XMTP mainnet requires an authenticated payer Gateway.')
+    error.name = 'XmtpGatewayConfigurationError'
+    mocks.acquireXmtpLease.mockResolvedValue(lease)
+    mocks.createSession.mockRejectedValue(error)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+
+    expect(result.current.connection.phase).toBe('configuration-error')
+    expect(result.current.connection.error).toMatch(/not configured for this XMTP network/)
+    expect(lease.release).toHaveBeenCalledOnce()
+  })
+
   it('shows the cached inbox before sync settles and retains it when sync fails', async () => {
     const sync = deferred<ConversationSummary[]>()
     const cachedRead = deferred<void>()

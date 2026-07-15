@@ -187,6 +187,17 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
     )
   }
 
+  if (messaging.connection.phase === 'configuration-error') {
+    return (
+      <StatePanel
+        description={messaging.connection.error ?? 'Converge Mini is not configured for this XMTP network yet.'}
+        eyebrow="XMTP network configuration"
+        icon={<AlertTriangle aria-hidden="true" />}
+        title="Messaging is not available yet"
+      />
+    )
+  }
+
   if (messaging.connection.phase === 'error') {
     return (
       <StatePanel

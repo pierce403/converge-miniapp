@@ -1,4 +1,5 @@
 export type XmtpFailureKind =
+  | 'configuration'
   | 'wallet-rejected'
   | 'unsupported-browser'
   | 'storage-contention'
@@ -35,6 +36,16 @@ export function classifyXmtpFailure(
 ): ClassifiedXmtpFailure {
   const details = errorDetails(error)
   const text = details.text
+
+  if (
+    details.names.has('xmtpgatewayconfigurationerror') ||
+    matches(text, ['requires an authenticated payer gateway'])
+  ) {
+    return {
+      kind: 'configuration',
+      message: 'Converge Mini is not configured for this XMTP network yet. No XMTP signature was requested and no inbox was changed.',
+    }
+  }
 
   if (details.codes.has('4001') || matches(text, ['user rejected', 'user denied'])) {
     return {

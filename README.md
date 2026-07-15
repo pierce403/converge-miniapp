@@ -19,7 +19,7 @@ npm run dev
 
 The Cloudflare Vite plugin runs both the React app and Worker API. Service health is available at `/api/health`.
 
-Local development uses XMTP `dev`. Production/mainnet messaging deliberately fails closed unless `VITE_XMTP_GATEWAY_HOST` is provided at build time. That browser-visible value must be only a hostname, never a credential; the authenticated payer-Gateway path remains a documented release blocker in [`features.md`](./features.md).
+Local development uses XMTP `dev`, and the canonical build currently uses the pinned SDK's legacy `production` endpoint. Decentralized `mainnet` and testnet builds deliberately fail closed unless `VITE_XMTP_GATEWAY_HOST` is provided at build time. That browser-visible value must be only a hostname, never a credential; the authenticated payer-Gateway path remains a documented mainnet release blocker in [`features.md`](./features.md).
 
 The implemented messaging path uses only the Farcaster host wallet—EOA or supported smart contract wallet—as its XMTP signer. It does not generate a fallback key. The browser keeps the XMTP database in OPFS behind one origin-wide Web Lock, shows only allowed DMs, checks address reachability, streams new text, and persists optimistic drafts for same-ID retry where Browser SDK 7 permits it. A true XMTP `Failed` record is terminal in this SDK and is labeled honestly rather than being fake-retried.
 
@@ -39,4 +39,4 @@ Run the deterministic type/lint/unit/build gates with `npm run check`. The brows
 
 The production Worker and `miniapp.converge.cv` Custom Domain are live. Pushes to `main` are the ordinary production delivery path: a main-only Cloudflare Workers Builds trigger pulls through the Cloudflare GitHub App, runs `npm run check`, and then runs `npx wrangler deploy`. GitHub Actions remains read-only CI; do not store Cloudflare API tokens or account credentials in GitHub secrets. The `npm run deploy` and `npm run deploy:preview` scripts are reserved for explicit operator-owned manual work.
 
-The Farcaster account association is configured as Cloudflare Worker runtime secrets and the public Farcaster debugger verifies exact-domain ownership for `miniapp.converge.cv`. The manifest remains `noindex: true` until a separate launch decision. The production payer Gateway remains unconfigured, so production XMTP messaging still fails closed.
+The Farcaster account association is configured as Cloudflare Worker runtime secrets and the public Farcaster debugger verifies exact-domain ownership for `miniapp.converge.cv`. The manifest remains `noindex: true` until a separate launch decision. The payer Gateway remains unconfigured, so moving the public app from legacy XMTP `production` to decentralized `mainnet` is still blocked.

@@ -1,6 +1,6 @@
 # Operations and publishing
 
-This runbook covers the Cloudflare-hosted SPA and Worker API at `https://miniapp.converge.cv`. It does not claim that production XMTP sending is ready: an authenticated, quota-enforced payer Gateway and a funded production send remain release blockers.
+This runbook covers the Cloudflare-hosted SPA and Worker API at `https://miniapp.converge.cv`. The canonical build currently uses the pinned SDK's legacy XMTP `production` environment so real inbox and signature testing can proceed. A move to decentralized `mainnet` still requires an authenticated, quota-enforced payer Gateway and a funded send before public launch.
 
 ## Runtime inventory
 
@@ -13,8 +13,8 @@ This runbook covers the Cloudflare-hosted SPA and Worker API at `https://miniapp
 | ENS preferences | `PREFERENCES` D1 binding | Stores only Quick Auth-verified FID, `accepted`/`dismissed`, and update time. Production and preview databases are isolated. |
 | ENS discovery | `ENS_MAINNET_RPC_URLS` Worker variable | Ordered comma-separated public HTTPS Ethereum RPC fallbacks for reverse and forward ENS verification. |
 | Farcaster identity | Quick Auth JWKS + official primary-address API | Verifies the exact-domain FID and resolves its public primary Ethereum address. |
-| XMTP environment | `VITE_XMTP_ENV` at build time | `dev` for preview/local; production is the release target. |
-| XMTP Gateway | `VITE_XMTP_GATEWAY_HOST` at build time | Public hostname only. Never put a credential in a `VITE_` variable. |
+| XMTP environment | `VITE_XMTP_ENV` at build time | `dev` for preview/local; legacy `production` for the current canonical build; decentralized `mainnet` remains gated. |
+| XMTP Gateway | `VITE_XMTP_GATEWAY_HOST` at build time | Required for `mainnet` and decentralized testnets. Public hostname only; never put a credential in a `VITE_` variable. |
 
 The production `PREFERENCES` database is `converge-miniapp-preferences`; preview uses the separate `converge-miniapp-preview-preferences` database. There is no KV, R2, Queue, Durable Object, identity-link table, notification token store, or persistent application session store.
 
@@ -33,7 +33,7 @@ Production delivery has one owner:
 The hosted shell, first-party health endpoint, and signed ownership manifest are live, but the public Mini App release remains intentionally blocked:
 
 - The three exact-domain Farcaster account-association values are configured as Worker runtime secrets. On 2026-07-15 Farcaster's public debugger reported `valid`, `schemaValid`, `verified`, `domainMatches`, and `signatureValid` as true for FID `8531` (`deanpierce.eth`). The manifest remains `noindex: true` until launch is deliberately approved.
-- The authenticated, quota-enforced XMTP payer Gateway and its CSP origins remain unconfigured. Production messaging therefore continues to fail closed.
+- The authenticated, quota-enforced XMTP payer Gateway and its CSP origins remain unconfigured. That blocks a switch to decentralized `mainnet`, but does not block the pinned SDK's legacy `production` endpoint.
 - Real Farcaster desktop, iOS, and Android wallet/WebView validation remains required before launch.
 
 The ENS identity release adds protected API routes and D1 state, but does not remove the payer-Gateway blocker. Treat it as deployed only after the repository migration is applied, the verified `main` build is live, an authenticated canonical-host lookup succeeds, and accepted/dismissed/delete behavior is confirmed without logging identity data.
@@ -46,7 +46,7 @@ Ordinary production delivery is a push to `main`; do not run a second manual dep
 
 For an operator-owned preview, authenticate Wrangler interactively and run `npm run deploy:preview`. This builds with `CLOUDFLARE_ENV=preview` and XMTP `dev`. Preview `workers.dev` responses are marked `noindex`, and the preview manifest route always fails closed even if association values are accidentally configured there.
 
-When the payer Gateway is ready, set `VITE_XMTP_GATEWAY_HOST` as a Cloudflare production build variable and add its exact HTTPS/WSS origins to `public/_headers` in the same reviewed commit. The value is browser-visible configuration, never a credential. Until then, the client deliberately refuses production/mainnet XMTP initialization.
+When the payer Gateway is ready, set `VITE_XMTP_GATEWAY_HOST` as a Cloudflare production build variable, switch `VITE_XMTP_ENV` to `mainnet`, and add the Gateway's exact HTTPS/WSS origins to `public/_headers` in the same reviewed commit. The hostname is browser-visible configuration, never a credential. Until then, the canonical build stays on legacy XMTP `production`; any `mainnet` or decentralized-testnet build without a Gateway stops with a non-retryable configuration state before XMTP requests a signature.
 
 ## ENS preference database and protected API
 
@@ -143,7 +143,9 @@ Cloudflare Worker observability samples 10 percent of requests. Application code
 
 ## XMTP payer Gateway blocker
 
-The pinned Browser SDK accepts a Gateway hostname but does not provide a proven browser-to-Gateway authentication mechanism in this project. Before public production messaging:
+The pinned Browser SDK provides built-in endpoints for `local`, `dev`, and legacy `production`. Its `mainnet`, `testnet`, `testnet-dev`, and `testnet-staging` environments require a Gateway hostname. This distinction is regression-tested because incorrectly gating legacy `production` prevents `Client.create()` from running and therefore prevents every XMTP signing request.
+
+The SDK accepts a Gateway hostname, but this project does not yet have a proven browser-to-Gateway authentication mechanism. Before moving the public app to decentralized `mainnet`:
 
 1. Prove client selection of the intended Gateway with the pinned SDK.
 2. Prove authentication that cannot be copied from a public browser bundle.
@@ -151,7 +153,7 @@ The pinned Browser SDK accepts a Gateway hostname but does not provide a proven 
 4. Record one funded production send and its failure behavior.
 5. Decide whether the Gateway runs in Cloudflare Containers or a replaceable external container host based on measured lifecycle and cost.
 
-Until then, a production build without `VITE_XMTP_GATEWAY_HOST` fails closed and preview/local work stays on XMTP `dev`.
+Until then, the canonical build stays on legacy XMTP `production`, preview/local work stays on XMTP `dev`, and decentralized environments fail with an operator-actionable configuration state when no Gateway is present.
 
 ## Rollback
 

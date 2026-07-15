@@ -35,6 +35,12 @@ const SUPPORTED_ENVS: readonly XmtpEnv[] = [
   'testnet',
   'mainnet',
 ]
+const GATEWAY_REQUIRED_ENVS: readonly XmtpEnv[] = [
+  'testnet-staging',
+  'testnet-dev',
+  'testnet',
+  'mainnet',
+]
 
 type IncomingMessage = DecodedMessage
 
@@ -66,6 +72,13 @@ export class XmtpClientInitializationTimeoutError extends Error {
   constructor() {
     super('XMTP client initialization timed out.')
     this.name = 'XmtpClientInitializationTimeoutError'
+  }
+}
+
+export class XmtpGatewayConfigurationError extends Error {
+  constructor(environment: XmtpEnv) {
+    super(`XMTP ${environment} requires an authenticated payer Gateway.`)
+    this.name = 'XmtpGatewayConfigurationError'
   }
 }
 
@@ -481,18 +494,18 @@ function normalizeMessageLimit(limit: number): number {
   return Math.max(Number(MESSAGE_PAGE_SIZE), limit)
 }
 
-function clientOptions(): {
+export function xmtpClientOptions(
+  env: XmtpEnv,
+  configuredGatewayHost?: string,
+): {
   appVersion: string
   env: XmtpEnv
   gatewayHost?: string
   loggingLevel: LogLevel
 } {
-  const gatewayHost = import.meta.env.VITE_XMTP_GATEWAY_HOST?.trim()
-  const env = configuredEnvironment()
-  if ((env === 'production' || env === 'mainnet') && !gatewayHost) {
-    throw new Error(
-      'Production XMTP messaging is disabled until an authenticated payer Gateway is configured.',
-    )
+  const gatewayHost = configuredGatewayHost?.trim()
+  if (GATEWAY_REQUIRED_ENVS.includes(env) && !gatewayHost) {
+    throw new XmtpGatewayConfigurationError(env)
   }
 
   return {
@@ -501,6 +514,13 @@ function clientOptions(): {
     loggingLevel: LogLevel.Off,
     ...(gatewayHost ? { gatewayHost } : {}),
   }
+}
+
+function clientOptions(): ReturnType<typeof xmtpClientOptions> {
+  return xmtpClientOptions(
+    configuredEnvironment(),
+    import.meta.env.VITE_XMTP_GATEWAY_HOST,
+  )
 }
 
 function configuredEnvironment(): XmtpEnv {

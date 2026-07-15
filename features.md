@@ -307,7 +307,7 @@ Success condition: the optional flow never moves a key, recovery identity, inbox
 | Local data | Installation management/revocation UI | P1 | Later | User can deliberately inspect and revoke an old installation when required. |
 | Design | Converge-derived compact visual system | P0 | Implemented locally | Palette, bubbles, surfaces, inputs, focus states, and empty states are implemented; embedded-device review remains. |
 | Backend | Cloudflare Worker Static Assets | P0 | Deployed | The Worker, `miniapp.converge.cv` Custom Domain, and Farcaster ownership are live; Cloudflare Workers Builds deploys verified `main` commits. Production XMTP remains a separate release gate. |
-| Backend | Authenticated XMTP payer Gateway | P0 | Blocked | Current Browser SDK must prove Gateway selection/auth, per-user quotas, viable container hosting, and one funded production send. |
+| Backend | Authenticated XMTP payer Gateway | P0 | Blocked | A decentralized-mainnet move must prove Gateway selection/auth, per-user quotas, viable container hosting, and one funded send. Legacy `production` inbox testing can proceed independently. |
 | Backend | Protected API and minimal identity data | P1 | Implemented locally | Exact-host Quick Auth routes and isolated production/preview D1 bindings store only ENS `accepted`/`dismissed` choice by FID; migration and production route proof remain. |
 | Backend | Notification token data model | P1 | Later | D1 stores only verified, protected notification lifecycle data after notifications are promoted. |
 | Operations | Redacted logs, health, and error visibility | P0 | Committed | Failures are diagnosable without leaking message content, tokens, or full wallet identifiers. |
@@ -838,7 +838,7 @@ The identity-link endpoint is intentionally gated on a separate protocol specifi
 
 ## XMTP Gateway and fees release gate
 
-**Current production status: Blocked pending an authenticated Browser SDK-to-Gateway proof.** Development-network client UX work may proceed, but the app cannot be called production-ready while the documented browser payer path is incomplete or unauthenticated.
+**Current decentralized-mainnet status: Blocked pending an authenticated Browser SDK-to-Gateway proof.** The pinned SDK's legacy `production` environment has a built-in endpoint and can be used for current inbox/signature validation, but the app cannot be called launch-ready while the intended paid-network browser payer path is incomplete or unauthenticated.
 
 Current official XMTP material describes an evolving payer model for decentralized-network traffic:
 
@@ -856,7 +856,7 @@ Therefore:
 - A separate conventional container host remains a valid split architecture even if the SPA/API stays on Cloudflare.
 - Add payer balance monitoring and an actionable `INSUFFICIENT_PAYER_BALANCE` failure state before paid messaging is enforced.
 
-This is a P0 production release gate, not a reason to delay the client UX prototype on the XMTP development/test environment.
+This is a P0 decentralized-mainnet release gate, not a reason to delay client UX and real-host testing on XMTP `dev` or legacy `production`.
 
 ## Security and privacy requirements
 
@@ -1196,6 +1196,13 @@ Extended locally on 2026-07-15:
 - D1 remembers `accepted` or `dismissed` account-wide, a browser-local dismissal hint avoids repeat background Quick Auth on the same device, the compact identity/privacy menu keeps the option available, and failed writes leave the choice visible; and
 - acceptance changes only the inbox label, while different-inbox, no-inbox, and unavailable states explain the boundary and never merge, migrate, add, or remove an XMTP identity.
 
+Connection hotfix implemented and locally verified on 2026-07-15:
+
+- the pinned SDK's legacy `production` environment can initialize without a custom Gateway, reach `Client.create()`, and continue to `client.register()`, where XMTP can request the required host-wallet signatures;
+- `mainnet` and every decentralized testnet still stop before `Client.create()` unless a non-empty Gateway hostname is configured;
+- a missing required Gateway is presented as a non-retryable application configuration problem rather than the generic "The inbox did not open" state; and
+- unit coverage distinguishes legacy `local`/`dev`/`production` behavior from decentralized-network behavior so a build-time guard cannot silently block signatures again.
+
 The pinned Browser SDK still requires a document restart if its internal Worker fails during `Client.init()` before returning a closable Client. Registration itself is app-owned and closes safely on wallet rejection. Real desktop/iOS/Android signatures, OPFS re-entry, SCW continuity, storage eviction, and near-limit inbox cases remain required evidence; origin-only code cannot deterministically distinguish a first visit from complete site-data eviction.
 
 Deliverables:
@@ -1284,7 +1291,7 @@ Implemented locally on 2026-07-14:
 - Cloudflare version metadata in the tested health response; and
 - operator, rollback, security, and privacy/data-inventory documentation.
 
-The Worker and canonical Custom Domain are deployed. On 2026-07-15 the exact-domain Farcaster account association was installed as Cloudflare Worker secrets and Farcaster's public debugger passed schema, signature, FID ownership, and domain validation. Remaining: complete real-host launch and embed acceptance, deliberately enable discovery only when launch-ready, and complete the payer-Gateway proof below.
+The Worker and canonical Custom Domain are deployed. On 2026-07-15 the exact-domain Farcaster account association was installed as Cloudflare Worker secrets and Farcaster's public debugger passed schema, signature, FID ownership, and domain validation. The canonical client uses the pinned SDK's legacy `production` environment while decentralized `mainnet` remains separately gated. Remaining: complete real-host launch and embed acceptance, deliberately enable discovery only when launch-ready, and complete the payer-Gateway proof below.
 
 Deliverables:
 
@@ -1504,6 +1511,8 @@ Current integration facts in this plan were checked through 2026-07-15 against p
 - [XMTP push notification model](https://docs.xmtp.org/chat-apps/push-notifs/understand-push-notifs)
 - [XMTP fees](https://docs.xmtp.org/fund-agents-apps/calculate-fees)
 - [XMTP Gateway Service](https://docs.xmtp.org/fund-agents-apps/run-gateway)
+- [XMTP Gateway-capable SDK update](https://docs.xmtp.org/fund-agents-apps/update-sdk)
+- [XMTP decentralized-network funding setup](https://docs.xmtp.org/fund-agents-apps/get-started)
 - [Cloudflare Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/)
 - [Cloudflare storage options](https://developers.cloudflare.com/workers/platform/storage-options/)
 - [Cloudflare Containers](https://developers.cloudflare.com/containers/)

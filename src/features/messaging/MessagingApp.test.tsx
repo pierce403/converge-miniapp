@@ -92,6 +92,23 @@ describe('MessagingApp storage and installation states', () => {
     expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument()
   })
 
+  it('does not ask the user to retry missing XMTP network configuration', () => {
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      address: null,
+      connection: {
+        error: 'Converge Mini is not configured for this XMTP network yet. No XMTP signature was requested and no inbox was changed.',
+        phase: 'configuration-error',
+      },
+    })
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    expect(screen.getByRole('heading', { name: 'Messaging is not available yet' })).toBeVisible()
+    expect(screen.getByText(/no XMTP signature was requested/i)).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+  })
+
   it('distinguishes the permanent inbox-update limit from installation cleanup', () => {
     mocks.messaging.mockReturnValue({
       ...readyMessaging(),

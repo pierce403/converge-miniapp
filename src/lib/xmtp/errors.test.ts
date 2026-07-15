@@ -3,6 +3,16 @@ import { describe, expect, it } from 'vitest'
 import { classifyXmtpFailure } from './errors'
 
 describe('classifyXmtpFailure', () => {
+  it('recognizes a missing payer Gateway as application configuration', () => {
+    const error = new Error('XMTP mainnet requires an authenticated payer Gateway.')
+    error.name = 'XmtpGatewayConfigurationError'
+
+    expect(classifyXmtpFailure(error, 'initialize')).toEqual({
+      kind: 'configuration',
+      message: 'Converge Mini is not configured for this XMTP network yet. No XMTP signature was requested and no inbox was changed.',
+    })
+  })
+
   it('recognizes a nested wallet cancellation without exposing provider text', () => {
     const failure = classifyXmtpFailure({
       cause: { code: 4001, message: 'provider-specific rejection details' },

@@ -33,6 +33,7 @@ export type ConnectionPhase =
   | 'storage-error'
   | 'installation-limit'
   | 'inbox-update-limit'
+  | 'configuration-error'
   | 'restart-required'
   | 'error'
 
@@ -1042,6 +1043,7 @@ function readableMessagingError(
 }
 
 function connectionFailurePhase(kind: XmtpFailureKind): ConnectionPhase {
+  if (kind === 'configuration') return 'configuration-error'
   if (kind === 'installation-limit') return 'installation-limit'
   if (kind === 'inbox-update-limit') return 'inbox-update-limit'
   if (kind === 'unsupported-browser') return 'unsupported-browser'

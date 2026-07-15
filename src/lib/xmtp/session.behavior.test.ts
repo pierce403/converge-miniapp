@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DeliveryStatus,
   Dm,
@@ -31,7 +31,9 @@ vi.mock('@xmtp/browser-sdk', () => {
 
 import {
   XmtpClientInitializationError,
+  XmtpGatewayConfigurationError,
   XmtpMessagingSession,
+  xmtpClientOptions,
 } from './session'
 
 const address = '0x52908400098527886E0F7030069857D2E4169EE7'
@@ -105,6 +107,63 @@ function client(conversation: Dm) {
 describe('XmtpMessagingSession behavior', () => {
   beforeEach(() => {
     sdkMocks.create.mockReset()
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it.each(['local', 'dev', 'production'] as const)(
+    'allows the legacy %s environment without a payer Gateway',
+    (environment) => {
+      expect(xmtpClientOptions(environment)).toEqual(expect.objectContaining({
+        env: environment,
+      }))
+      expect(xmtpClientOptions(environment)).not.toHaveProperty('gatewayHost')
+    },
+  )
+
+  it.each([
+    'testnet-staging',
+    'testnet-dev',
+    'testnet',
+    'mainnet',
+  ] as const)(
+    'requires a payer Gateway for the decentralized %s environment',
+    (environment) => {
+      expect(() => xmtpClientOptions(environment)).toThrow(
+        XmtpGatewayConfigurationError,
+      )
+    },
+  )
+
+  it('passes a normalized Gateway hostname to a decentralized environment', () => {
+    expect(xmtpClientOptions('mainnet', ' gateway.example.com ')).toEqual(
+      expect.objectContaining({
+        env: 'mainnet',
+        gatewayHost: 'gateway.example.com',
+      }),
+    )
+  })
+
+  it('reaches SDK client creation on legacy production without a Gateway', async () => {
+    vi.stubEnv('VITE_XMTP_ENV', 'production')
+    vi.stubEnv('VITE_XMTP_GATEWAY_HOST', '')
+    const fakeClient = client(dm())
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    expect(sdkMocks.create).toHaveBeenCalledWith(
+      signer,
+      expect.objectContaining({
+        disableAutoRegister: true,
+        env: 'production',
+      }),
+    )
+    expect(sdkMocks.create.mock.calls[0]?.[1]).not.toHaveProperty('gatewayHost')
+    expect(fakeClient.register).toHaveBeenCalledOnce()
+    await session.close()
   })
 
   it('owns registration cleanup after client initialization', async () => {
