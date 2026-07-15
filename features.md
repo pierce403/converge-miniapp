@@ -1180,6 +1180,16 @@ Exit criteria:
 
 ### Task 7: production publishing and Gateway proof
 
+Implemented locally on 2026-07-14:
+
+- a schema-tested dynamic `/.well-known/farcaster.json` with canonical metadata and fail-closed account-association configuration;
+- current root `fc:miniapp` and compatibility `fc:frame` embeds plus opaque, dimension-tested PNG assets;
+- static/Worker security headers, immutable hashed-asset caching, preview `noindex`, and explicit Worker-first API/manifest routing;
+- Cloudflare version metadata in the tested health response; and
+- operator, rollback, security, and privacy/data-inventory documentation.
+
+Remaining: configure the exact-domain Farcaster account association, authenticate and deploy to Cloudflare, validate the canonical manifest/embed in Farcaster, and complete the payer-Gateway proof below.
+
 Deliverables:
 
 - Cloudflare Worker Static Assets deployment with the first-party Worker API;

@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1284 2778">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#081a3e"/>
+      <stop offset="0.58" stop-color="#163475"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="30" stdDeviation="35" flood-opacity="0.35"/></filter>
+  </defs>
+  <rect width="1284" height="2778" fill="url(#background)"/>
+  <circle cx="1110" cy="160" r="390" fill="#60a5fa" opacity="0.12"/>
+  <circle cx="90" cy="2720" r="430" fill="#f97316" opacity="0.1"/>
+
+  <g transform="translate(88 106) scale(.2)">
+    <rect width="1024" height="1024" rx="224" fill="#0b1f4a"/>
+    <path d="M258 306h508v326c0 76-62 138-138 138H492L346 872V770h-88V306Z" fill="#f97316"/>
+    <path d="M346 238h332" stroke="#93c5fd" stroke-width="44" stroke-linecap="round"/>
+    <circle cx="396" cy="512" r="46" fill="#fff7ed"/>
+    <circle cx="512" cy="512" r="46" fill="#fff7ed"/>
+    <circle cx="628" cy="512" r="46" fill="#fff7ed"/>
+  </g>
+  <text x="330" y="200" fill="#eff6ff" font-family="Inter,Arial,sans-serif" font-size="82" font-weight="760" letter-spacing="-3">Converge Mini</text>
+  <text x="92" y="360" fill="#fdba74" font-family="Inter,Arial,sans-serif" font-size="42" font-weight="700">Private XMTP messages in Farcaster</text>
+  <text x="92" y="425" fill="#bfdbfe" font-family="Inter,Arial,sans-serif" font-size="31">A focused inbox that keeps your wallet identity in your hands.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="72" y="535" width="1140" height="2100" rx="72" fill="#f8fafc"/>
+    <rect x="72" y="535" width="1140" height="190" rx="72" fill="#0b1f4a"/>
+    <rect x="72" y="650" width="1140" height="75" fill="#0b1f4a"/>
+    <circle cx="178" cy="630" r="49" fill="#f97316"/>
+    <path d="M154 611h48v30c0 11-9 20-20 20h-9l-14 10v-10h-5Z" fill="#fff7ed"/>
+    <text x="252" y="620" fill="#eff6ff" font-family="Inter,Arial,sans-serif" font-size="38" font-weight="700">Messages</text>
+    <text x="252" y="668" fill="#93c5fd" font-family="Inter,Arial,sans-serif" font-size="25">Connected through XMTP</text>
+    <rect x="958" y="590" width="178" height="72" rx="36" fill="#f97316"/>
+    <text x="1047" y="637" text-anchor="middle" fill="#172554" font-family="Inter,Arial,sans-serif" font-size="25" font-weight="750">New DM</text>
+
+    <text x="132" y="830" fill="#1e3a8a" font-family="Inter,Arial,sans-serif" font-size="24" font-weight="750" letter-spacing="3">RECENT</text>
+    <g font-family="Inter,Arial,sans-serif">
+      <rect x="112" y="875" width="1060" height="245" rx="38" fill="#e8f0ff" stroke="#bfdbfe" stroke-width="3"/>
+      <circle cx="232" cy="996" r="72" fill="#1d4ed8"/>
+      <text x="232" y="1015" text-anchor="middle" fill="#eff6ff" font-size="43" font-weight="700">A</text>
+      <text x="338" y="962" fill="#0f172a" font-size="36" font-weight="700">0x71a8…09c2</text>
+      <text x="338" y="1015" fill="#475569" font-size="28">The project notes are ready.</text>
+      <text x="338" y="1061" fill="#64748b" font-size="23">2 minutes ago</text>
+      <circle cx="1110" cy="932" r="17" fill="#f97316"/>
+
+      <rect x="112" y="1150" width="1060" height="245" rx="38" fill="#ffffff" stroke="#dbeafe" stroke-width="3"/>
+      <circle cx="232" cy="1271" r="72" fill="#f97316"/>
+      <text x="232" y="1290" text-anchor="middle" fill="#172554" font-size="43" font-weight="700">J</text>
+      <text x="338" y="1237" fill="#0f172a" font-size="36" font-weight="700">0x48f1…a317</text>
+      <text x="338" y="1290" fill="#475569" font-size="28">See you in the next conversation.</text>
+      <text x="338" y="1336" fill="#64748b" font-size="23">Yesterday</text>
+
+      <rect x="112" y="1425" width="1060" height="245" rx="38" fill="#ffffff" stroke="#dbeafe" stroke-width="3"/>
+      <circle cx="232" cy="1546" r="72" fill="#0b1f4a"/>
+      <text x="232" y="1565" text-anchor="middle" fill="#bfdbfe" font-size="43" font-weight="700">M</text>
+      <text x="338" y="1512" fill="#0f172a" font-size="36" font-weight="700">0x90c4…5d8e</text>
+      <text x="338" y="1565" fill="#475569" font-size="28">Encrypted, interoperable, yours.</text>
+      <text x="338" y="1611" fill="#64748b" font-size="23">Monday</text>
+    </g>
+
+    <rect x="112" y="1770" width="1060" height="670" rx="48" fill="#0b1f4a"/>
+    <text x="166" y="1850" fill="#93c5fd" font-family="Inter,Arial,sans-serif" font-size="23" font-weight="750" letter-spacing="3">PRIVATE BY DESIGN</text>
+    <text x="166" y="1940" fill="#eff6ff" font-family="Inter,Arial,sans-serif" font-size="47" font-weight="750">Your message keys stay local.</text>
+    <text x="166" y="2010" fill="#bfdbfe" font-family="Inter,Arial,sans-serif" font-size="29">Converge Mini uses the wallet already provided</text>
+    <text x="166" y="2054" fill="#bfdbfe" font-family="Inter,Arial,sans-serif" font-size="29">by your Farcaster host. It never invents another</text>
+    <text x="166" y="2098" fill="#bfdbfe" font-family="Inter,Arial,sans-serif" font-size="29">identity or sends plaintext to its own backend.</text>
+    <rect x="166" y="2200" width="500" height="98" rx="49" fill="#f97316"/>
+    <text x="416" y="2262" text-anchor="middle" fill="#172554" font-family="Inter,Arial,sans-serif" font-size="31" font-weight="750">Open private inbox</text>
+    <text x="166" y="2375" fill="#93c5fd" font-family="Inter,Arial,sans-serif" font-size="24">miniapp.converge.cv</text>
+  </g>
+</svg>

@@ -3,6 +3,7 @@
 A deliberately small XMTP inbox built as a Farcaster Mini App and hosted on Cloudflare Workers. The canonical production origin is `https://miniapp.converge.cv`.
 
 The product and delivery contract lives in [`features.md`](./features.md).
+Deployment, ownership, rollback, and the production Gateway blocker are in [`docs/operations.md`](./docs/operations.md). The concrete data inventory is in [`docs/privacy.md`](./docs/privacy.md).
 
 ## Local development
 
@@ -41,4 +42,4 @@ npm run deploy:preview
 npm run deploy
 ```
 
-The production command is configured for `miniapp.converge.cv`. Cloudflare account access, DNS ownership, a production payer Gateway, and the final Farcaster account-association signature are external setup requirements; no credentials belong in this repository.
+The production command is configured for `miniapp.converge.cv`. Cloudflare account access, DNS ownership, a production payer Gateway, and the final Farcaster account-association signature are external setup requirements; no credentials belong in this repository. Until account association is configured, `/.well-known/farcaster.json` fails closed with a `503` instead of publishing placeholders.

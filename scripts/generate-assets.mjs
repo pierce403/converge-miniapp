@@ -7,6 +7,7 @@ const assets = [
   ['public/mark.svg', 'public/splash-200.png', 200, 200],
   ['public/embed.svg', 'public/embed-1200x800.png', 1200, 800],
   ['public/hero.svg', 'public/hero-1200x630.png', 1200, 630],
+  ['public/screenshot.svg', 'public/screenshot-1284x2778.png', 1284, 2778],
 ]
 
 await Promise.all(
