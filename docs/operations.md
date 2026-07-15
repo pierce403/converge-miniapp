@@ -15,13 +15,28 @@ This runbook covers the Cloudflare-hosted SPA and Worker API at `https://miniapp
 
 There is currently no D1, KV, R2, Queue, Durable Object, notification token store, or application authentication service.
 
+## Current deployment readiness (2026-07-14)
+
+The production-shaped dry run succeeds, but a live deployment is intentionally blocked until these external account/domain prerequisites are resolved:
+
+- Wrangler and the Cloudflare CLI need fresh authentication; no API token or account ID is stored in this repository.
+- `miniapp.converge.cv` is currently NXDOMAIN, and `converge.cv` is delegated to Namecheap rather than an active Cloudflare zone. A Workers Custom Domain cannot attach until the zone is onboarded and Cloudflare's assigned nameservers are active.
+- Before changing nameservers, export and reproduce the complete DNS zone. Preserve the apex GitHub Pages records, email-forwarding MX records, SPF/TXT records, and every record not represented in this repository.
+- The three exact-domain Farcaster account-association values are not configured locally and must be installed as Worker secrets after the zone is ready.
+- The authenticated, quota-enforced XMTP payer Gateway and its CSP origins remain unresolved; production messaging therefore continues to fail closed.
+- Run release commands on Node `22.13+` in the Node 22 line or Node `24+`. Node 23 is outside this repository's supported engine range even if a local build happens to pass.
+
+An XMTP-development preview on `workers.dev` does not need the custom domain or production Gateway, but it still requires Wrangler authentication. Preview storage, manifest ownership, and Quick Auth behavior are not evidence for the canonical production origin.
+
 ## Initial Cloudflare setup
 
-1. Authenticate Wrangler against the intended Cloudflare account and confirm that account owns the `converge.cv` zone.
-2. Run `npm ci`, `npm run cf-typegen`, and `npm run check`.
-3. Deploy the preview Worker with `npm run deploy:preview`. This builds with `CLOUDFLARE_ENV=preview` and XMTP `dev`.
-4. Verify the preview root and `/api/health`. Preview `workers.dev` responses are marked `noindex`, and the preview manifest route always fails closed even if association values are accidentally configured there.
-5. Do not promote messaging as production-ready until the Gateway section below is resolved.
+1. Authenticate Wrangler against the intended Cloudflare account.
+2. Add `converge.cv`, reproduce the complete existing DNS zone, update registrar nameservers, and wait until Cloudflare marks the zone active.
+3. Confirm the account owns the now-active `converge.cv` zone and that the pre-existing website/email records still resolve correctly.
+4. Run `npm ci`, `npm run cf-typegen`, and `npm run check`.
+5. Deploy the preview Worker with `npm run deploy:preview`. This builds with `CLOUDFLARE_ENV=preview` and XMTP `dev`.
+6. Verify the preview root and `/api/health`. Preview `workers.dev` responses are marked `noindex`, and the preview manifest route always fails closed even if association values are accidentally configured there.
+7. Do not promote messaging as production-ready until the Gateway section below is resolved.
 
 The production deploy is:
 
