@@ -17,7 +17,7 @@ There is currently no D1, KV, R2, Queue, Durable Object, notification token stor
 
 ## Current deployment state (2026-07-15)
 
-The Cloudflare Worker and its `miniapp.converge.cv` Custom Domain are live. Cloudflare Workers Builds successfully pulled and deployed the exact `main` commit `87a94baa4d0079e5f59fbfdaec2afee66fd38d4c` through the Cloudflare GitHub App.
+The Cloudflare Worker and its `miniapp.converge.cv` Custom Domain are live. Cloudflare Workers Builds successfully pulled and deployed the exact `main` commit `578e68f2ebc944383c0237d26ba89696247dca8d` through the Cloudflare GitHub App. The active secret-change deployment after ownership configuration is `affb228c-5b90-4d74-8ea2-26950396a3a2`.
 
 Production delivery has one owner:
 
@@ -27,9 +27,9 @@ Production delivery has one owner:
 - The Cloudflare deploy command is `npx wrangler deploy`.
 - Never put a Cloudflare API token, account ID, or other Cloudflare account credential in GitHub Actions secrets.
 
-The hosted shell and first-party health endpoint are live, but the public Mini App release remains intentionally blocked:
+The hosted shell, first-party health endpoint, and signed ownership manifest are live, but the public Mini App release remains intentionally blocked:
 
-- The three exact-domain Farcaster account-association values are not configured. `/.well-known/farcaster.json` therefore serves a metadata-only bootstrap document with `noindex: true` and no `accountAssociation`; it makes no ownership claim and is not ready for discovery.
+- The three exact-domain Farcaster account-association values are configured as Worker runtime secrets. On 2026-07-15 Farcaster's public debugger reported `valid`, `schemaValid`, `verified`, `domainMatches`, and `signatureValid` as true for FID `8531` (`deanpierce.eth`). The manifest remains `noindex: true` until launch is deliberately approved.
 - The authenticated, quota-enforced XMTP payer Gateway and its CSP origins remain unconfigured. Production messaging therefore continues to fail closed.
 - Real Farcaster desktop, iOS, and Android wallet/WebView validation remains required before launch.
 
@@ -65,9 +65,10 @@ After configuring them, verify:
 curl -fsS https://miniapp.converge.cv/.well-known/farcaster.json
 curl -fsS https://miniapp.converge.cv/api/health
 curl -fsSI https://miniapp.converge.cv/
+curl -fsS 'https://api.farcaster.xyz/v1/dev-tools/debug-domain-manifest?domain=miniapp.converge.cv'
 ```
 
-Then run the official Farcaster Manifest and Embed tools against the canonical root URL. Confirm the response includes the exact account association, icon, splash, feed card, exact-domain ownership, required wallet capability, and launch behavior.
+Require the debugger's manifest validation, schema validation, account-association verification, domain match, and signature validation to all pass. Then run the official Farcaster Manifest and Embed tools against the canonical root URL. Confirm the response includes the exact account association, icon, splash, feed card, exact-domain ownership, required wallet capability, and launch behavior.
 
 ## Security and observability
 

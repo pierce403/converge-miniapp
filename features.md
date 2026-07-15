@@ -272,7 +272,7 @@ This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is p
 | --- | --- | --- | --- | --- |
 | Shell | Farcaster Mini App detection and SDK lifecycle | P0 | Committed | Embedded and standalone modes render; `ready()` is called at the correct point; listeners are cleaned up. |
 | Shell | Mobile safe areas, keyboard, and constrained viewport | P0 | Committed | Core flows work in host webviews without clipped header/composer or body-scroll traps. |
-| Publishing | Signed `/.well-known/farcaster.json` | P0 | Committed | Exact production domain passes Farcaster manifest validation. |
+| Publishing | Signed `/.well-known/farcaster.json` | P0 | Verified production | Farcaster's public debugger verifies schema, signature, FID ownership, and the exact production domain. |
 | Publishing | Root `fc:miniapp` share embed | P0 | Committed | Root URL renders a valid 3:2 feed card and launches the app. |
 | Identity | Farcaster Quick Auth session | P1 | Later | Add only when a protected API, directory, identity link, or notification feature needs trusted FID. |
 | Identity | Host EVM wallet connection | P0 | Implemented locally | Host provider and lifecycle teardown are implemented; real Farcaster desktop/iOS/Android proof remains. |
@@ -289,7 +289,7 @@ This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is p
 | Local data | Storage-loss/install-limit recognition | P0 | Implemented locally | Browser primitives are checked before wallet access; curated storage, installation, and permanent inbox-limit states never auto-revoke or expose raw database identifiers. |
 | Local data | Installation management/revocation UI | P1 | Later | User can deliberately inspect and revoke an old installation when required. |
 | Design | Converge-derived compact visual system | P0 | Implemented locally | Palette, bubbles, surfaces, inputs, focus states, and empty states are implemented; embedded-device review remains. |
-| Backend | Cloudflare Worker Static Assets | P0 | Deployed | The Worker and `miniapp.converge.cv` Custom Domain are live; Cloudflare Workers Builds deploys verified `main` commits. Farcaster ownership and production XMTP remain separate release gates. |
+| Backend | Cloudflare Worker Static Assets | P0 | Deployed | The Worker, `miniapp.converge.cv` Custom Domain, and Farcaster ownership are live; Cloudflare Workers Builds deploys verified `main` commits. Production XMTP remains a separate release gate. |
 | Backend | Authenticated XMTP payer Gateway | P0 | Blocked | Current Browser SDK must prove Gateway selection/auth, per-user quotas, viable container hosting, and one funded production send. |
 | Backend | Protected API and minimal identity data | P1 | Later | Quick Auth-protected API is added only for a named product flow; D1 stores no keys or plaintext messages. |
 | Backend | Notification token data model | P1 | Later | D1 stores only verified, protected notification lifecycle data after notifications are promoted. |
@@ -1214,7 +1214,7 @@ Implemented locally on 2026-07-14:
 - Cloudflare version metadata in the tested health response; and
 - operator, rollback, security, and privacy/data-inventory documentation.
 
-The Worker and canonical Custom Domain are deployed. Remaining: use the bootstrap manifest to configure the exact-domain Farcaster account association, validate the owned manifest/embed in Farcaster, deliberately enable discovery only when launch-ready, and complete the payer-Gateway proof below.
+The Worker and canonical Custom Domain are deployed. On 2026-07-15 the exact-domain Farcaster account association was installed as Cloudflare Worker secrets and Farcaster's public debugger passed schema, signature, FID ownership, and domain validation. Remaining: complete real-host launch and embed acceptance, deliberately enable discovery only when launch-ready, and complete the payer-Gateway proof below.
 
 Deliverables:
 
