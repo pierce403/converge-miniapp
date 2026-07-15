@@ -1,9 +1,10 @@
 # Converge Mini App: product and feature plan
 
 > Working title: **Converge Mini**
-> Status: product definition; no application code has been started
+> Status: implementation in progress
 > Last reviewed: 2026-07-14
 > Canonical scope: this file
+> Canonical production origin: `https://miniapp.converge.cv`
 
 ## How to use this document
 
@@ -44,16 +45,16 @@ The smallest successful version lets a person:
 
 ## Authoritative first-release scope
 
-When this document says **first release**, **MVP**, or **P0**, it means exactly this thin product slice unless a later decision explicitly promotes more scope. The primary-identity line is a recommended working default that must be confirmed at Task 0c before signer implementation begins:
+When this document says **first release**, **MVP**, or **P0**, it means exactly this thin product slice unless a later decision explicitly promotes more scope:
 
 - Farcaster Mini App shell, lifecycle, manifest, root embed, and standalone unsupported/recovery state.
-- Recommended default: host-provided EVM wallet connection and a proven XMTP EOA or supported smart-wallet signer; never silently substitute an app-owned key.
+- Host-provided EVM wallet connection and a proven XMTP EOA or supported smart-wallet signer; never silently substitute an app-owned key.
 - Stable local XMTP installation resume with single-connection protection.
 - Allowed direct-message conversation list with sync, cached/loading/empty/error states, and live updates.
 - Address-first new DM flow gated by XMTP reachability.
 - Plain-text message history, compose, send, deduplication, failure, and retry.
 - Compact Converge-derived blue/orange visual system with mobile, keyboard, safe-area, and accessibility basics.
-- Production deployment on the chosen exact domain, provisionally using Cloudflare Worker Static Assets.
+- Production deployment at `https://miniapp.converge.cv` using Cloudflare Workers Static Assets plus a small Worker API.
 - A production XMTP Gateway/payer solution as required by the current official design; this remains blocked until the pinned Browser SDK path is proven.
 
 The following are **not required for the first release**: Farcaster Quick Auth, D1, handle/name search, message-request management, Mini App notification permissions, incoming-message notifications, a settings sheet, or a share action beyond the required root embed. Their detailed requirements remain in this plan so adding them later does not blur the security boundary.
@@ -65,10 +66,12 @@ The following are **not required for the first release**: Farcaster Quick Auth, 
 | Build an XMTP messaging app as a Farcaster Mini App | Committed | This is the core product, not a generic Farcaster client or wallet app. |
 | Keep the app much smaller than `converge.cv` | Committed | Excellent launch, identity, inbox, DM, and composer states come before breadth. |
 | Use `converge.cv` as the visual family reference | Committed | Reuse palette and small presentational patterns, not its full provider/store/feature architecture. |
-| Use the Farcaster host EVM wallet as the first-release XMTP identity | Proposed | Recommended low-friction, interoperable default; confirm explicitly before Task 1 because an app-owned key changes recovery and persistence architecture. |
-| Prefer Cloudflare for the first hosting design | Proposed | The frontend/API shape fits well; the exact XMTP payer gateway and notification bridge may require a container runtime or separate service. |
-| Compare Cloudflare with Vercel before locking deployment | Proposed | Define comparison criteria now; make the final hosting call separately as requested. |
-| Use a stable production domain as the Mini App identity | Committed | Farcaster binds manifest ownership, embeds, notification targets, and discovery to the exact hostname. |
+| Use the Farcaster host EVM wallet as the first-release XMTP identity | Committed | Low-friction, interoperable default; an unsupported wallet gets an explicit explanation instead of a silently generated identity. |
+| Host the frontend and first-party API on Cloudflare Workers | Committed | Workers Static Assets and the Vite plugin fit the SPA/API workload. The exact XMTP payer Gateway may still require a separate container host. |
+| Revisit Cloudflare versus Vercel after real operating evidence | Later | Vercel remains a documented fallback/comparison, not a blocker for implementation. |
+| Use `miniapp.converge.cv` as the stable Mini App identity | Committed | Farcaster binds manifest ownership, embeds, notifications, browser persistence, and discovery to this exact hostname. |
+| Use “Converge Mini” as the working public name | Committed | The name can be revisited before broad discovery without changing the canonical hostname. |
+| Keep P0 recipient entry address-first | Committed | ENS/Farcaster handle resolution remains P1 and must not block interoperable direct messaging. |
 | Use Git and GitHub from the beginning | Committed | Each coherent task is verified, committed, and pushed before the next task begins. |
 
 ### Important backend clarification
@@ -999,13 +1002,14 @@ Exit criteria:
 - document passes whitespace/structure review and is pushed; and
 - user can correct the product direction before scaffolding.
 
-### Task 0c: user product decision checkpoint
+### Task 0c: user product decision checkpoint — complete 2026-07-14
 
-Decisions to record in this file:
+Recorded decisions:
 
-- confirm or replace the recommended host-wallet-backed XMTP identity;
-- confirm the working product name and exact canonical hostname; and
-- confirm that address-first compose is sufficient for P0 while handle search remains P1.
+- use the host-wallet-backed XMTP identity;
+- use “Converge Mini” as the working name and `https://miniapp.converge.cv` as the canonical origin;
+- use address-first compose for P0 while handle search remains P1; and
+- deploy the SPA and first-party API on Cloudflare Workers, while keeping the evolving XMTP payer Gateway behind a replaceable boundary.
 
 Exit criteria:
 
@@ -1035,21 +1039,22 @@ Exit criteria:
 - no accidental production identity/install exhaustion; and
 - exact pinned SDK versions are recorded.
 
-### Task 1b: hosting decision checkpoint
+### Task 1b: hosting decision checkpoint — app host selected
 
-Compare the same measured workload across all-Cloudflare, Cloudflare app plus external Gateway, and Vercel app plus external Gateway. Record the selected frontend/API host, Gateway host, storage choice, cost/operations trade-off, and fallback.
+Use Cloudflare Workers Static Assets plus a Worker API for the application at `miniapp.converge.cv`. Compare Cloudflare Containers with an external container host for the XMTP payer Gateway only after the pinned client proves the required authentication path. Preserve Vercel as a later fallback comparison rather than blocking the frontend/API build.
 
 Exit criteria:
 
-- hosting is selected from measured runtime/Gateway evidence rather than frontend preference alone;
-- Task 2 is updated to name the selected provider and deployment commands; and
+- Cloudflare is selected for the application runtime and static assets;
+- the XMTP Gateway runtime remains an explicit, separately measured decision;
+- Task 2 names Cloudflare and records verified deployment commands; and
 - the hosting decision is committed and pushed.
 
 ### Task 2: application and verification scaffold
 
 Deliverables:
 
-- React/TypeScript/Vite app plus the provider adapter selected in Task 1b;
+- React/TypeScript/Vite app plus Cloudflare's Vite plugin and Worker runtime;
 - early shell deployment on the canonical hostname so all later persistence tests use the final origin;
 - automated typecheck/lint/test/build; and
 - CI checkpoint.
@@ -1285,16 +1290,14 @@ Notifications for incoming XMTP messages are not a gate unless they are explicit
 
 These are deliberately not guessed into existence.
 
-1. **Public name and domain:** Is “Converge Mini” only a working title, and what exact stable hostname should own the Mini App?
-2. **Primary identity:** Confirm the recommended host-wallet-backed XMTP identity versus a generated app-owned key.
-3. **P1 recipient discovery:** When handle/name search is promoted, should it use official Farcaster infrastructure, Neynar, or another verified directory source?
-4. **First screen:** Show the full allowed inbox, or launch into a single intent/deep-linked conversation when one is supplied and otherwise show the inbox?
-5. **Message requests:** Keep request accept/decline as post-core P1, or explicitly promote it into the first release?
-6. **Notifications:** Is add/notification permission part of the first public release, or explicitly the next milestone?
-7. **Brand separation:** How closely should the icon/name relate to `converge.cv` while remaining recognizable as a distinct Mini App?
-8. **Public standalone mode:** Should non-Farcaster visitors be able to connect a wallet and message, or see only an open-in-Farcaster landing state?
-9. **Directory/backend dependency:** Is a managed Farcaster data provider acceptable if it materially simplifies reliable handle search and webhook verification?
-10. **Hosting split:** After the feasibility spikes, compare all-Cloudflare (including Containers), Cloudflare app + external XMTP Gateway, and Vercel app + external Gateway.
+1. **P1 recipient discovery:** When handle/name search is promoted, should it use official Farcaster infrastructure, Neynar, or another verified directory source?
+2. **Deep-link behavior:** Which future intent schema should open a specific conversation rather than the default allowed inbox?
+3. **Message requests:** Keep request accept/decline as post-core P1, or explicitly promote it after real-user inbox testing?
+4. **Notifications:** Should add/notification permission be the next milestone after messaging, or wait for a proven closed-app XMTP observer?
+5. **Brand separation:** How closely should the final icon/name relate to `converge.cv` while remaining recognizable as a distinct Mini App?
+6. **Public standalone mode:** After development fallback is stable, should non-Farcaster visitors be able to connect a wallet and message?
+7. **Directory/backend dependency:** Is a managed Farcaster data provider acceptable if it materially simplifies reliable handle search and webhook verification?
+8. **Gateway hosting split:** After the feasibility spike, compare Cloudflare Containers and an external container host for the XMTP payer Gateway.
 
 ## Cloudflare versus Vercel comparison criteria for later
 

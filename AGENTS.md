@@ -9,7 +9,8 @@ These instructions apply to the entire repository.
 - Build a deliberately small XMTP messaging app that runs as a Farcaster Mini App.
 - Borrow the visual language and interaction quality of the sibling `../converge.cv` project without copying its full feature set or architecture by default.
 - Treat `features.md` as the living product scope, decision log, and delivery tracker.
-- Cloudflare is the preferred initial hosting direction. Keep the architecture portable enough to compare it honestly with Vercel before the hosting choice becomes expensive to reverse.
+- Deploy the SPA and first-party API to Cloudflare Workers at `miniapp.converge.cv`. Keep the XMTP payer Gateway behind a replaceable boundary so Cloudflare Containers and an external container host can be compared independently.
+- Use the Farcaster host-provided EVM wallet as the first-release XMTP identity. Never silently substitute an app-owned private key.
 
 ## Working agreement
 
@@ -49,6 +50,6 @@ These instructions apply to the entire repository.
 
 ## Current boundaries
 
-- Do not implement product code until the initial feature plan is reviewed or the user explicitly asks to proceed.
+- Product implementation is authorized. Keep each coherent task independently verified, committed, and pushed.
 - Do not assume push notifications require the same runtime as the web app; XMTP message observation and Farcaster notification delivery need a separate compatibility review.
 - Do not commit secrets, generated credentials, local databases, dependency directories, build output, or temporary research artifacts.
