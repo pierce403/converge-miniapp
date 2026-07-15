@@ -13,7 +13,7 @@ This runbook covers the Cloudflare-hosted SPA and Worker API at `https://miniapp
 | ENS preferences | `PREFERENCES` D1 binding | Stores only Quick Auth-verified FID, `accepted`/`dismissed`, and update time. Production and preview databases are isolated. |
 | ENS discovery | `ENS_MAINNET_RPC_URLS` Worker variable | Ordered comma-separated public HTTPS Ethereum RPC fallbacks for reverse and forward ENS verification. |
 | Peer Farcaster hints | Optional `FARCASTER_BASE_RPC_URL` Worker secret | Production Base RPC used for a bounded read of the experimental address-to-FID Verifications contract. Without it, ENS/Basename still work and registered-fname hints stay off. |
-| Identity abuse control | `IDENTITY_RATE_LIMITER` binding | Allows ten participant-identity batches per verified FID per minute in each Cloudflare location. |
+| Identity abuse control | `IDENTITY_RATE_LIMITER` binding | Separately limits participant-identity batches and ENS recipient resolutions per verified FID in each Cloudflare location. |
 | Farcaster identity | Quick Auth JWKS + official primary-address API | Verifies the exact-domain FID and resolves its public primary Ethereum address. |
 | XMTP environment | `VITE_XMTP_ENV` at build time | `dev` for preview/local; legacy `production` for the current canonical build; decentralized `mainnet` remains gated. |
 | XMTP Gateway | `VITE_XMTP_GATEWAY_HOST` at build time | Required for `mainnet` and decentralized testnets. Public hostname only; never put a credential in a `VITE_` variable. |
@@ -93,6 +93,7 @@ The protected routes are exact-host and no-store:
 | Route | Success | Failure boundary |
 | --- | --- | --- |
 | `GET /api/me/ens` | `200` with `ens`, `preference`, and explicit `available`, `none`, or `unavailable` status | `401` invalid/missing token; `404` wrong host; `503` missing binding or unexpected backend failure. |
+| `POST /api/resolve` | `200` with `status: resolved` plus the normalized name/checksummed address, or `status: none` with no candidate | `400` malformed, oversized, dotless, or invalid ENS input; `401` invalid/missing token; `404` wrong production host; `405` wrong method; `429` verified-FID rate limit; `503` resolver configuration, provider, binding, or deadline failure. |
 | `POST /api/identities` | `200` with stateless registered-fname, ENS, and Basename display metadata plus a partial-result flag for up to 12 valid Ethereum addresses | `400` malformed/oversized JSON; `401` invalid/missing token; `404` wrong production host; `429` verified-FID rate limit; `503` total resolver outage/deadline or missing required configuration. |
 | `PUT /api/me/ens-preference` | `204` for JSON `{"choice":"accepted"}` or `{"choice":"dismissed"}` | `400` malformed/unsupported body; auth/binding failures as above. |
 | `DELETE /api/me` | `204` after deleting the verified FID's preference | Auth/binding failures as above. |
@@ -100,6 +101,8 @@ The protected routes are exact-host and no-store:
 Quick Auth verification checks Farcaster's issuer, signature, expiry, exact audience, and a positive integer FID subject. Production accepts only the canonical domain; non-production verifies the actual rendered host so localhost and a separately deployed preview can be exercised without weakening production. The Worker ignores any client-supplied FID. It then fetches the official Farcaster primary Ethereum address and requires mainnet ENS reverse and forward resolution to agree. `ENS_MAINNET_RPC_URLS` is public replaceable configuration, not a secret; keep multiple reviewed HTTPS providers so one RPC failure can fail over, and treat total lookup failure as a nonblocking identity-feature outage.
 
 The participant route stream-limits its JSON body to 16 KiB, checksum-normalizes and deduplicates addresses, bounds each request at 12, and rate-limits the verified FID. Ethereum mainnet's Universal Resolver supplies default ENS and ENSIP-19 Basename primary names. When configured, `FARCASTER_BASE_RPC_URL` supplies a batched read of the experimental Verifications contract; positive FIDs become explicitly secondary registered-fname hints through the official FName Registry. The browser sends larger inboxes as separate bounded batches, keeps positive metadata for at most ten minutes and complete negative results for two minutes, and retries partial outages after one minute. Partial resolver success remains usable; a total outage or ten-second route deadline returns `503` so absence is not cached as fact. Neither the Worker nor D1 persists this metadata.
+
+The recipient route accepts only a 2 KiB JSON `POST` body containing one `query` string, trims and ENSIP-15-normalizes a dot-separated name, and rejects names longer than 255 UTF-8 bytes. It forward-resolves the default Ethereum address on mainnet through up to three configured HTTPS RPC fallbacks and the ENS CCIP gateway, checksums a positive address, and has a ten-second endpoint deadline. A valid name with no address is a successful `none` result; provider and timeout failures are `503`, never negative evidence. The verified-FID rate-limit namespace is separate from participant-label batches. The raw query stays out of URLs, D1, application logs, and analytics.
 
 Use a reviewed, quota-enforced production Base endpoint; do not commit its keyed URL or use Base's rate-limited public endpoint for production. Configure it independently for preview and production:
 
@@ -153,7 +156,7 @@ Static responses receive a CSP, one-year HSTS, `nosniff`, no-referrer, and a res
 
 Worker JSON responses add the applicable transport/browser headers directly because `_headers` does not apply to Worker-generated responses. Identity responses are `Cache-Control: no-store`; protected routes accept only their documented methods and fail closed on the wrong host, missing/invalid Quick Auth, and absent bindings. Resolver/directory failure returns no candidate with an explicit unavailable state. Hashed Vite assets are immutable for one year; HTML uses Cloudflare's revalidation defaults.
 
-Cloudflare Worker observability samples 10 percent of requests. Application code does not log wallet addresses, FIDs, signatures, message text, drafts, inbox IDs, conversation IDs, or tokens. `/api/health` returns only service, environment, app version, and Cloudflare version metadata.
+Cloudflare Worker observability samples 10 percent of requests. Application code does not log raw ENS recipient queries, wallet addresses, FIDs, signatures, message text, drafts, inbox IDs, conversation IDs, or tokens. `/api/health` returns only service, environment, app version, and Cloudflare version metadata.
 
 ## XMTP payer Gateway blocker
 

@@ -3,7 +3,7 @@ import {
   PanelsTopLeft,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '../../components/Button'
 import { StatePanel } from '../../components/StatePanel'
@@ -14,6 +14,7 @@ import {
   type EnsPreference,
 } from '../identity/useEnsIdentity'
 import { useParticipantIdentities } from '../identity/useParticipantIdentities'
+import { useRecipientResolution } from '../identity/useRecipientResolution'
 import { ConversationScreen } from './ConversationScreen'
 import { InboxScreen } from './InboxScreen'
 import { NewDmScreen } from './NewDmScreen'
@@ -84,6 +85,7 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
     storageWarningWasDismissed,
   )
   const messaging = useXmtpMessaging({ autoConnect: canUseWallet })
+  const recipientResolution = useRecipientResolution()
   const ensIdentity = useEnsIdentity({
     enabled: messaging.connection.phase === 'ready' && messaging.address !== null,
     fid: user.fid,
@@ -97,10 +99,16 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
     addresses: participantAddresses,
     enabled: messaging.connection.phase === 'ready',
   })
+  const messagingBackToInbox = messaging.backToInbox
+  const resetRecipientResolution = recipientResolution.reset
+  const backToInbox = useCallback(() => {
+    resetRecipientResolution()
+    messagingBackToInbox()
+  }, [messagingBackToInbox, resetRecipientResolution])
   useMiniAppBack(
     canUseBack,
     messaging.connection.phase === 'ready' && messaging.view !== 'inbox',
-    messaging.backToInbox,
+    backToInbox,
   )
 
   if (messaging.connection.phase === 'idle') {
@@ -309,7 +317,10 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
           ensIdentity={ensIdentity}
           environment={`${messaging.environment} · ${messaging.walletKind ?? 'wallet'}`}
           onClearEnsPreference={() => void clearEnsPreference()}
-          onNewDm={() => messaging.setView('new-dm')}
+          onNewDm={() => {
+            resetRecipientResolution()
+            messaging.setView('new-dm')
+          }}
           onOpen={messaging.openConversation}
           onRefresh={messaging.refresh}
           onRefreshEns={ensIdentity.refresh}
@@ -325,8 +336,13 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
       {messaging.view === 'new-dm' ? (
         <NewDmScreen
           ownAddress={messaging.address}
-          onBack={messaging.backToInbox}
+          onBack={backToInbox}
+          onCheckReachability={messaging.canMessageAddress}
           onCreate={messaging.createDm}
+          onInspectIdentity={messaging.inspectIdentityRelationship}
+          onResetResolution={recipientResolution.reset}
+          onResolveEns={recipientResolution.resolve}
+          resolutionError={recipientResolution.error}
         />
       ) : null}
 

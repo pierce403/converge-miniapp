@@ -180,7 +180,7 @@ export function InboxScreen({
         <div className="empty-inbox">
           <span className="empty-inbox__icon"><MessageCircleMore aria-hidden="true" /></span>
           <h2>No allowed conversations yet</h2>
-          <p>Start with an Ethereum address that already has an XMTP inbox.</p>
+          <p>Start with an Ethereum address or ENS name that reaches an XMTP inbox.</p>
           <Button onClick={onNewDm}>
             <Plus aria-hidden="true" />
             Start a private message

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   ens: vi.fn(),
   messaging: vi.fn(),
   participants: vi.fn(),
+  recipientResolution: vi.fn(),
 }))
 
 vi.mock('./useXmtpMessaging', () => ({
@@ -28,6 +29,10 @@ vi.mock('../identity/useParticipantIdentities', () => ({
   }),
 }))
 
+vi.mock('../identity/useRecipientResolution', () => ({
+  useRecipientResolution: mocks.recipientResolution,
+}))
+
 vi.mock('../../app/useMiniAppBack', () => ({
   useMiniAppBack: vi.fn(),
 }))
@@ -40,6 +45,7 @@ describe('MessagingApp storage and installation states', () => {
     window.localStorage.clear()
     mocks.messaging.mockReturnValue(readyMessaging())
     mocks.ens.mockReturnValue(readyEns())
+    mocks.recipientResolution.mockReturnValue(readyRecipientResolution())
     mocks.participants.mockReturnValue({
       identityFor: vi.fn().mockReturnValue(null),
       refresh: vi.fn(),
@@ -214,6 +220,85 @@ describe('MessagingApp storage and installation states', () => {
     expect(screen.getByText(/separate XMTP inbox/i)).toBeInTheDocument()
     expect(screen.getByText(/cannot be merged/i)).toBeInTheDocument()
   })
+
+  it('wires ENS recipient resolution through reachability before opening a DM', async () => {
+    const target = '0xde709f2102306220921060314715629080e2fb77'
+    const resolve = vi.fn().mockResolvedValue({
+      address: target,
+      name: 'deanpierce.eth',
+    })
+    const inspectIdentityRelationship = vi.fn().mockResolvedValue('different-inbox')
+    const canMessageAddress = vi.fn().mockResolvedValue(true)
+    const createDm = vi.fn().mockResolvedValue(undefined)
+    mocks.recipientResolution.mockReturnValue({
+      ...readyRecipientResolution(),
+      resolve,
+    })
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      canMessageAddress,
+      createDm,
+      inspectIdentityRelationship,
+      view: 'new-dm',
+    })
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+    fireEvent.change(screen.getByLabelText('Ethereum address or ENS name'), {
+      target: { value: 'DeanPierce.ETH' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Check recipient' }))
+
+    expect(await screen.findByText('deanpierce.eth')).toBeVisible()
+    expect(resolve).toHaveBeenCalledWith('DeanPierce.ETH')
+    expect(inspectIdentityRelationship).toHaveBeenCalledWith(target)
+    expect(canMessageAddress).toHaveBeenCalledWith(target)
+    expect(createDm).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open DM' }))
+    expect(createDm).toHaveBeenCalledWith(target)
+  })
+
+  it('clears recipient-resolution state when entering and leaving New Message', () => {
+    const reset = vi.fn()
+    const setView = vi.fn()
+    const backToInbox = vi.fn()
+    mocks.recipientResolution.mockReturnValue({
+      ...readyRecipientResolution(),
+      error: 'An old ENS error',
+      reset,
+    })
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      backToInbox,
+      setView,
+    })
+
+    const inbox = render(
+      <MessagingApp canUseBack={false} canUseWallet user={user} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'New DM' }))
+    expect(reset).toHaveBeenCalledOnce()
+    expect(setView).toHaveBeenCalledWith('new-dm')
+    expect(reset.mock.invocationCallOrder[0]).toBeLessThan(
+      setView.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    )
+
+    inbox.unmount()
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      backToInbox,
+      view: 'new-dm',
+    })
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+    expect(screen.getByRole('alert')).toHaveTextContent('An old ENS error')
+    fireEvent.click(screen.getByRole('button', { name: 'Back to inbox' }))
+
+    expect(reset).toHaveBeenCalledTimes(2)
+    expect(backToInbox).toHaveBeenCalledOnce()
+    expect(reset.mock.invocationCallOrder[1]).toBeLessThan(
+      backToInbox.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    )
+  })
 })
 
 function readyMessaging() {
@@ -229,6 +314,7 @@ function readyMessaging() {
     environment: 'dev',
     hasOlderMessages: false,
     inspectIdentityRelationship: vi.fn(),
+    canMessageAddress: vi.fn(),
     loadOlderMessages: vi.fn(),
     loadingConversation: false,
     loadingOlder: false,
@@ -247,6 +333,18 @@ function readyMessaging() {
     streamHealth: 'live',
     view: 'inbox',
     walletKind: 'EOA',
+  }
+}
+
+function readyRecipientResolution() {
+  return {
+    error: null,
+    errorCode: null,
+    query: null,
+    reset: vi.fn(),
+    resolve: vi.fn(),
+    result: null,
+    status: 'idle',
   }
 }
 

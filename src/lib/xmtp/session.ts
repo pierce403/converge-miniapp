@@ -287,8 +287,7 @@ export class XmtpMessagingSession {
 
   async createDm(address: `0x${string}`): Promise<ActiveConversation> {
     const identifier = ethereumIdentifier(address)
-    const reachability = await this.client.canMessage([identifier])
-    if (!reachability.get(address.toLowerCase())) {
+    if (!(await this.canMessageAddress(address))) {
       throw new Error('That address does not have a reachable XMTP inbox yet.')
     }
 
@@ -302,6 +301,13 @@ export class XmtpMessagingSession {
       peerAddress: address,
       peerInboxId: await conversation.peerInboxId(),
     }
+  }
+
+  async canMessageAddress(address: `0x${string}`): Promise<boolean> {
+    const reachability = await this.client.canMessage([
+      ethereumIdentifier(address),
+    ])
+    return reachability.get(address.toLowerCase()) === true
   }
 
   async sendText(

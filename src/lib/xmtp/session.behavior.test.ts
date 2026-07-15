@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  ConsentState,
   DeliveryStatus,
   Dm,
   GroupMessageKind,
@@ -129,14 +130,18 @@ function dm(methods: Record<string, unknown> = {}) {
     publishMessages: vi.fn(),
     sendText: vi.fn(),
     sync: vi.fn(),
+    updateConsentState: vi.fn(),
     ...methods,
   })
 }
 
 function client(conversation: Dm) {
   return {
+    canMessage: vi.fn(),
     close: vi.fn(),
     conversations: {
+      createDmWithIdentifier: vi.fn().mockResolvedValue(conversation),
+      fetchDmByIdentifier: vi.fn().mockResolvedValue(null),
       getConversationById: vi.fn().mockResolvedValue(conversation),
       getMessageById: vi.fn(),
       listDms: vi.fn().mockResolvedValue([]),
@@ -502,6 +507,29 @@ describe('XmtpMessagingSession behavior', () => {
     await expect(session.inspectIdentityRelationship(candidate)).resolves.toBe('same-inbox')
     await expect(session.inspectIdentityRelationship(candidate)).resolves.toBe('different-inbox')
     await expect(session.inspectIdentityRelationship(candidate)).resolves.toBe('no-inbox')
+  })
+
+  it('checks recipient reachability without creating a DM and rechecks on creation', async () => {
+    const conversation = dm()
+    const fakeClient = client(conversation)
+    const candidate = '0x1111111111111111111111111111111111111111'
+    fakeClient.canMessage.mockResolvedValue(new Map([
+      [candidate.toLowerCase(), true],
+    ]))
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    await expect(session.canMessageAddress(candidate)).resolves.toBe(true)
+    expect(fakeClient.conversations.fetchDmByIdentifier).not.toHaveBeenCalled()
+
+    await expect(session.createDm(candidate)).resolves.toEqual({
+      id: 'conversation-1',
+      peerAddress: candidate,
+      peerInboxId: 'peer-inbox',
+    })
+    expect(fakeClient.canMessage).toHaveBeenCalledTimes(2)
+    expect(fakeClient.conversations.createDmWithIdentifier).toHaveBeenCalledOnce()
+    expect(conversation.updateConsentState).toHaveBeenCalledWith(ConsentState.Allowed)
   })
 
   it('reads the cached inbox before synchronizing and rereads afterward', async () => {

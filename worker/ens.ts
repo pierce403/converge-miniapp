@@ -8,6 +8,9 @@ import {
 import { mainnet } from 'viem/chains'
 import { normalize } from 'viem/ens'
 
+const ENS_GATEWAY_URLS = ['https://ccip-v3.ens.xyz']
+const ENS_NAME_LIMIT_BYTES = 255
+
 export type EnsCandidate = {
   address: `0x${string}`
   name: string
@@ -18,6 +21,10 @@ export type EnsDiscovery = {
   status: 'available' | 'none' | 'unavailable'
 }
 
+export type EnsForwardResolution =
+  | { ens: EnsCandidate; status: 'resolved' }
+  | { ens: null; status: 'invalid' | 'none' | 'unavailable' }
+
 type EnsResolver = {
   getEnsAddress: (name: string) => Promise<`0x${string}` | null>
   getEnsName: (address: `0x${string}`) => Promise<string | null>
@@ -26,6 +33,54 @@ type EnsResolver = {
 type DiscoverEnsOptions = {
   fetcher?: typeof fetch
   resolver?: EnsResolver
+}
+
+type ResolveEnsOptions = {
+  resolver?: Pick<EnsResolver, 'getEnsAddress'>
+}
+
+export function normalizeEnsQuery(query: string): string | null {
+  const trimmed = query.trim()
+  if (
+    !trimmed.includes('.') ||
+    trimmed.startsWith('.') ||
+    trimmed.endsWith('.') ||
+    new TextEncoder().encode(trimmed).byteLength > ENS_NAME_LIMIT_BYTES
+  ) return null
+
+  try {
+    const name = normalize(trimmed)
+    if (
+      !name.includes('.') ||
+      name.startsWith('.') ||
+      name.endsWith('.') ||
+      new TextEncoder().encode(name).byteLength > ENS_NAME_LIMIT_BYTES
+    ) return null
+    return name
+  } catch {
+    return null
+  }
+}
+
+export async function resolveEnsName(
+  query: string,
+  rpcUrls: string,
+  options: ResolveEnsOptions = {},
+): Promise<EnsForwardResolution> {
+  const name = normalizeEnsQuery(query)
+  if (!name) return { ens: null, status: 'invalid' }
+
+  try {
+    const resolver = options.resolver ?? createEnsResolver(rpcUrls)
+    const address = await resolver.getEnsAddress(name)
+    if (!address) return { ens: null, status: 'none' }
+    return {
+      ens: { address: getAddress(address), name },
+      status: 'resolved',
+    }
+  } catch {
+    return { ens: null, status: 'unavailable' }
+  }
 }
 
 export async function discoverEnsIdentity(
@@ -110,7 +165,10 @@ function createEnsResolver(configuredUrls: string): EnsResolver {
   const transport = transports.length === 1 ? transports[0]! : fallback(transports)
   const client = createPublicClient({ chain: mainnet, transport })
   return {
-    getEnsAddress: (name) => client.getEnsAddress({ name }),
+    getEnsAddress: (name) => client.getEnsAddress({
+      gatewayUrls: ENS_GATEWAY_URLS,
+      name,
+    }),
     getEnsName: (address) => client.getEnsName({ address }),
   }
 }

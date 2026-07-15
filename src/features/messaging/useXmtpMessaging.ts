@@ -591,7 +591,37 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
   ): Promise<XmtpIdentityRelationship> => {
     const session = sessionRef.current
     if (!session) throw new Error('Open the XMTP inbox before checking another identity.')
-    return session.inspectIdentityRelationship(candidateAddress)
+    try {
+      return await session.inspectIdentityRelationship(candidateAddress)
+    } catch (error) {
+      throw new Error(
+        readableMessagingError(
+          error,
+          'XMTP could not verify how that address relates to your inbox.',
+          'sync',
+        ),
+        { cause: error },
+      )
+    }
+  }, [])
+
+  const canMessageAddress = useCallback(async (
+    candidateAddress: `0x${string}`,
+  ): Promise<boolean> => {
+    const session = sessionRef.current
+    if (!session) throw new Error('Open the XMTP inbox before checking a recipient.')
+    try {
+      return await session.canMessageAddress(candidateAddress)
+    } catch (error) {
+      throw new Error(
+        readableMessagingError(
+          error,
+          'XMTP could not check that recipient right now.',
+          'sync',
+        ),
+        { cause: error },
+      )
+    }
   }, [])
 
   const openConversation = useCallback(async (
@@ -1004,6 +1034,7 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
     activeConversation,
     address,
     backToInbox,
+    canMessageAddress,
     connect,
     connection,
     conversations,

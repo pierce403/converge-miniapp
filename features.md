@@ -52,14 +52,14 @@ When this document says **first release**, **MVP**, or **P0**, it means exactly 
 - Host-provided EVM wallet connection and a proven XMTP EOA or supported smart-wallet signer; never silently substitute an app-owned key.
 - Stable local XMTP installation resume with single-connection protection.
 - Allowed direct-message conversation list with sync, cached/loading/empty/error states, and live updates.
-- Address-first new DM flow gated by XMTP reachability.
+- Address-or-ENS new DM flow with explicit resolution confirmation and XMTP reachability.
 - Text compose/send plus compatible history rendering for text, Markdown source as plain text, replies, attachment metadata, reaction summaries, deduplication, failure, and retry.
 - Compact Converge-derived blue/orange visual system with mobile, keyboard, safe-area, and accessibility basics.
 - Production deployment at `https://miniapp.converge.cv` using Cloudflare Workers Static Assets plus a small Worker API.
 - A post-inbox, Quick Auth-protected ENS primary-name offer that remembers the Farcaster account's accepted/dismissed choice without changing XMTP keys or message history.
 - A production XMTP Gateway/payer solution as required by the current official design; this remains blocked until the pinned Browser SDK path is proven.
 
-Quick Auth also protects a stateless public-identity lookup that upgrades known XMTP peer addresses to display-only fname, ENS, and Basename labels. D1 remains exclusive to the named ENS preference flow. The following are **not required for the first release**: general Farcaster handle/name recipient search, persisted identity links, message-request management, Mini App notification permissions, incoming-message notifications, an expanded settings sheet, or a share action beyond the required root embed. Their detailed requirements remain in this plan so adding them later does not blur the security boundary.
+Quick Auth also protects stateless recipient ENS forward resolution and a public-identity lookup that upgrades known XMTP peer addresses to display-only fname, ENS, and Basename labels. D1 remains exclusive to the named ENS preference flow. The following are **not required for the first release**: general Farcaster handle/name recipient search, persisted identity links, message-request management, Mini App notification permissions, incoming-message notifications, an expanded settings sheet, or a share action beyond the required root embed. Their detailed requirements remain in this plan so adding them later does not blur the security boundary.
 
 ## Decisions already captured
 
@@ -73,7 +73,7 @@ Quick Auth also protects a stateless public-identity lookup that upgrades known 
 | Revisit Cloudflare versus Vercel after real operating evidence | Later | Vercel remains a documented fallback/comparison, not a blocker for implementation. |
 | Use `miniapp.converge.cv` as the stable Mini App identity | Committed | Farcaster binds manifest ownership, embeds, notifications, browser persistence, and discovery to this exact hostname. |
 | Use “Converge Mini” as the working public name | Committed | The name can be revisited before broad discovery without changing the canonical hostname. |
-| Keep P0 recipient entry address-first | Committed | ENS/Farcaster handle resolution remains P1 and must not block interoperable direct messaging. |
+| Accept addresses and ENS names for P0 recipient entry | Committed | A typed dot-separated ENS name is normalized and forward-resolved, then the user confirms the visible name/address pair after XMTP reachability succeeds. Farcaster handle search remains P1. |
 | Open XMTP immediately with Farcaster's preferred host account | Committed | No app-level wallet, key, or inbox chooser is shown before the host/XMTP approvals needed to open that account. |
 | Treat a verified ENS name as a safe label, not a migration | Committed | Offer it automatically only when the Farcaster primary address is the active XMTP address or already belongs to the active inbox. Acceptance changes presentation only. |
 | Never merge or silently relink separate XMTP inboxes | Committed | A different ENS-address inbox gets an explanation in the identity menu; no account, recovery identity, key, or history is moved. |
@@ -247,10 +247,11 @@ Success condition: setup requires no product decision, never substitutes an app-
 ### Journey D: start a direct message
 
 1. User taps **New message**.
-2. For P0, the user enters an Ethereum address; P1 can add Farcaster handle/name search.
-3. The app normalizes the address and checks XMTP reachability with `canMessage()` before allowing creation.
-4. The result clearly shows the shortened wallet identity and reachable/unreachable state.
-5. User confirms a reachable identity and enters a new DM.
+2. The user enters a full Ethereum address or any dot-separated ENS name; P1 can add Farcaster handle search.
+3. The app checksums an address directly or ENSIP-15-normalizes and forward-resolves the ENS name without requiring a reverse record.
+4. The app rejects any address already associated with the sender's current inbox, then checks XMTP reachability with `canMessage()`.
+5. The result clearly shows the normalized ENS name when present, the full checksummed address, and reachable/unreachable state.
+6. User separately confirms the frozen reachable address and enters the DM. Editing the query invalidates the prior result.
 
 Success condition: no conversation is created against an unresolved or unreachable identity.
 
@@ -299,7 +300,7 @@ Success condition: the optional flow never moves a key, recovery identity, inbox
 | Identity | Compact identity/privacy menu | P0 | Implemented locally | Active wallet, network, local-storage disclosure, ENS recheck, label selection/deletion, and non-migration explanations remain available after onboarding. |
 | Inbox | Allowed DM conversation list | P0 | Implemented locally | Allowed-only cached-first sync/list/stream UI exists; dev-network and offline host acceptance remain. |
 | Inbox | Separate message requests | P1 | Later | Unknown contacts stay excluded from the P0 allowed list; later accept/decline updates consent. |
-| Compose | Address-first recipient reachability | P0 | Implemented locally | Normalized Ethereum address is checked with `canMessage()` before DM creation. |
+| Compose | Address-or-ENS recipient reachability | P0 | Implemented locally | Addresses are checksummed directly; bounded ENS names are normalized and forward-resolved through the protected Worker before the full name/address pair is confirmed and checked with `canMessage()`. Canonical-host and two-client network proof remain. |
 | Compose | Farcaster handle/name recipient search | P1 | Later | Trusted directory lookup maps profile to verified candidate identity before `canMessage()`. |
 | Chat | Compatible message history | P0 | Implemented locally | Cached-first text and plain-text Markdown source, replies, attachment metadata, reaction summaries, a growing contiguous newest-message window, exact-nanosecond ordering, ownership, fallback, and loading exist. Silent control messages remain off the timeline. |
 | Chat | Live incoming text messages | P0 | Implemented locally | Allowed-DM stream, stable-ID upsert, one retained SDK-owned retry proxy, foreground visible-chat refresh, and health UI exist; real reconnect proof remains. |
@@ -476,16 +477,21 @@ Requirements:
 
 #### Search and resolution
 
-The first release is deliberately address-first. Farcaster-first handle/name search is a P1 enhancement whose directory source is still an open decision.
+The first release accepts an exact Ethereum address or ENS name. Farcaster handle search is a separate P1 enhancement whose directory source is still an open decision.
 
 P0 requirements:
 
 - Accept and normalize a full Ethereum address.
-- Check `Client.canMessage()` before enabling the conversation action.
+- Treat any bounded dot-separated string as a potential ENS name, normalize it with ENSIP-15, and forward-resolve its default Ethereum address on mainnet. Do not require a reverse record for a name the user entered directly.
+- Send ENS queries only on explicit form submission to a Quick Auth-protected, rate-limited, no-store `POST` endpoint. Never put the raw query in a URL, persistence, application logs, or analytics.
+- Preserve direct-address messaging when Quick Auth or ENS resolution is unavailable.
+- Check the resolved address against the active XMTP inbox and reject both the active signer and another identity already associated with that same inbox.
+- Check `Client.canMessage()` before enabling the conversation action, and recheck the same frozen address when opening the DM.
 - Explain “not on XMTP yet” separately from network failure or invalid input.
-- Prevent starting a DM with the current identity.
+- Show the normalized ENS name, when present, together with the full checksummed address and reachable/unreachable result; never let a human-readable name hide the destination address.
+- Require a separate confirmation after resolution. Editing the query clears the result, and confirmation never silently re-resolves to a different address.
 - Deduplicate an existing DM and open it rather than creating a confusing duplicate.
-- Do not require ENS resolution to start a DM in the first release; the optional own-inbox label flow is separate from recipient resolution.
+- Keep recipient forward resolution separate from the optional own-inbox reverse-plus-forward label flow; resolving a recipient never mutates the active XMTP identity.
 
 P1 Farcaster search requirements:
 
@@ -771,7 +777,7 @@ This is the implementation target. Protocol surfaces that still require live-hos
 | `GET /api/me/ens` | Quick Auth | Discover the verified FID's forward-verified ENS primary-name candidate and return its saved preference. | Implemented locally |
 | `PUT /api/me/ens-preference` | Quick Auth | Idempotently save `accepted` or `dismissed` for the verified FID. | Implemented locally |
 | `DELETE /api/me` | Quick Auth | Delete the verified FID's saved ENS preference. | Implemented locally with menu control |
-| `POST /api/resolve` | Quick Auth + rate limit | Resolve a bounded Farcaster search body to candidate verified identities without putting raw queries in URLs/history/referrers. | P1 |
+| `POST /api/resolve` | Quick Auth + rate limit | ENSIP-15-normalize and forward-resolve one bounded dot-separated recipient name without putting the raw query in URLs/history/referrers or persistence. | Implemented locally |
 | `POST /api/identity/link` | Quick Auth + proof | Store a verified FID/wallet/inbox mapping after a separately specified proof protocol. | P1 spike; do not implement yet |
 | `POST /api/farcaster/webhook` | Signed event verification | Apply add/remove/notification token lifecycle. | P1 |
 | `POST /api/xmtp-push-subscriptions` | Quick Auth + identity proof | Register/rotate encrypted XMTP topic/HMAC filtering material only after Browser SDK feasibility is proven. | P1 spike; blocked |
@@ -951,7 +957,7 @@ Concrete bundle and latency budgets should be set after measuring the current XM
 - message text, draft text, or unsupported-content payloads;
 - private keys or signatures;
 - Quick Auth JWTs or notification tokens;
-- raw search queries;
+- persisted or logged raw recipient search queries;
 - full wallet addresses/inbox IDs in ordinary analytics;
 - conversation membership graphs; or
 - local database contents.
@@ -1072,7 +1078,7 @@ Recorded decisions:
 
 - use the host-wallet-backed XMTP identity;
 - use “Converge Mini” as the working name and `https://miniapp.converge.cv` as the canonical origin;
-- use address-first compose for P0 while handle search remains P1; and
+- originally use address-first compose for P0 while handle search remains P1; recipient ENS forward resolution was promoted separately on 2026-07-15 without promoting Farcaster handle search; and
 - deploy the SPA and first-party API on Cloudflare Workers, while keeping the evolving XMTP payer Gateway behind a replaceable boundary.
 
 Exit criteria:
@@ -1273,7 +1279,7 @@ Exit criteria:
 - foreground/resume sync and live receive pass without duplicate rows; and
 - identity switching never displays another identity's cached content.
 
-### Task 6: address-first compose and text send — implemented locally, network proof pending
+### Task 6: address-or-ENS compose and text send — implemented locally, network proof pending
 
 Implemented on 2026-07-14:
 
@@ -1282,11 +1288,20 @@ Implemented on 2026-07-14:
 - persisted optimistic send, stable message-ID upsert, batch-publication acknowledgement handling, and per-ID retry guards; and
 - honest recovery semantics: `Unpublished` drafts reload as retryable with the same ID, while Browser SDK 7 `Failed` records are terminal because the high-level wrapper does not expose targeted `publishStoredMessage(id)`.
 
+Extended locally on 2026-07-15:
+
+- the New Message field accepts a full Ethereum address or any valid dot-separated ENS name, while direct addresses continue without Quick Auth or a resolver dependency;
+- explicit ENS submission uses a bounded, exact-host Quick Auth-protected, separately rate-limited, no-store Worker route that ENSIP-15-normalizes and mainnet forward-resolves through configured HTTPS fallbacks without persistence or application logging;
+- the confirmation state shows the normalized name and full checksummed address together, rejects every identity already associated with the sender's current inbox, and distinguishes invalid, unresolved, rate-limited, unavailable, and XMTP-unreachable outcomes;
+- conversation creation is a separate action against the frozen checked address, rechecks XMTP reachability, invalidates the result on edits, and guards duplicate resolution/open requests; and
+- stale resolver responses are cancelled or ignored, while provider failure never becomes a cached negative result.
+
 Two-client dev-network exchange, acknowledgement-loss, offline retry, reachability-network-error, and 100-message deduplication evidence remain.
 
 Deliverables:
 
-- normalized Ethereum address input;
+- normalized Ethereum address and ENS input;
+- protected stateless ENS forward resolution;
 - XMTP `canMessage()` gate;
 - existing-DM deduplication;
 - text composer; and
@@ -1295,7 +1310,7 @@ Deliverables:
 Exit criteria:
 
 - two independent test identities exchange a 100-message automated sequence on XMTP dev/test with each message rendered exactly once;
-- reachable, unreachable, self, invalid-address, and network-error states are distinct; and
+- reachable, unreachable, same-inbox, unresolved ENS, invalid-input, rate-limit, resolver, and XMTP network-error states are distinct; and
 - duplicate tap, offline retry, and acknowledgement-loss suites produce zero duplicate messages while reusing the same persisted local message identity.
 
 ### Task 7: production publishing and Gateway proof
@@ -1330,7 +1345,7 @@ Exit criteria:
 
 ### Task 8: trusted Farcaster directory search (optional P1)
 
-Reusable substrate implemented locally for the Task 4 ENS preference flow: exact-domain Quick Auth verification and a bounded official Farcaster primary-address lookup. General handle/name search, caching, rate limits, and recipient selection remain optional P1 work and must not reuse the ENS label flow as an unproven messaging destination.
+Reusable substrate implemented locally for the Task 4 ENS preference flow: exact-domain Quick Auth verification and a bounded official Farcaster primary-address lookup. Recipient ENS forward resolution is now a separate implemented P0 route; general Farcaster handle search, directory caching, and multi-candidate selection remain optional P1 work and must not reuse the own-inbox ENS label flow as an unproven messaging destination.
 
 Deliverables:
 

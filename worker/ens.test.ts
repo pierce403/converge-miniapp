@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest'
 
-import { discoverEnsIdentity } from './ens.js'
+import {
+  discoverEnsIdentity,
+  normalizeEnsQuery,
+  resolveEnsName,
+} from './ens.js'
 
 const fid = 8531
 const address = '0x7ab874Eeef0169ADA0d225E9801A3FfFfa26aAC3' as const
@@ -62,5 +66,57 @@ describe('Farcaster primary-address ENS discovery', () => {
     await expect(discoverEnsIdentity(fid, 'https://rpc.example', {
       fetcher: vi.fn().mockResolvedValue(primaryAddressResponse('invalid-address')),
     })).resolves.toEqual({ candidate: null, status: 'unavailable' })
+  })
+})
+
+describe('recipient ENS forward resolution', () => {
+  it('ENSIP-15 normalizes a bounded dot-separated query', () => {
+    expect(normalizeEnsQuery('  DEANPIERCE.eth  ')).toBe('deanpierce.eth')
+    expect(normalizeEnsQuery('subdomain.example.eth')).toBe(
+      'subdomain.example.eth',
+    )
+    expect(normalizeEnsQuery('eth')).toBeNull()
+    expect(normalizeEnsQuery('.deanpierce.eth')).toBeNull()
+    expect(normalizeEnsQuery('deanpierce.eth.')).toBeNull()
+    expect(normalizeEnsQuery('invalid name.eth')).toBeNull()
+    expect(normalizeEnsQuery(`${'a'.repeat(252)}.eth`)).toBeNull()
+  })
+
+  it('returns the normalized name and checksummed forward address', async () => {
+    const resolver = {
+      getEnsAddress: vi.fn().mockResolvedValue(address.toLowerCase()),
+    }
+
+    await expect(resolveEnsName(' DEANPIERCE.eth ', 'https://rpc.example', {
+      resolver,
+    })).resolves.toEqual({
+      ens: { address, name: 'deanpierce.eth' },
+      status: 'resolved',
+    })
+    expect(resolver.getEnsAddress).toHaveBeenCalledWith('deanpierce.eth')
+  })
+
+  it('distinguishes no record, invalid input, and resolver failure', async () => {
+    const noRecordResolver = {
+      getEnsAddress: vi.fn().mockResolvedValue(null),
+    }
+    await expect(resolveEnsName('unregistered.eth', 'https://rpc.example', {
+      resolver: noRecordResolver,
+    })).resolves.toEqual({ ens: null, status: 'none' })
+
+    const unusedResolver = { getEnsAddress: vi.fn() }
+    await expect(resolveEnsName('not-an-ens-name', 'https://rpc.example', {
+      resolver: unusedResolver,
+    })).resolves.toEqual({ ens: null, status: 'invalid' })
+    expect(unusedResolver.getEnsAddress).not.toHaveBeenCalled()
+
+    const unavailableResolver = {
+      getEnsAddress: vi.fn().mockRejectedValue(new Error('offline')),
+    }
+    await expect(resolveEnsName('deanpierce.eth', 'https://rpc.example', {
+      resolver: unavailableResolver,
+    })).resolves.toEqual({ ens: null, status: 'unavailable' })
+    await expect(resolveEnsName('deanpierce.eth', 'http://rpc.example'))
+      .resolves.toEqual({ ens: null, status: 'unavailable' })
   })
 })

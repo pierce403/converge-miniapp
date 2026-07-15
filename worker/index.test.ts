@@ -335,6 +335,276 @@ describe('worker API', () => {
     }
   })
 
+  it('forward-resolves an authenticated ENS recipient without D1', async () => {
+    const dependencies = identityDependencies()
+    const limiter = fakeRateLimiter()
+    const response = await handleRequest(
+      recipientRequest('  DEANPIERCE.eth  '),
+      environment({ IDENTITY_RATE_LIMITER: limiter }),
+      dependencies,
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    await expect(response.json()).resolves.toEqual({
+      ens: {
+        address: '0x7ab874Eeef0169ADA0d225E9801A3FfFfa26aAC3',
+        name: 'deanpierce.eth',
+      },
+      status: 'resolved',
+    })
+    expect(dependencies.verifyQuickAuthToken).toHaveBeenCalledWith(
+      'test-token',
+      'miniapp.converge.cv',
+    )
+    expect(limiter.limit).toHaveBeenCalledWith({
+      key: 'production:ens-resolution:fid:8531',
+    })
+    expect(dependencies.resolveEnsName).toHaveBeenCalledWith(
+      'deanpierce.eth',
+      'https://ethereum-rpc.publicnode.com,https://eth.llamarpc.com',
+    )
+  })
+
+  it('returns an explicit no-record result without treating it as an outage', async () => {
+    const dependencies = identityDependencies()
+    dependencies.resolveEnsName.mockResolvedValue({ ens: null, status: 'none' })
+
+    const response = await handleRequest(
+      recipientRequest('unregistered.example.eth'),
+      environment(),
+      dependencies,
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      ens: null,
+      status: 'none',
+    })
+  })
+
+  it('rejects invalid ENS requests before spending rate-limit budget', async () => {
+    const dependencies = identityDependencies()
+    const limiter = fakeRateLimiter()
+    const requests = [
+      authorizedRequest('/api/resolve', {
+        body: JSON.stringify({ query: 'deanpierce.eth' }),
+        headers: { 'content-type': 'text/plain' },
+        method: 'POST',
+      }),
+      authorizedRequest('/api/resolve', {
+        body: '{',
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+      authorizedRequest('/api/resolve', {
+        body: JSON.stringify({ query: 'not-a-dot-separated-name' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+      authorizedRequest('/api/resolve', {
+        body: JSON.stringify({ extra: true, query: 'deanpierce.eth' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+      recipientRequest(`${'a'.repeat(252)}.eth`),
+    ]
+
+    for (const request of requests) {
+      const response = await handleRequest(
+        request,
+        environment({ IDENTITY_RATE_LIMITER: limiter }),
+        dependencies,
+      )
+      expect(response.status).toBe(400)
+      await expect(response.json()).resolves.toEqual({
+        error: 'invalid_request',
+      })
+    }
+    expect(limiter.limit).not.toHaveBeenCalled()
+    expect(dependencies.resolveEnsName).not.toHaveBeenCalled()
+  })
+
+  it('stream-limits the ENS request body when Content-Length is absent', async () => {
+    const dependencies = identityDependencies()
+    const limiter = fakeRateLimiter()
+    const request = authorizedRequest('/api/resolve', {
+      body: JSON.stringify({
+        padding: 'x'.repeat(2_100),
+        query: 'deanpierce.eth',
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    })
+    expect(request.headers.get('content-length')).toBeNull()
+
+    const response = await handleRequest(
+      request,
+      environment({ IDENTITY_RATE_LIMITER: limiter }),
+      dependencies,
+    )
+
+    expect(response.status).toBe(400)
+    expect(limiter.limit).not.toHaveBeenCalled()
+    expect(dependencies.resolveEnsName).not.toHaveBeenCalled()
+  })
+
+  it('requires POST, exact-host Quick Auth, and recipient resolver bindings', async () => {
+    const dependencies = identityDependencies()
+    const method = await handleRequest(
+      authorizedRequest('/api/resolve'),
+      environment(),
+      dependencies,
+    )
+    expect(method.status).toBe(405)
+    expect(method.headers.get('allow')).toBe('POST')
+
+    const unauthorized = await handleRequest(
+      new Request('https://miniapp.converge.cv/api/resolve', {
+        body: JSON.stringify({ query: 'deanpierce.eth' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+      environment(),
+      dependencies,
+    )
+    expect(unauthorized.status).toBe(401)
+
+    const wrongHost = await handleRequest(
+      new Request('https://alternate.example/api/resolve', {
+        body: JSON.stringify({ query: 'deanpierce.eth' }),
+        headers: {
+          authorization: 'Bearer test-token',
+          'content-type': 'application/json',
+        },
+        method: 'POST',
+      }),
+      environment(),
+      dependencies,
+    )
+    expect(wrongHost.status).toBe(404)
+
+    const unconfigured = environment()
+    delete unconfigured.ENS_MAINNET_RPC_URLS
+    const missingProvider = await handleRequest(
+      recipientRequest(),
+      unconfigured,
+      dependencies,
+    )
+    expect(missingProvider.status).toBe(503)
+
+    const withoutLimiter = environment()
+    delete withoutLimiter.IDENTITY_RATE_LIMITER
+    const missingLimiter = await handleRequest(
+      recipientRequest(),
+      withoutLimiter,
+      dependencies,
+    )
+    expect(missingLimiter.status).toBe(503)
+    expect(dependencies.resolveEnsName).not.toHaveBeenCalled()
+  })
+
+  it('rate-limits ENS resolution by verified FID', async () => {
+    const dependencies = identityDependencies()
+    const limiter = fakeRateLimiter(false)
+    const response = await handleRequest(
+      recipientRequest(),
+      environment({ IDENTITY_RATE_LIMITER: limiter }),
+      dependencies,
+    )
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get('retry-after')).toBe('60')
+    await expect(response.json()).resolves.toEqual({ error: 'rate_limited' })
+    expect(dependencies.resolveEnsName).not.toHaveBeenCalled()
+  })
+
+  it('maps invalid resolver evidence and resolver outages to distinct errors', async () => {
+    const dependencies = identityDependencies()
+    dependencies.resolveEnsName.mockResolvedValueOnce({
+      ens: null,
+      status: 'invalid',
+    }).mockResolvedValueOnce({
+      ens: null,
+      status: 'unavailable',
+    })
+
+    const invalid = await handleRequest(
+      recipientRequest(),
+      environment(),
+      dependencies,
+    )
+    expect(invalid.status).toBe(400)
+    await expect(invalid.json()).resolves.toEqual({ error: 'invalid_request' })
+
+    const unavailable = await handleRequest(
+      recipientRequest(),
+      environment(),
+      dependencies,
+    )
+    expect(unavailable.status).toBe(503)
+    await expect(unavailable.json()).resolves.toEqual({
+      error: 'identity_unavailable',
+    })
+  })
+
+  it('ends ENS resolution after the endpoint deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const dependencies = identityDependencies()
+      dependencies.resolveEnsName.mockImplementation(
+        () => new Promise(() => undefined),
+      )
+      const responsePromise = handleRequest(
+        recipientRequest(),
+        environment(),
+        dependencies,
+      )
+      await vi.waitFor(() => {
+        expect(dependencies.resolveEnsName).toHaveBeenCalledOnce()
+      })
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      const response = await responsePromise
+
+      expect(response.status).toBe(503)
+      await expect(response.json()).resolves.toEqual({
+        error: 'identity_unavailable',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('uses the rendered preview host as recipient Quick Auth audience', async () => {
+    const dependencies = identityDependencies()
+    const response = await handleRequest(
+      new Request('https://converge-preview.example.workers.dev/api/resolve', {
+        body: JSON.stringify({ query: 'deanpierce.eth' }),
+        headers: {
+          authorization: 'Bearer test-token',
+          'content-type': 'application/json',
+        },
+        method: 'POST',
+      }),
+      environment({
+        APP_ENV: 'preview',
+        CANONICAL_ORIGIN: 'http://localhost:5173',
+      }),
+      dependencies,
+    )
+
+    expect(response.status).toBe(200)
+    expect(dependencies.verifyQuickAuthToken).toHaveBeenCalledWith(
+      'test-token',
+      'converge-preview.example.workers.dev',
+    )
+    expect(dependencies.resolveEnsName).toHaveBeenCalledWith(
+      'deanpierce.eth',
+      expect.any(String),
+    )
+  })
+
   it('requires exact-domain Quick Auth and configured server storage', async () => {
     const dependencies = identityDependencies()
     dependencies.verifyQuickAuthToken.mockRejectedValue(new Error('bad token'))
@@ -449,6 +719,14 @@ function participantRequest() {
   })
 }
 
+function recipientRequest(query = 'deanpierce.eth') {
+  return authorizedRequest('/api/resolve', {
+    body: JSON.stringify({ query }),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  })
+}
+
 function fakeRateLimiter(success = true): RateLimit {
   return {
     limit: vi.fn().mockResolvedValue({ success }),
@@ -463,6 +741,13 @@ function identityDependencies() {
         name: 'deanpierce.eth',
       },
       status: 'available',
+    }),
+    resolveEnsName: vi.fn().mockResolvedValue({
+      ens: {
+        address: '0x7ab874Eeef0169ADA0d225E9801A3FfFfa26aAC3',
+        name: 'deanpierce.eth',
+      },
+      status: 'resolved',
     }),
     resolveParticipantIdentities: vi.fn().mockResolvedValue({
       identities: [],

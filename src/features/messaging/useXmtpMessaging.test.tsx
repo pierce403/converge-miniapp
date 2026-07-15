@@ -95,6 +95,7 @@ function message(id: string, text: string, sentAt: string): MessageItem {
 function createSession(overrides: Record<string, unknown> = {}) {
   return {
     address,
+    canMessageAddress: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
     createDm: vi.fn(),
     environment: 'dev',
@@ -565,6 +566,35 @@ describe('useXmtpMessaging', () => {
     await expect(result.current.createDm(
       '0x2222222222222222222222222222222222222222',
     )).rejects.toThrow('XMTP could not check that address.')
+  })
+
+  it('checks recipient reachability without creating a conversation', async () => {
+    const canMessageAddress = vi.fn().mockResolvedValue(true)
+    const session = createSession({ canMessageAddress })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    await expect(result.current.canMessageAddress(
+      '0x2222222222222222222222222222222222222222',
+    )).resolves.toBe(true)
+    expect(canMessageAddress).toHaveBeenCalledOnce()
+    expect(session.createDm).not.toHaveBeenCalled()
+  })
+
+  it('redacts raw recipient reachability errors', async () => {
+    const session = createSession({
+      canMessageAddress: vi.fn().mockRejectedValue(
+        new Error('private inbox-id and database path'),
+      ),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    await expect(result.current.canMessageAddress(
+      '0x2222222222222222222222222222222222222222',
+    )).rejects.toThrow('XMTP could not check that recipient right now.')
   })
 
   it('refreshes an open conversation when the app comes back online', async () => {

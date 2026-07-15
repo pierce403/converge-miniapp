@@ -1,6 +1,9 @@
 import {
   discoverEnsIdentity,
+  normalizeEnsQuery,
+  resolveEnsName,
   type EnsDiscovery,
+  type EnsForwardResolution,
 } from './ens.js'
 import {
   resolveParticipantIdentities,
@@ -35,6 +38,8 @@ const bootstrapManifestJsonHeaders = {
 }
 
 const BASE64URL_VALUE = /^[A-Za-z0-9_-]+$/
+const ENS_RESOLUTION_BODY_LIMIT_BYTES = 2_048
+const ENS_RESOLUTION_TIMEOUT_MS = 10_000
 const PARTICIPANT_BODY_LIMIT_BYTES = 16_384
 const PARTICIPANT_RESOLUTION_TIMEOUT_MS = 10_000
 
@@ -54,6 +59,10 @@ export type AppEnv = {
 
 export type WorkerDependencies = {
   discoverEnsIdentity: (fid: number, rpcUrls: string) => Promise<EnsDiscovery>
+  resolveEnsName: (
+    query: string,
+    rpcUrls: string,
+  ) => Promise<EnsForwardResolution>
   resolveParticipantIdentities: (
     addresses: readonly string[],
     rpcUrls?: string,
@@ -64,6 +73,7 @@ export type WorkerDependencies = {
 
 const defaultDependencies: WorkerDependencies = {
   discoverEnsIdentity,
+  resolveEnsName,
   resolveParticipantIdentities,
   verifyQuickAuthToken,
 }
@@ -109,6 +119,10 @@ export async function handleRequest(
     return participantIdentityApi(request, env, dependencies)
   }
 
+  if (url.pathname === '/api/resolve') {
+    return recipientResolutionApi(request, env, dependencies)
+  }
+
   if (url.pathname.startsWith('/api/')) {
     return Response.json(
       {
@@ -119,6 +133,116 @@ export async function handleRequest(
   }
 
   return new Response(null, { status: 404, headers: securityHeaders })
+}
+
+async function recipientResolutionApi(
+  request: Request,
+  env: AppEnv,
+  dependencies: WorkerDependencies,
+): Promise<Response> {
+  const url = new URL(request.url)
+  const canonicalDomain = new URL(env.CANONICAL_ORIGIN).host
+  if (env.APP_ENV === 'production' && url.host !== canonicalDomain) {
+    return jsonError('not_found', 404)
+  }
+  if (request.method !== 'POST') return methodNotAllowed('POST')
+
+  const token = bearerToken(request)
+  if (!token) return jsonError('unauthorized', 401)
+  let fid: number
+  try {
+    fid = await dependencies.verifyQuickAuthToken(
+      token,
+      env.APP_ENV === 'production' ? canonicalDomain : url.host,
+    )
+  } catch {
+    return jsonError('unauthorized', 401)
+  }
+
+  const query = await recipientEnsQuery(request)
+  if (!query) return jsonError('invalid_request', 400)
+  if (!env.ENS_MAINNET_RPC_URLS || !env.IDENTITY_RATE_LIMITER) {
+    return jsonError('identity_unavailable', 503)
+  }
+
+  let allowed: boolean
+  try {
+    const outcome = await env.IDENTITY_RATE_LIMITER.limit({
+      key: `${env.APP_ENV}:ens-resolution:fid:${fid}`,
+    })
+    allowed = outcome.success
+  } catch {
+    return jsonError('identity_unavailable', 503)
+  }
+  if (!allowed) return rateLimited()
+
+  try {
+    const result = await withEnsResolutionDeadline(
+      dependencies.resolveEnsName(query, env.ENS_MAINNET_RPC_URLS),
+    )
+    if (result.status === 'invalid') return jsonError('invalid_request', 400)
+    if (result.status === 'unavailable') {
+      return jsonError('identity_unavailable', 503)
+    }
+    return Response.json(result, { headers: noStoreJsonHeaders })
+  } catch {
+    return jsonError('identity_unavailable', 503)
+  }
+}
+
+async function recipientEnsQuery(request: Request): Promise<string | null> {
+  if (request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() !==
+    'application/json') return null
+
+  const contentLengthHeader = request.headers.get('content-length')
+  if (contentLengthHeader !== null) {
+    const contentLength = Number(contentLengthHeader)
+    if (
+      !Number.isSafeInteger(contentLength) ||
+      contentLength < 0 ||
+      contentLength > ENS_RESOLUTION_BODY_LIMIT_BYTES
+    ) return null
+  }
+
+  let body: unknown
+  try {
+    const bytes = await boundedRequestBody(
+      request,
+      ENS_RESOLUTION_BODY_LIMIT_BYTES,
+    )
+    if (!bytes) return null
+    body = JSON.parse(new TextDecoder('utf-8', {
+      fatal: true,
+      ignoreBOM: false,
+    }).decode(bytes))
+  } catch {
+    return null
+  }
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    Array.isArray(body) ||
+    Object.keys(body).length !== 1 ||
+    !('query' in body) ||
+    typeof body.query !== 'string'
+  ) return null
+  return normalizeEnsQuery(body.query)
+}
+
+async function withEnsResolutionDeadline(
+  resolution: Promise<EnsForwardResolution>,
+): Promise<EnsForwardResolution> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error('ENS resolution timed out.'))
+    }, ENS_RESOLUTION_TIMEOUT_MS)
+  })
+  try {
+    return await Promise.race([resolution, deadline])
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout)
+  }
 }
 
 async function participantIdentityApi(
