@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 
 type StatePanelProps = {
+  actions?: ReactNode
   busy?: boolean
   description: string
   eyebrow: string
@@ -8,7 +9,7 @@ type StatePanelProps = {
   title: string
 }
 
-export function StatePanel({ busy = false, description, eyebrow, icon, title }: StatePanelProps) {
+export function StatePanel({ actions, busy = false, description, eyebrow, icon, title }: StatePanelProps) {
   return (
     <section className="state-panel" aria-busy={busy} aria-live="polite">
       <div className={`state-panel__icon ${busy ? 'state-panel__icon--busy' : ''}`}>
@@ -17,6 +18,7 @@ export function StatePanel({ busy = false, description, eyebrow, icon, title }: 
       <p className="eyebrow">{eyebrow}</p>
       <h1>{title}</h1>
       <p>{description}</p>
+      {actions ? <div className="state-panel__actions">{actions}</div> : null}
     </section>
   )
 }

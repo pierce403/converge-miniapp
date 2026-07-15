@@ -27,13 +27,13 @@ export function AppShell({ children, host }: AppShellProps) {
   return (
     <div className="app-shell" style={style}>
       <header className="app-header">
-        <a className="brand" href="/" aria-label="Converge Mini home">
+        <div className="brand" aria-label="Converge Mini">
           <BrandMark />
           <span>
             <strong>Converge</strong>
             <small>mini</small>
           </span>
-        </a>
+        </div>
         <div className="network-pill" title="XMTP network">
           <span aria-hidden="true" />
           XMTP

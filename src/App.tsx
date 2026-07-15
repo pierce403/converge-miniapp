@@ -1,9 +1,9 @@
-import { AlertTriangle, LockKeyhole, MessageCircleMore, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, MessageCircleMore } from 'lucide-react'
 
 import { AppShell } from './app/AppShell'
 import { useMiniAppHost } from './app/useMiniAppHost'
-import { Avatar } from './components/Avatar'
 import { StatePanel } from './components/StatePanel'
+import { MessagingApp } from './features/messaging/MessagingApp'
 import { useVisualViewport } from './lib/useVisualViewport'
 
 export default function App() {
@@ -33,68 +33,12 @@ export default function App() {
       ) : null}
 
       {host.status === 'embedded' && host.context ? (
-        <EmbeddedWelcome
+        <MessagingApp
           canUseWallet={host.capabilities.includes('wallet.getEthereumProvider')}
           user={host.context.user}
         />
       ) : null}
     </AppShell>
-  )
-}
-
-type EmbeddedWelcomeProps = {
-  canUseWallet: boolean
-  user: {
-    displayName?: string
-    fid: number
-    pfpUrl?: string
-    username?: string
-  }
-}
-
-function EmbeddedWelcome({ canUseWallet, user }: EmbeddedWelcomeProps) {
-  const name = user.displayName ?? user.username ?? `Farcaster user ${user.fid}`
-
-  return (
-    <section className="welcome" aria-labelledby="welcome-title">
-      <div className="welcome__glow" aria-hidden="true" />
-      <div className="welcome__identity">
-        <Avatar name={name} src={user.pfpUrl} size="large" />
-        <div>
-          <p className="eyebrow">Farcaster identity</p>
-          <h1 id="welcome-title">Hi, {name}</h1>
-          {user.username ? <p className="welcome__username">@{user.username}</p> : null}
-        </div>
-      </div>
-
-      <p className="welcome__lead">
-        Your private XMTP inbox, without leaving Farcaster.
-      </p>
-
-      <div className="trust-list" aria-label="Connection details">
-        <div className="trust-row">
-          <span className="trust-row__icon"><LockKeyhole aria-hidden="true" /></span>
-          <div>
-            <strong>One clear signature</strong>
-            <span>We’ll explain the XMTP setup request before your wallet opens.</span>
-          </div>
-        </div>
-        <div className="trust-row">
-          <span className="trust-row__icon"><ShieldCheck aria-hidden="true" /></span>
-          <div>
-            <strong>Your messages stay yours</strong>
-            <span>Keys and decrypted message content remain in this browser.</span>
-          </div>
-        </div>
-      </div>
-
-      <div className={`capability-note ${canUseWallet ? 'capability-note--ready' : ''}`}>
-        <span className="status-dot" aria-hidden="true" />
-        {canUseWallet
-          ? 'Farcaster wallet support is ready.'
-          : 'This Farcaster client does not expose the wallet access XMTP needs.'}
-      </div>
-    </section>
   )
 }
 

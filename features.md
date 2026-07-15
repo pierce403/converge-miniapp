@@ -18,6 +18,7 @@ Status vocabulary:
 | Proposed | Strong default that still needs product confirmation. |
 | Spike | Must be proven in current SDKs/hosts before implementation proceeds. |
 | Blocked | Required outcome whose current integration path is not yet available or proven. |
+| Implemented locally | Code and automated checks exist, but named host/device/network proof is still outstanding. |
 | Later | Useful after the first release, but not required to prove the product. |
 | Out | Explicitly excluded from this product direction for now. |
 
@@ -274,21 +275,21 @@ This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is p
 | Publishing | Signed `/.well-known/farcaster.json` | P0 | Committed | Exact production domain passes Farcaster manifest validation. |
 | Publishing | Root `fc:miniapp` share embed | P0 | Committed | Root URL renders a valid 3:2 feed card and launches the app. |
 | Identity | Farcaster Quick Auth session | P1 | Later | Add only when a protected API, directory, identity link, or notification feature needs trusted FID. |
-| Identity | Host EVM wallet connection | P0 | Proposed | Recommended identity path; Task 0c must confirm it before signer implementation. |
-| Identity | EOA and supported SCW XMTP signer | P0 | Spike | Current Farcaster hosts can complete required XMTP signatures on desktop, iOS, and Android. |
-| Identity | Stable XMTP inbox/installation reuse | P0 | Committed | Relaunch uses persisted OPFS DB and does not consume a new installation. |
-| Inbox | Allowed DM conversation list | P0 | Committed | Initial sync, cached render, ordering, empty/loading/error states, and live updates work. |
+| Identity | Host EVM wallet connection | P0 | Implemented locally | Host provider and lifecycle teardown are implemented; real Farcaster desktop/iOS/Android proof remains. |
+| Identity | EOA and supported SCW XMTP signer | P0 | Implemented locally | EOA/SCW construction is unit-tested; real host signature traces remain. |
+| Identity | Stable XMTP inbox/installation reuse | P0 | Implemented locally | Persistent OPFS defaults and a single-owner Web Lock exist; host re-entry proof remains. |
+| Inbox | Allowed DM conversation list | P0 | Implemented locally | Allowed-only sync/list/stream UI exists; dev-network and cached/offline acceptance remain. |
 | Inbox | Separate message requests | P1 | Later | Unknown contacts stay excluded from the P0 allowed list; later accept/decline updates consent. |
-| Compose | Address-first recipient reachability | P0 | Committed | Normalized Ethereum address is checked with `canMessage()` before DM creation. |
+| Compose | Address-first recipient reachability | P0 | Implemented locally | Normalized Ethereum address is checked with `canMessage()` before DM creation. |
 | Compose | Farcaster handle/name recipient search | P1 | Later | Trusted directory lookup maps profile to verified candidate identity before `canMessage()`. |
-| Chat | Text message history | P0 | Committed | Messages render with ownership, timestamp, fallback, paging/loading, and error states. |
-| Chat | Live incoming text messages | P0 | Committed | Stream starts after sync, reconnects safely, deduplicates, and cleans up. |
-| Chat | Send, optimistic state, failure, retry | P0 | Committed | One user action creates at most one message; failed drafts are recoverable. |
-| Local data | Single-connection protection | P0 | Committed | A second tab/window cannot corrupt or contend for the OPFS database and gets useful guidance. |
+| Chat | Text message history | P0 | Implemented locally | Latest text messages, ownership, timestamps, fallback, and loading exist; older-page UX remains. |
+| Chat | Live incoming text messages | P0 | Implemented locally | Allowed-DM stream, stable-ID upsert, teardown gating, and health UI exist; real reconnect proof remains. |
+| Chat | Send, optimistic state, failure, retry | P0 | Implemented locally | Duplicate guards and same-ID unpublished retry exist; Browser SDK 7 terminal failures are disclosed. |
+| Local data | Single-connection protection | P0 | Implemented locally | A second tab/window cannot contend for OPFS and gets useful guidance. |
 | Local data | Storage-loss/install-limit recognition | P0 | Committed | Storage/installation failures are classified and do not trigger automatic revocation. |
 | Local data | Installation management/revocation UI | P1 | Later | User can deliberately inspect and revoke an old installation when required. |
-| Design | Converge-derived compact visual system | P0 | Committed | Palette, bubbles, surfaces, inputs, focus states, and empty states are consistent and accessible. |
-| Backend | Cloudflare Worker Static Assets | P0 | Proposed | One reproducible deploy serves the SPA, manifest, embed metadata, headers, and health/version response. |
+| Design | Converge-derived compact visual system | P0 | Implemented locally | Palette, bubbles, surfaces, inputs, focus states, and empty states are implemented; embedded-device review remains. |
+| Backend | Cloudflare Worker Static Assets | P0 | Implemented locally | Reproducible build/preview exists; manifest, headers, canonical deploy, and validation remain Task 7. |
 | Backend | Authenticated XMTP payer Gateway | P0 | Blocked | Current Browser SDK must prove Gateway selection/auth, per-user quotas, viable container hosting, and one funded production send. |
 | Backend | Protected API and minimal identity data | P1 | Later | Quick Auth-protected API is added only for a named product flow; D1 stores no keys or plaintext messages. |
 | Backend | Notification token data model | P1 | Later | D1 stores only verified, protected notification lifecycle data after notifications are promoted. |
@@ -1100,7 +1101,17 @@ Exit criteria:
 - visual acceptance checklist is reviewed; and
 - no mock messaging behavior is presented as functional.
 
-### Task 4: host wallet and XMTP identity
+### Task 4: host wallet and XMTP identity — implemented locally, host proof pending
+
+Implemented on 2026-07-14:
+
+- dynamic Farcaster host-provider acquisition with no generated-key fallback;
+- checksummed wallet identity, chain and contract-code inspection, and EOA/SCW signer construction;
+- one origin-wide Web Lock held through XMTP Worker shutdown, with explicit second-window and restart-required states;
+- teardown on account, chain, and provider-disconnect changes; and
+- phased wallet/XMTP/sync explanations plus local-storage disclosure.
+
+The pinned Browser SDK still requires a document restart if its internal Worker fails during `Client.init()` before returning a closable Client. Registration itself is app-owned and closes safely on wallet rejection. Real desktop/iOS/Android signatures, OPFS re-entry, SCW continuity, storage-loss, and installation-limit cases remain required evidence.
 
 Deliverables:
 
@@ -1117,7 +1128,16 @@ Exit criteria:
 - existing installations resume without new signatures; and
 - no server/log path sees private keys or message content.
 
-### Task 5: allowed inbox and live receive
+### Task 5: allowed inbox and live receive — implemented locally, network proof pending
+
+Implemented on 2026-07-14:
+
+- allowed-only DM sync, latest-activity list, identity fallback, empty/error/refresh states, and latest 50-message read view;
+- allowed-DM live stream, stable-ID upsert, stream health display, foreground inbox refresh, and stale-session callback guards;
+- unsupported-content fallback, newest-page chronological display, near-bottom scroll preservation, and screen-reader log semantics; and
+- behavioral tests for newest-page order and persisted unpublished-draft recovery.
+
+Older-page pagination, cached-first/offline rendering, controlled stream restart, canonical-host persistence, and two-client dev-network receive evidence remain.
 
 Deliverables:
 
@@ -1133,7 +1153,16 @@ Exit criteria:
 - foreground/resume sync and live receive pass without duplicate rows; and
 - identity switching never displays another identity's cached content.
 
-### Task 6: address-first compose and text send
+### Task 6: address-first compose and text send — implemented locally, network proof pending
+
+Implemented on 2026-07-14:
+
+- normalized Ethereum address validation, self-address rejection, XMTP reachability, existing-DM reuse, and synchronous duplicate-create guards;
+- auto-growing text composer, Enter/Shift+Enter handling, mobile focus-preserving send control, and duplicate-send guards at component and transport boundaries;
+- persisted optimistic send, stable message-ID upsert, batch-publication acknowledgement handling, and per-ID retry guards; and
+- honest recovery semantics: `Unpublished` drafts reload as retryable with the same ID, while Browser SDK 7 `Failed` records are terminal because the high-level wrapper does not expose targeted `publishStoredMessage(id)`.
+
+Two-client dev-network exchange, acknowledgement-loss, offline retry, reachability-network-error, and 100-message deduplication evidence remain.
 
 Deliverables:
 

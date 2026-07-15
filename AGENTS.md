@@ -50,7 +50,7 @@ These instructions apply to the entire repository.
 - Run the full local gate with `npm run check`; its typecheck, lint, test, and production-build stages must all pass.
 - Run the production-shaped local app with `npm run preview`; verify both `/` and `/api/health` before deployment.
 - Deploy the preview environment with `npm run deploy:preview` and production with `npm run deploy`. Never deploy around a failing `npm run check`.
-- At the current documentation-only stage, verify changes with `git diff --check` and review all staged content before committing.
+- In addition to the full gate, verify changes with `git diff --check` and review all staged content before committing.
 
 ## Current boundaries
 
