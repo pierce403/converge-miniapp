@@ -17,7 +17,7 @@ There is currently no D1, KV, R2, Queue, Durable Object, notification token stor
 
 ## Current deployment state (2026-07-15)
 
-The Cloudflare Worker and its `miniapp.converge.cv` Custom Domain are live. Cloudflare Workers Builds successfully pulled and deployed the exact `main` commit `578e68f2ebc944383c0237d26ba89696247dca8d` through the Cloudflare GitHub App. The active secret-change deployment after ownership configuration is `affb228c-5b90-4d74-8ea2-26950396a3a2`.
+The Cloudflare Worker and its `miniapp.converge.cv` Custom Domain are live. Cloudflare Workers Builds pulls and deploys verified `main` commits through the Cloudflare GitHub App; use `/api/health` and `wrangler deployments list` for the current immutable deployment ID instead of recording a value here that changes on every release.
 
 Production delivery has one owner:
 
