@@ -45,7 +45,11 @@ These instructions apply to the entire repository.
 - Keep completed, planned, deferred, and rejected work visibly distinct in `features.md`.
 - Every feature needs testable acceptance criteria before implementation starts.
 - Document any required Cloudflare resources, secrets, migrations, domains, and deployment commands in the repository as they are introduced.
-- Once the app is scaffolded, replace the provisional verification notes here with the exact install, typecheck, lint, test, build, local-preview, and deploy commands that have actually passed.
+- Install reproducibly with `npm ci` (or `npm install` when intentionally updating the lockfile).
+- Generate Worker bindings after changing `wrangler.jsonc` with `npm run cf-typegen`.
+- Run the full local gate with `npm run check`; its typecheck, lint, test, and production-build stages must all pass.
+- Run the production-shaped local app with `npm run preview`; verify both `/` and `/api/health` before deployment.
+- Deploy the preview environment with `npm run deploy:preview` and production with `npm run deploy`. Never deploy around a failing `npm run check`.
 - At the current documentation-only stage, verify changes with `git diff --check` and review all staged content before committing.
 
 ## Current boundaries

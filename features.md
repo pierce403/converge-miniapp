@@ -682,9 +682,9 @@ Visual acceptance for the scaffold task:
 - Do not say “anonymous,” “fully private,” or “secure” without qualifying what is protected.
 - Keep onboarding to one short explanation and one primary action per state.
 
-## Proposed technical shape
+## Committed technical shape
 
-This is a recommendation to validate, not yet an implementation commitment.
+This is the implementation target. Protocol surfaces that still require live-host proof remain explicitly marked as spikes or blockers.
 
 ### Frontend
 
@@ -696,7 +696,7 @@ This is a recommendation to validate, not yet an implementation commitment.
 - Minimal routing: inbox, conversation, compose, and privacy sheet state; avoid importing a large routing/provider tree until route semantics require it.
 - Minimal state ownership around one active XMTP client. Do not mirror the whole XMTP database into a second client-side database without a proven need.
 
-### Cloudflare-preferred application edge
+### Cloudflare application edge
 
 - One Cloudflare Worker deployment with Static Assets for the SPA and first-party API routes.
 - Pin a current reviewed `compatibility_date`, generate binding types from the actual Wrangler configuration, and keep preview/production bindings explicit.
@@ -988,7 +988,7 @@ Exit criteria:
 - repository exists remotely with the chosen visibility and HTTPS-backed GitHub workflow;
 - operating instructions require a verified push after each task.
 
-### Task 0b: product plan and feasibility inventory (current)
+### Task 0b: product plan and feasibility inventory — complete 2026-07-14
 
 Deliverables:
 
@@ -1039,7 +1039,7 @@ Exit criteria:
 - no accidental production identity/install exhaustion; and
 - exact pinned SDK versions are recorded.
 
-### Task 1b: hosting decision checkpoint — app host selected
+### Task 1b: hosting decision checkpoint — complete 2026-07-14
 
 Use Cloudflare Workers Static Assets plus a Worker API for the application at `miniapp.converge.cv`. Compare Cloudflare Containers with an external container host for the XMTP payer Gateway only after the pinned client proves the required authentication path. Preserve Vercel as a later fallback comparison rather than blocking the frontend/API build.
 
@@ -1050,7 +1050,17 @@ Exit criteria:
 - Task 2 names Cloudflare and records verified deployment commands; and
 - the hosting decision is committed and pushed.
 
-### Task 2: application and verification scaffold
+### Task 2: application and verification scaffold — in progress
+
+Implemented locally on 2026-07-14:
+
+- React 19, strict TypeScript, Vite, and the Cloudflare Vite plugin;
+- a Cloudflare Worker with a tested `/api/health` endpoint and bounded API 404 behavior;
+- current generated Worker runtime types, `wrangler.jsonc`, preview/production scripts, and the `miniapp.converge.cv` custom-domain target;
+- ESLint, Vitest/Testing Library, a production build, and GitHub Actions CI; and
+- a verified production-shaped local preview serving both the SPA and Worker API.
+
+Remaining before Task 2 is complete: confirm GitHub Actions on the pushed commit and deploy the shell to an authenticated Cloudflare account/domain.
 
 Deliverables:
 
@@ -1132,7 +1142,7 @@ Exit criteria:
 
 Deliverables:
 
-- selected hosting-provider deployment (Cloudflare Worker Static Assets if Task 1b confirms the current preference);
+- Cloudflare Worker Static Assets deployment with the first-party Worker API;
 - canonical-domain headers and final routing;
 - signed manifest and share assets;
 - operator docs, minimal redacted observability, and rollback notes;
@@ -1283,7 +1293,7 @@ Notifications for incoming XMTP messages are not a gate unless they are explicit
 | Incoming notification bridge is not viable in Workers/Browser SDK | Closed-app message notifications unavailable | Keep P1 spike; generic notifications only; separate observer/container architecture if proven. |
 | XMTP payer/Gateway docs or SDK are in transition | Production sends fail or infrastructure is mischosen | Pin versions, revalidate before release, prove real test/mainnet flow, keep container host option open. |
 | App-funded traffic is abused | Unexpected fees/outage | Trusted auth, gateway authorization, per-user limits, balance alerts, kill switch. |
-| Exact Mini App domain changes | Manifest identity, OPFS, tokens, and embeds break | Choose stable canonical hostname early; document migration; avoid casual apex/`www` changes. |
+| `miniapp.converge.cv` changes | Manifest identity, OPFS, tokens, and embeds break | Treat the selected hostname as durable; document any migration; avoid casual hostname changes. |
 | Feature creep from `converge.cv` | Mini App becomes slow and difficult to operate | Keep non-goals and Later table visible; require product decision to promote scope. |
 
 ## Open product and architecture decisions
@@ -1301,7 +1311,7 @@ These are deliberately not guessed into existence.
 
 ## Cloudflare versus Vercel comparison criteria for later
 
-The decision is deferred, but the comparison should cover the same concrete workload:
+The application host is selected. A later re-evaluation should compare the same concrete workload:
 
 - static Vite/WASM asset caching and response headers;
 - edge Quick Auth JWT verification;
