@@ -643,7 +643,7 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
         setMessages((current) => mergeMessages(cached.messages, current))
         loadedMessageWindowRef.current = Math.max(
           loadedMessageWindowRef.current,
-          cached.messages.length,
+          scannedWindowSize(cached),
         )
         setHasOlderMessages(cached.hasOlder)
       })
@@ -662,7 +662,7 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
       setMessages((current) => mergeMessages(current, loaded.messages))
       loadedMessageWindowRef.current = Math.max(
         loadedMessageWindowRef.current,
-        loaded.messages.length,
+        scannedWindowSize(loaded),
       )
       setHasOlderMessages(loaded.hasOlder)
     } catch (error) {
@@ -714,7 +714,7 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
       ) {
         loadedMessageWindowRef.current = Math.max(
           loadedMessageWindowRef.current,
-          page.messages.length,
+          scannedWindowSize(page),
         )
         setMessages((current) => mergeMessages(current, page.messages))
         setHasOlderMessages(page.hasOlder)
@@ -905,7 +905,7 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
             setActiveConversation(resolvedConversation)
             loadedMessageWindowRef.current = Math.max(
               loadedMessageWindowRef.current,
-              loaded.messages.length,
+              scannedWindowSize(loaded),
             )
             setMessages((current) => mergeMessages(current, loaded.messages))
             setHasOlderMessages(loaded.hasOlder)
@@ -1079,6 +1079,18 @@ function compareMessages(left: MessageItem, right: MessageItem): number {
   if (left.sentAtNs < right.sentAtNs) return -1
   if (left.sentAtNs > right.sentAtNs) return 1
   return left.id.localeCompare(right.id)
+}
+
+function scannedWindowSize(page: {
+  messages: MessageItem[]
+  scannedMessageCount?: number
+}): number {
+  const scannedMessageCount = page.scannedMessageCount
+  return typeof scannedMessageCount === 'number' &&
+    Number.isSafeInteger(scannedMessageCount) &&
+    scannedMessageCount >= page.messages.length
+    ? scannedMessageCount
+    : page.messages.length
 }
 
 function preservePeerAddress(

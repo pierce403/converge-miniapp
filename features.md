@@ -53,13 +53,13 @@ When this document says **first release**, **MVP**, or **P0**, it means exactly 
 - Stable local XMTP installation resume with single-connection protection.
 - Allowed direct-message conversation list with sync, cached/loading/empty/error states, and live updates.
 - Address-first new DM flow gated by XMTP reachability.
-- Plain-text message history, compose, send, deduplication, failure, and retry.
+- Text compose/send plus compatible history rendering for text, Markdown source as plain text, replies, attachment metadata, reaction summaries, deduplication, failure, and retry.
 - Compact Converge-derived blue/orange visual system with mobile, keyboard, safe-area, and accessibility basics.
 - Production deployment at `https://miniapp.converge.cv` using Cloudflare Workers Static Assets plus a small Worker API.
 - A post-inbox, Quick Auth-protected ENS primary-name offer that remembers the Farcaster account's accepted/dismissed choice without changing XMTP keys or message history.
 - A production XMTP Gateway/payer solution as required by the current official design; this remains blocked until the pinned Browser SDK path is proven.
 
-Quick Auth and D1 are required only for that named ENS preference flow. The following are **not required for the first release**: general Farcaster handle/name search, persisted identity links, message-request management, Mini App notification permissions, incoming-message notifications, an expanded settings sheet, or a share action beyond the required root embed. Their detailed requirements remain in this plan so adding them later does not blur the security boundary.
+Quick Auth also protects a stateless public-identity lookup that upgrades known XMTP peer addresses to display-only fname, ENS, and Basename labels. D1 remains exclusive to the named ENS preference flow. The following are **not required for the first release**: general Farcaster handle/name recipient search, persisted identity links, message-request management, Mini App notification permissions, incoming-message notifications, an expanded settings sheet, or a share action beyond the required root embed. Their detailed requirements remain in this plan so adding them later does not blur the security boundary.
 
 ## Decisions already captured
 
@@ -78,6 +78,7 @@ Quick Auth and D1 are required only for that named ENS preference flow. The foll
 | Treat a verified ENS name as a safe label, not a migration | Committed | Offer it automatically only when the Farcaster primary address is the active XMTP address or already belongs to the active inbox. Acceptance changes presentation only. |
 | Never merge or silently relink separate XMTP inboxes | Committed | A different ENS-address inbox gets an explanation in the identity menu; no account, recovery identity, key, or history is moved. |
 | Remember the ENS choice by trusted Farcaster FID | Committed | Quick Auth supplies the authoritative FID; D1 stores only `accepted` or `dismissed` plus an update timestamp. |
+| Resolve known peer addresses as display hints | Committed | Prefer ENS, then Basename, and always retain the wallet address. Show a registered fname only as a separately labeled best-effort hint, never for authorization. |
 | Use Git and GitHub from the beginning | Committed | Each coherent task is verified, committed, and pushed before the next task begins. |
 
 ### Important backend clarification
@@ -122,7 +123,7 @@ The first architecture should keep the client usable even if optional backend fe
 - Storing message plaintext, decrypted attachments, or searchable message history on the backend.
 - Multi-inbox switching, keyfile import/export, device pairing, or elaborate account recovery.
 - Group creation or administration.
-- Attachments, audio, images, reactions, replies, forwarding, editing, disappearing messages, typing indicators, or read receipts.
+- Composing attachments or other rich content, rendering attachment bytes inline, audio, forwarding, editing, disappearing messages, or live typing/read-receipt UI. Compatible received replies, reaction summaries, and attachment metadata may render safely.
 - Token transfers, swaps, mints, or other onchain transaction features.
 - A full contacts system, global message search, or desktop two-pane workspace.
 - A separate PWA install experience, service-worker push stack, or native app wrapper.
@@ -294,12 +295,13 @@ Success condition: the optional flow never moves a key, recovery identity, inbox
 | Identity | EOA and supported SCW XMTP signer | P0 | Implemented locally | EOA/SCW construction is unit-tested; real host signature traces remain. |
 | Identity | Stable XMTP inbox/installation reuse | P0 | Implemented locally | Persistent OPFS defaults and a single-owner Web Lock exist; host re-entry proof remains. |
 | Identity | Forward-verified ENS primary-name offer | P1 | Implemented locally | Trusted-FID discovery, reverse/forward ENS proof, read-only XMTP relationship checks, remembered acceptance/dismissal, safe label-only use, and truthful separate-inbox states are tested; canonical-host proof remains. |
+| Identity | Peer fname, ENS, and Basename labels | P1 | Implemented locally | Bounded, rate-limited protected batches resolve public wallet metadata without persistence; ambiguous/broken sources fall back to the visible address. A registered fname is secondary registry metadata, not a canonical profile or authorization. |
 | Identity | Compact identity/privacy menu | P0 | Implemented locally | Active wallet, network, local-storage disclosure, ENS recheck, label selection/deletion, and non-migration explanations remain available after onboarding. |
 | Inbox | Allowed DM conversation list | P0 | Implemented locally | Allowed-only cached-first sync/list/stream UI exists; dev-network and offline host acceptance remain. |
 | Inbox | Separate message requests | P1 | Later | Unknown contacts stay excluded from the P0 allowed list; later accept/decline updates consent. |
 | Compose | Address-first recipient reachability | P0 | Implemented locally | Normalized Ethereum address is checked with `canMessage()` before DM creation. |
 | Compose | Farcaster handle/name recipient search | P1 | Later | Trusted directory lookup maps profile to verified candidate identity before `canMessage()`. |
-| Chat | Text message history | P0 | Implemented locally | Cached-first latest history, a growing contiguous newest-message window, exact-nanosecond ordering, ownership, fallback, and loading exist. |
+| Chat | Compatible message history | P0 | Implemented locally | Cached-first text and plain-text Markdown source, replies, attachment metadata, reaction summaries, a growing contiguous newest-message window, exact-nanosecond ordering, ownership, fallback, and loading exist. Silent control messages remain off the timeline. |
 | Chat | Live incoming text messages | P0 | Implemented locally | Allowed-DM stream, stable-ID upsert, one retained SDK-owned retry proxy, foreground visible-chat refresh, and health UI exist; real reconnect proof remains. |
 | Chat | Send, optimistic state, failure, retry | P0 | Implemented locally | Duplicate guards and same-ID unpublished retry exist; Browser SDK 7 terminal failures are disclosed. |
 | Local data | Single-connection protection | P0 | Implemented locally | A second tab/window cannot contend for OPFS and gets useful guidance. |

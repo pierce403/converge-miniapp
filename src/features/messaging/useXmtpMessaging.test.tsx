@@ -377,6 +377,57 @@ describe('useXmtpMessaging', () => {
     expect(result.current.messages.map(({ id }) => id)).toEqual(['z', 'a'])
   })
 
+  it('pages by scanned controls even when no displayable messages were added', async () => {
+    const olderVisible = message(
+      'older-visible',
+      'Visible after controls',
+      '2026-07-14T11:00:00Z',
+    )
+    const loadOlderMessages = vi.fn((
+      _conversationId: string,
+      scannedMessageCount: number,
+    ) => Promise.resolve(scannedMessageCount === 50
+      ? {
+          hasOlder: true,
+          messages: [],
+          scannedMessageCount: 100,
+        }
+      : {
+          hasOlder: false,
+          messages: [olderVisible],
+          scannedMessageCount: 121,
+        }))
+    const session = createSession({
+      loadConversation: vi.fn().mockResolvedValue({
+        conversation: activeConversation,
+        hasOlder: true,
+        messages: [],
+        scannedMessageCount: 50,
+      }),
+      loadOlderMessages,
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+    await act(async () => result.current.openConversation(activeConversation.id))
+    await act(async () => result.current.loadOlderMessages())
+    await act(async () => result.current.loadOlderMessages())
+
+    expect(loadOlderMessages).toHaveBeenNthCalledWith(
+      1,
+      activeConversation.id,
+      50,
+    )
+    expect(loadOlderMessages).toHaveBeenNthCalledWith(
+      2,
+      activeConversation.id,
+      100,
+    )
+    expect(result.current.messages.map(({ id }) => id)).toEqual(['older-visible'])
+    expect(result.current.hasOlderMessages).toBe(false)
+  })
+
   it('lets a newly opened conversation page while an older view is still loading', async () => {
     const secondSummary: ConversationSummary = {
       ...cachedConversation,

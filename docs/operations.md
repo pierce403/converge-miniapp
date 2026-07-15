@@ -12,6 +12,8 @@ This runbook covers the Cloudflare-hosted SPA and Worker API at `https://miniapp
 | Account association | Three Worker secrets listed below | Public Farcaster ownership proof, kept out of source control. |
 | ENS preferences | `PREFERENCES` D1 binding | Stores only Quick Auth-verified FID, `accepted`/`dismissed`, and update time. Production and preview databases are isolated. |
 | ENS discovery | `ENS_MAINNET_RPC_URLS` Worker variable | Ordered comma-separated public HTTPS Ethereum RPC fallbacks for reverse and forward ENS verification. |
+| Peer Farcaster hints | Optional `FARCASTER_BASE_RPC_URL` Worker secret | Production Base RPC used for a bounded read of the experimental address-to-FID Verifications contract. Without it, ENS/Basename still work and registered-fname hints stay off. |
+| Identity abuse control | `IDENTITY_RATE_LIMITER` binding | Allows ten participant-identity batches per verified FID per minute in each Cloudflare location. |
 | Farcaster identity | Quick Auth JWKS + official primary-address API | Verifies the exact-domain FID and resolves its public primary Ethereum address. |
 | XMTP environment | `VITE_XMTP_ENV` at build time | `dev` for preview/local; legacy `production` for the current canonical build; decentralized `mainnet` remains gated. |
 | XMTP Gateway | `VITE_XMTP_GATEWAY_HOST` at build time | Required for `mainnet` and decentralized testnets. Public hostname only; never put a credential in a `VITE_` variable. |
@@ -91,10 +93,22 @@ The protected routes are exact-host and no-store:
 | Route | Success | Failure boundary |
 | --- | --- | --- |
 | `GET /api/me/ens` | `200` with `ens`, `preference`, and explicit `available`, `none`, or `unavailable` status | `401` invalid/missing token; `404` wrong host; `503` missing binding or unexpected backend failure. |
+| `POST /api/identities` | `200` with stateless registered-fname, ENS, and Basename display metadata plus a partial-result flag for up to 12 valid Ethereum addresses | `400` malformed/oversized JSON; `401` invalid/missing token; `404` wrong production host; `429` verified-FID rate limit; `503` total resolver outage/deadline or missing required configuration. |
 | `PUT /api/me/ens-preference` | `204` for JSON `{"choice":"accepted"}` or `{"choice":"dismissed"}` | `400` malformed/unsupported body; auth/binding failures as above. |
 | `DELETE /api/me` | `204` after deleting the verified FID's preference | Auth/binding failures as above. |
 
 Quick Auth verification checks Farcaster's issuer, signature, expiry, exact audience, and a positive integer FID subject. Production accepts only the canonical domain; non-production verifies the actual rendered host so localhost and a separately deployed preview can be exercised without weakening production. The Worker ignores any client-supplied FID. It then fetches the official Farcaster primary Ethereum address and requires mainnet ENS reverse and forward resolution to agree. `ENS_MAINNET_RPC_URLS` is public replaceable configuration, not a secret; keep multiple reviewed HTTPS providers so one RPC failure can fail over, and treat total lookup failure as a nonblocking identity-feature outage.
+
+The participant route stream-limits its JSON body to 16 KiB, checksum-normalizes and deduplicates addresses, bounds each request at 12, and rate-limits the verified FID. Ethereum mainnet's Universal Resolver supplies default ENS and ENSIP-19 Basename primary names. When configured, `FARCASTER_BASE_RPC_URL` supplies a batched read of the experimental Verifications contract; positive FIDs become explicitly secondary registered-fname hints through the official FName Registry. The browser sends larger inboxes as separate bounded batches, keeps positive metadata for at most ten minutes and complete negative results for two minutes, and retries partial outages after one minute. Partial resolver success remains usable; a total outage or ten-second route deadline returns `503` so absence is not cached as fact. Neither the Worker nor D1 persists this metadata.
+
+Use a reviewed, quota-enforced production Base endpoint; do not commit its keyed URL or use Base's rate-limited public endpoint for production. Configure it independently for preview and production:
+
+```sh
+npx wrangler secret put FARCASTER_BASE_RPC_URL --env preview
+npx wrangler secret put FARCASTER_BASE_RPC_URL
+```
+
+The `IDENTITY_RATE_LIMITER` binding is committed configuration. Its namespace is unique to this Worker in the Cloudflare account, and its counters are permissive, eventually consistent, and local to each Cloudflare location; it is an upstream-cost guard, not an accounting or authorization boundary.
 
 Preview has its own D1 binding and verifies Quick Auth against the exact host serving the request. A successful `workers.dev` check proves preview wiring only; it is not evidence for the canonical production audience, storage origin, or Farcaster ownership.
 

@@ -2,7 +2,12 @@ import {
   discoverEnsIdentity,
   type EnsDiscovery,
 } from './ens.js'
+import {
+  resolveParticipantIdentities,
+  type ParticipantIdentityBatch,
+} from './participantIdentities.js'
 import { verifyQuickAuthToken } from './quickAuth.js'
+import { getAddress, isAddress } from 'viem'
 
 const securityHeaders = {
   'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
@@ -30,6 +35,8 @@ const bootstrapManifestJsonHeaders = {
 }
 
 const BASE64URL_VALUE = /^[A-Za-z0-9_-]+$/
+const PARTICIPANT_BODY_LIMIT_BYTES = 16_384
+const PARTICIPANT_RESOLUTION_TIMEOUT_MS = 10_000
 
 export type AppEnv = {
   APP_ENV: Env['APP_ENV']
@@ -37,19 +44,27 @@ export type AppEnv = {
   CANONICAL_ORIGIN: Env['CANONICAL_ORIGIN']
   CF_VERSION_METADATA: Env['CF_VERSION_METADATA']
   ENS_MAINNET_RPC_URLS?: Env['ENS_MAINNET_RPC_URLS']
+  FARCASTER_BASE_RPC_URL?: string
   FARCASTER_ACCOUNT_ASSOCIATION_HEADER?: string
   FARCASTER_ACCOUNT_ASSOCIATION_PAYLOAD?: string
   FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE?: string
+  IDENTITY_RATE_LIMITER?: RateLimit
   PREFERENCES?: D1Database
 }
 
 export type WorkerDependencies = {
   discoverEnsIdentity: (fid: number, rpcUrls: string) => Promise<EnsDiscovery>
+  resolveParticipantIdentities: (
+    addresses: readonly string[],
+    rpcUrls?: string,
+    options?: { baseRpcUrl?: string; signal?: AbortSignal },
+  ) => Promise<ParticipantIdentityBatch>
   verifyQuickAuthToken: (token: string, domain: string) => Promise<number>
 }
 
 const defaultDependencies: WorkerDependencies = {
   discoverEnsIdentity,
+  resolveParticipantIdentities,
   verifyQuickAuthToken,
 }
 
@@ -90,6 +105,10 @@ export async function handleRequest(
     return identityApi(request, env, dependencies)
   }
 
+  if (url.pathname === '/api/identities') {
+    return participantIdentityApi(request, env, dependencies)
+  }
+
   if (url.pathname.startsWith('/api/')) {
     return Response.json(
       {
@@ -100,6 +119,171 @@ export async function handleRequest(
   }
 
   return new Response(null, { status: 404, headers: securityHeaders })
+}
+
+async function participantIdentityApi(
+  request: Request,
+  env: AppEnv,
+  dependencies: WorkerDependencies,
+): Promise<Response> {
+  const url = new URL(request.url)
+  const canonicalDomain = new URL(env.CANONICAL_ORIGIN).host
+  if (env.APP_ENV === 'production' && url.host !== canonicalDomain) {
+    return jsonError('not_found', 404)
+  }
+  if (request.method !== 'POST') return methodNotAllowed('POST')
+
+  const token = bearerToken(request)
+  if (!token) return jsonError('unauthorized', 401)
+  let fid: number
+  try {
+    fid = await dependencies.verifyQuickAuthToken(
+      token,
+      env.APP_ENV === 'production' ? canonicalDomain : url.host,
+    )
+  } catch {
+    return jsonError('unauthorized', 401)
+  }
+
+  const addresses = await participantAddresses(request)
+  if (!addresses) return jsonError('invalid_request', 400)
+
+  if (!env.IDENTITY_RATE_LIMITER) return jsonError('identity_unavailable', 503)
+  let allowed: boolean
+  try {
+    const outcome = await env.IDENTITY_RATE_LIMITER.limit({
+      key: `${env.APP_ENV}:participant-identities:fid:${fid}`,
+    })
+    allowed = outcome.success
+  } catch {
+    return jsonError('identity_unavailable', 503)
+  }
+  if (!allowed) return rateLimited()
+
+  try {
+    const batch = await withParticipantResolutionDeadline(
+      (signal) => dependencies.resolveParticipantIdentities(
+        addresses,
+        env.ENS_MAINNET_RPC_URLS,
+        {
+          ...(env.FARCASTER_BASE_RPC_URL
+            ? { baseRpcUrl: env.FARCASTER_BASE_RPC_URL }
+            : {}),
+          signal,
+        },
+      ),
+    )
+    if (batch.status === 'unavailable') {
+      return jsonError('identity_unavailable', 503)
+    }
+    return Response.json({
+      identities: batch.identities.map((identity) => ({
+        address: identity.address,
+        basename: identity.basename,
+        ensName: identity.ensName,
+        registeredFname: identity.registeredFname,
+      })),
+      partial: batch.status === 'partial',
+    }, { headers: noStoreJsonHeaders })
+  } catch {
+    return jsonError('identity_unavailable', 503)
+  }
+}
+
+async function participantAddresses(
+  request: Request,
+): Promise<`0x${string}`[] | null> {
+  if (request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() !==
+    'application/json') {
+    return null
+  }
+  const contentLengthHeader = request.headers.get('content-length')
+  if (contentLengthHeader !== null) {
+    const contentLength = Number(contentLengthHeader)
+    if (!Number.isSafeInteger(contentLength) || contentLength < 0 ||
+      contentLength > PARTICIPANT_BODY_LIMIT_BYTES) return null
+  }
+
+  let body: unknown
+  try {
+    const bytes = await boundedRequestBody(request, PARTICIPANT_BODY_LIMIT_BYTES)
+    if (!bytes) return null
+    body = JSON.parse(new TextDecoder('utf-8', {
+      fatal: true,
+      ignoreBOM: false,
+    }).decode(bytes))
+  } catch {
+    return null
+  }
+  if (!body || typeof body !== 'object' || !('addresses' in body) ||
+    !Array.isArray(body.addresses) || body.addresses.length > 12) return null
+
+  const addresses = new Set<`0x${string}`>()
+  for (const value of body.addresses) {
+    if (typeof value !== 'string' || !isAddress(value)) return null
+    addresses.add(getAddress(value).toLowerCase() as `0x${string}`)
+  }
+  return [...addresses]
+}
+
+async function boundedRequestBody(
+  request: Request,
+  limit: number,
+): Promise<Uint8Array | null> {
+  if (!request.body) return null
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let length = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      length += value.byteLength
+      if (length > limit) {
+        await reader.cancel()
+        return null
+      }
+      chunks.push(value)
+    }
+  } catch {
+    return null
+  }
+
+  const body = new Uint8Array(length)
+  let offset = 0
+  for (const chunk of chunks) {
+    body.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return body
+}
+
+async function withParticipantResolutionDeadline(
+  operation: (signal: AbortSignal) => Promise<ParticipantIdentityBatch>,
+): Promise<ParticipantIdentityBatch> {
+  const controller = new AbortController()
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort()
+      reject(new Error('Participant identity resolution timed out.'))
+    }, PARTICIPANT_RESOLUTION_TIMEOUT_MS)
+  })
+  try {
+    return await Promise.race([operation(controller.signal), deadline])
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout)
+  }
+}
+
+function rateLimited(): Response {
+  return Response.json(
+    { error: 'rate_limited' },
+    {
+      headers: { ...noStoreJsonHeaders, 'retry-after': '60' },
+      status: 429,
+    },
+  )
 }
 
 async function identityApi(

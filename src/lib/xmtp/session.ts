@@ -1,31 +1,63 @@
 import {
   Client,
   ConsentState,
+  ContentType,
   DeliveryStatus,
   Dm,
   GroupMessageKind,
   IdentifierKind,
   ListConversationsOrderBy,
   LogLevel,
+  ReactionAction,
   SortDirection,
+  isActions,
+  isAttachment,
+  isGroupUpdated,
+  isIntent,
+  isLeaveRequest,
+  isMarkdown,
+  isMultiRemoteAttachment,
+  isReaction,
+  isReadReceipt,
+  isRemoteAttachment,
+  isReply,
+  isText,
+  isTextReply,
+  isTransactionReference,
+  isWalletSendCalls,
   type AsyncStreamProxy,
   type DecodedMessage,
   type Identifier,
+  type InboxState,
   type Signer,
   type XmtpEnv,
 } from '@xmtp/browser-sdk'
 
-import type {
-  ActiveConversation,
-  ConversationSummary,
-  MessageItem,
-  StreamHealth,
+import {
+  MAX_MESSAGE_REACTIONS,
+  type ActiveConversation,
+  type ConversationSummary,
+  type MessageItem,
+  type StreamHealth,
 } from '../../features/messaging/types'
+
+/*
+ * Keep the inbox lookup bounded. If the window contains only silent control
+ * traffic, the row reports that honestly and the conversation's manual
+ * pagination can continue through older history.
+ */
+const INBOX_PREVIEW_SCAN_SIZE = 200n
+
+type LatestDisplayableMessage = {
+  hiddenActivityAt: Date | null
+  message: DecodedMessage | undefined
+}
 
 const VISIBLE_CONSENT_STATES = [ConsentState.Allowed]
 const INBOX_LIMIT = 50n
 const MESSAGE_PAGE_SIZE = 50n
 const CLIENT_INITIALIZATION_TIMEOUT_MS = 30_000
+const NON_TIMELINE_CONTENT_TYPES = [ContentType.Reaction, ContentType.ReadReceipt]
 const SUPPORTED_ENVS: readonly XmtpEnv[] = [
   'local',
   'dev',
@@ -53,6 +85,7 @@ export type ConversationLoad = {
   conversation: ActiveConversation
   hasOlder: boolean
   messages: MessageItem[]
+  scannedMessageCount: number
 }
 
 export type XmtpIdentityRelationship =
@@ -88,6 +121,7 @@ export class XmtpMessagingSession {
   readonly isNewInstallation: boolean
   #messageStream: AsyncStreamProxy<IncomingMessage> | null = null
   #messageStreamStart: Promise<void> | null = null
+  #reactionRefreshVersions = new Map<string, number>()
   #streamGeneration = 0
 
   private constructor(
@@ -188,28 +222,32 @@ export class XmtpMessagingSession {
     const addresses = new Map(
       states.map((state) => [
         state.inboxId,
-        state.accountIdentifiers.find(
-          (identifier) => identifier.identifierKind === IdentifierKind.Ethereum,
-        )?.identifier ?? null,
+        displayAddress(state),
       ]),
     )
 
-    return Promise.all(
+    const summaries = await Promise.all(
       conversations.map(async (conversation, index) => {
         const peerInboxId = peerInboxIds[index]
         if (!peerInboxId) throw new Error('XMTP returned a DM without a peer inbox.')
-        const lastMessage = await conversation.lastMessage()
+        const latest = await this.latestDisplayableMessage(conversation)
+        const lastMessage = latest.message
 
         return {
           id: conversation.id,
           isOwnLastMessage: lastMessage?.senderInboxId === this.inboxId,
           peerAddress: addresses.get(peerInboxId) ?? null,
           peerInboxId,
-          preview: previewFor(lastMessage),
-          updatedAt: lastMessage?.sentAt ?? conversation.createdAt ?? null,
+          preview: previewFor(lastMessage) ?? (
+            latest.hiddenActivityAt ? 'Recent non-message activity' : 'No messages yet'
+          ),
+          updatedAt: lastMessage?.sentAt ?? latest.hiddenActivityAt ??
+            conversation.createdAt ?? null,
         }
       }),
     )
+
+    return summaries.sort(compareConversationActivity)
   }
 
   async loadConversation(
@@ -220,10 +258,7 @@ export class XmtpMessagingSession {
     const conversation = await this.getDm(conversationId)
     const peerInboxId = await conversation.peerInboxId()
     const [state] = await this.client.preferences.getInboxStates([peerInboxId])
-    const peerAddress =
-      state?.accountIdentifiers.find(
-        (identifier) => identifier.identifierKind === IdentifierKind.Ethereum,
-      )?.identifier ?? null
+    const peerAddress = displayAddress(state)
 
     const activeConversation = {
       id: conversation.id,
@@ -242,11 +277,11 @@ export class XmtpMessagingSession {
 
   async loadOlderMessages(
     conversationId: string,
-    loadedMessageCount: number,
-  ): Promise<Pick<ConversationLoad, 'hasOlder' | 'messages'>> {
+    scannedMessageCount: number,
+  ): Promise<Pick<ConversationLoad, 'hasOlder' | 'messages' | 'scannedMessageCount'>> {
     return this.messageWindow(
       await this.getDm(conversationId),
-      normalizeMessageLimit(loadedMessageCount) + Number(MESSAGE_PAGE_SIZE),
+      normalizeMessageLimit(scannedMessageCount) + Number(MESSAGE_PAGE_SIZE),
     )
   }
 
@@ -279,7 +314,7 @@ export class XmtpMessagingSession {
     const optimistic = await this.client.conversations.getMessageById(messageId)
 
     if (!optimistic) throw new Error('XMTP did not persist the outgoing message.')
-    onOptimistic?.(toMessageItem(optimistic, this.inboxId))
+    onOptimistic?.(toRequiredMessageItem(optimistic, this.inboxId))
 
     try {
       await conversation.publishMessages()
@@ -291,7 +326,7 @@ export class XmtpMessagingSession {
 
       return {
         error: null,
-        message: toMessageItem(published, this.inboxId),
+        message: toRequiredMessageItem(published, this.inboxId),
       }
     } catch (error) {
       const current =
@@ -299,14 +334,14 @@ export class XmtpMessagingSession {
       if (current.deliveryStatus === DeliveryStatus.Published) {
         return {
           error: null,
-          message: toMessageItem(current, this.inboxId),
+          message: toRequiredMessageItem(current, this.inboxId),
         }
       }
 
       return {
         error: readableError(error),
         message: {
-          ...toMessageItem(current, this.inboxId),
+          ...toRequiredMessageItem(current, this.inboxId),
           delivery: 'failed',
         },
       }
@@ -321,13 +356,13 @@ export class XmtpMessagingSession {
     if (existing.deliveryStatus === DeliveryStatus.Published) {
       return {
         error: null,
-        message: toMessageItem(existing, this.inboxId),
+        message: toRequiredMessageItem(existing, this.inboxId),
       }
     }
     if (existing.deliveryStatus === DeliveryStatus.Failed) {
       return {
         error: 'XMTP marked this draft as permanently failed. Copy its text into a new message to try again.',
-        message: toMessageItem(existing, this.inboxId),
+        message: toRequiredMessageItem(existing, this.inboxId),
       }
     }
 
@@ -340,7 +375,7 @@ export class XmtpMessagingSession {
 
       return {
         error: null,
-        message: toMessageItem(published, this.inboxId),
+        message: toRequiredMessageItem(published, this.inboxId),
       }
     } catch (error) {
       const current = await this.client.conversations.getMessageById(messageId)
@@ -348,14 +383,14 @@ export class XmtpMessagingSession {
       if (current.deliveryStatus === DeliveryStatus.Published) {
         return {
           error: null,
-          message: toMessageItem(current, this.inboxId),
+          message: toRequiredMessageItem(current, this.inboxId),
         }
       }
 
       return {
         error: readableError(error),
         message: {
-          ...toMessageItem(current, this.inboxId),
+          ...toRequiredMessageItem(current, this.inboxId),
           delivery: 'failed',
         },
       }
@@ -407,9 +442,28 @@ export class XmtpMessagingSession {
         if (generation === this.#streamGeneration) onHealth('retrying')
       },
       onValue: (message) => {
-        if (generation === this.#streamGeneration) {
-          onMessage(toMessageItem(message, this.inboxId))
+        if (generation !== this.#streamGeneration) return
+
+        if (isReaction(message)) {
+          if (!message.content) return
+          const reference = message.content.reference
+          const refreshVersion = (this.#reactionRefreshVersions.get(reference) ?? 0) + 1
+          this.#reactionRefreshVersions.set(reference, refreshVersion)
+          // Browser SDK v7's onValue callback is synchronous and does not
+          // observe returned promises. Keep this callback synchronous and
+          // explicitly contain best-effort parent refresh failures (including
+          // the expected race with client shutdown).
+          void this.#emitReactionParent(
+            reference,
+            refreshVersion,
+            generation,
+            onMessage,
+          ).catch(() => undefined)
+          return
         }
+
+        const item = toMessageItem(message, this.inboxId)
+        if (item) onMessage(item)
       },
       retryAttempts: 6,
       retryDelay: 10_000,
@@ -423,8 +477,31 @@ export class XmtpMessagingSession {
     if (!startupDegraded) onHealth('live')
   }
 
+  async #emitReactionParent(
+    reference: string,
+    refreshVersion: number,
+    generation: number,
+    onMessage: (message: MessageItem) => void,
+  ): Promise<void> {
+    try {
+      const parent = await this.client.conversations.getMessageById(reference)
+      if (
+        generation !== this.#streamGeneration ||
+        this.#reactionRefreshVersions.get(reference) !== refreshVersion ||
+        !parent
+      ) return
+      const updated = toMessageItem(parent, this.inboxId)
+      if (updated) onMessage(updated)
+    } finally {
+      if (this.#reactionRefreshVersions.get(reference) === refreshVersion) {
+        this.#reactionRefreshVersions.delete(reference)
+      }
+    }
+  }
+
   async close(): Promise<void> {
     this.#streamGeneration += 1
+    this.#reactionRefreshVersions.clear()
     const stream = this.#messageStream
     this.#messageStream = null
     const starting = this.#messageStreamStart
@@ -451,23 +528,51 @@ export class XmtpMessagingSession {
     return conversation
   }
 
+  private async latestDisplayableMessage(
+    conversation: Dm,
+  ): Promise<LatestDisplayableMessage> {
+    const [latestCandidate] = await conversation.messages({
+      direction: SortDirection.Descending,
+      excludeContentTypes: NON_TIMELINE_CONTENT_TYPES,
+      kind: GroupMessageKind.Application,
+      limit: 1n,
+    })
+    if (!latestCandidate || displayContentFor(latestCandidate) !== null) {
+      return { hiddenActivityAt: null, message: latestCandidate }
+    }
+
+    const messages = await conversation.messages({
+      direction: SortDirection.Descending,
+      excludeContentTypes: NON_TIMELINE_CONTENT_TYPES,
+      kind: GroupMessageKind.Application,
+      limit: INBOX_PREVIEW_SCAN_SIZE,
+    })
+    return {
+      hiddenActivityAt: latestCandidate.sentAt,
+      message: messages.find((message) => displayContentFor(message) !== null),
+    }
+  }
+
   private async messageWindow(
     conversation: Dm,
     requestedLimit: number,
-  ): Promise<Pick<ConversationLoad, 'hasOlder' | 'messages'>> {
+  ): Promise<Pick<ConversationLoad, 'hasOlder' | 'messages' | 'scannedMessageCount'>> {
     const messageLimit = BigInt(normalizeMessageLimit(requestedLimit))
     const messages = await conversation.messages({
       direction: SortDirection.Descending,
+      excludeContentTypes: NON_TIMELINE_CONTENT_TYPES,
       kind: GroupMessageKind.Application,
       limit: messageLimit + 1n,
     })
-    const page = messages.slice(0, Number(messageLimit))
+    const rawPage = messages.slice(0, Number(messageLimit))
+    const displayable = rawPage
+      .map((message) => toMessageItem(message, this.inboxId, true))
+      .filter((message): message is MessageItem => message !== null)
 
     return {
       hasOlder: messages.length > Number(messageLimit),
-      messages: page
-        .reverse()
-        .map((message) => toMessageItem(message, this.inboxId, true)),
+      messages: displayable.reverse(),
+      scannedMessageCount: rawPage.length,
     }
   }
 }
@@ -531,6 +636,39 @@ function configuredEnvironment(): XmtpEnv {
   return import.meta.env.PROD ? 'production' : 'dev'
 }
 
+function displayAddress(state: InboxState | undefined): string | null {
+  if (!state) return null
+  const ethereumIdentifiers = state.accountIdentifiers.filter(
+    (identifier) => identifier.identifierKind === IdentifierKind.Ethereum,
+  )
+  if (!ethereumIdentifiers.length) return null
+  if (ethereumIdentifiers.length === 1) return ethereumIdentifiers[0]?.identifier ?? null
+
+  // A DM identifies an XMTP inbox, not the particular linked wallet that sent
+  // each message. Prefer the inbox's stable recovery identity when it is an
+  // Ethereum address; otherwise use a deterministic linked-address fallback.
+  if (state.recoveryIdentifier.identifierKind === IdentifierKind.Ethereum) {
+    const recoveryAddress = state.recoveryIdentifier.identifier.toLowerCase()
+    const linkedRecovery = ethereumIdentifiers.find(
+      (identifier) => identifier.identifier.toLowerCase() === recoveryAddress,
+    )
+    if (linkedRecovery) return linkedRecovery.identifier
+  }
+
+  return [...ethereumIdentifiers].sort((left, right) => (
+    left.identifier.toLowerCase().localeCompare(right.identifier.toLowerCase())
+  ))[0]?.identifier ?? null
+}
+
+function compareConversationActivity(
+  left: ConversationSummary,
+  right: ConversationSummary,
+): number {
+  if (!left.updatedAt) return right.updatedAt ? 1 : 0
+  if (!right.updatedAt) return -1
+  return right.updatedAt.getTime() - left.updatedAt.getTime()
+}
+
 function ethereumIdentifier(address: `0x${string}`): Identifier {
   return {
     identifier: address.toLowerCase(),
@@ -538,19 +676,19 @@ function ethereumIdentifier(address: `0x${string}`): Identifier {
   }
 }
 
-function previewFor(message: DecodedMessage | undefined): string {
-  if (!message) return 'No messages yet'
-  if (typeof message.content === 'string') return message.content
-  return message.fallback?.trim() || 'Unsupported message'
+function previewFor(message: DecodedMessage | undefined): string | null {
+  if (!message) return null
+  return displayContentFor(message)?.text ?? null
 }
 
 function toMessageItem(
   message: DecodedMessage,
   ownInboxId: string,
   recoverUnpublished = false,
-): MessageItem {
-  const content = message.content
-  const supported = typeof content === 'string'
+): MessageItem | null {
+  const display = displayContentFor(message)
+  if (!display) return null
+  const reactions = reactionsFor(message)
 
   return {
     canRetry: message.deliveryStatus === DeliveryStatus.Unpublished,
@@ -558,13 +696,162 @@ function toMessageItem(
     delivery: deliveryFor(message.deliveryStatus, recoverUnpublished),
     id: message.id,
     isOwn: message.senderInboxId === ownInboxId,
+    ...(reactions.length ? { reactions } : {}),
+    ...(display.replyTo ? { replyTo: display.replyTo } : {}),
     sentAt: message.sentAt,
     sentAtNs: message.sentAtNs,
-    text: supported
-      ? content
-      : message.fallback?.trim() || 'This message type is not supported yet.',
-    unsupported: !supported,
+    text: display.text,
+    unsupported: display.unsupported,
   }
+}
+
+function toRequiredMessageItem(
+  message: DecodedMessage,
+  ownInboxId: string,
+  recoverUnpublished = false,
+): MessageItem {
+  const item = toMessageItem(message, ownInboxId, recoverUnpublished)
+  if (!item) throw new Error('XMTP returned a text message without displayable content.')
+  return item
+}
+
+type DisplayContent = {
+  replyTo?: string
+  text: string
+  unsupported: boolean
+}
+
+function displayContentFor(message: DecodedMessage): DisplayContent | null {
+  if (isText(message) || isMarkdown(message)) {
+    return typeof message.content === 'string'
+      ? { text: message.content, unsupported: false }
+      : fallbackContent(message)
+  }
+
+  if (isTextReply(message)) {
+    const content = message.content
+    if (!content) return fallbackContent(message)
+    const replyTo = compactPreview(previewFor(content.inReplyTo ?? undefined))
+    return {
+      ...(replyTo ? { replyTo } : {}),
+      text: content.content,
+      unsupported: false,
+    }
+  }
+
+  if (
+    isReaction(message) ||
+    isReadReceipt(message) ||
+    isGroupUpdated(message) ||
+    isLeaveRequest(message)
+  ) return null
+
+  if (isAttachment(message)) {
+    const content = message.content
+    if (!content) return fallbackContent(message)
+    return {
+      text: attachmentLabel(content.filename, content.mimeType),
+      unsupported: false,
+    }
+  }
+
+  if (isRemoteAttachment(message)) {
+    const content = message.content
+    if (!content) return fallbackContent(message)
+    return {
+      text: attachmentLabel(content.filename),
+      unsupported: false,
+    }
+  }
+
+  if (isMultiRemoteAttachment(message)) {
+    const content = message.content
+    if (!content) return fallbackContent(message)
+    const count = content.attachments.length
+    return {
+      text: count === 1 ? '1 attachment' : `${count} attachments`,
+      unsupported: false,
+    }
+  }
+
+  if (isTransactionReference(message)) {
+    const content = message.content
+    if (!content) return fallbackContent(message)
+    return {
+      text: `Transaction on ${content.networkId}: ${shortValue(content.reference)}`,
+      unsupported: false,
+    }
+  }
+
+  if (isWalletSendCalls(message)) {
+    const content = message.content
+    if (!content) return fallbackContent(message)
+    return {
+      text: `Transaction request on ${content.chainId}`,
+      unsupported: false,
+    }
+  }
+
+  if (isReply(message) || isActions(message) || isIntent(message)) {
+    return fallbackContent(message)
+  }
+
+  return fallbackContent(message)
+}
+
+function fallbackContent(message: DecodedMessage): DisplayContent | null {
+  const fallback = message.fallback?.trim()
+  return fallback ? { text: fallback, unsupported: true } : null
+}
+
+function attachmentLabel(filename?: string, mimeType?: string): string {
+  const safeFilename = filename?.trim()
+  if (safeFilename) return `Attachment: ${safeFilename}`
+  const safeMimeType = mimeType?.trim()
+  return safeMimeType ? `Attachment (${safeMimeType})` : 'Attachment'
+}
+
+function compactPreview(value: string | null, maxLength = 120): string | undefined {
+  if (!value) return undefined
+  const compact = value.replace(/\s+/g, ' ').trim()
+  if (!compact) return undefined
+  return compact.length <= maxLength
+    ? compact
+    : `${compact.slice(0, maxLength - 1)}…`
+}
+
+function shortValue(value: string, left = 10, right = 8): string {
+  if (value.length <= left + right + 1) return value
+  return `${value.slice(0, left)}…${value.slice(-right)}`
+}
+
+function reactionsFor(message: DecodedMessage): NonNullable<MessageItem['reactions']> {
+  const active = new Map<string, string>()
+  const reactions = [...(message.reactions ?? [])]
+    .filter(isReaction)
+    .sort((left, right) => left.sentAtNs < right.sentAtNs
+      ? -1
+      : left.sentAtNs > right.sentAtNs ? 1 : left.id.localeCompare(right.id))
+
+  for (const reaction of reactions) {
+    const reactionContent = reaction.content
+    if (!reactionContent) continue
+    const content = reactionContent.content.trim()
+    if (!content || content.length > 64) continue
+    const key = `${reaction.senderInboxId}\u0000${content}`
+    if (reactionContent.action === ReactionAction.Added) active.set(key, content)
+    if (reactionContent.action === ReactionAction.Removed) active.delete(key)
+  }
+
+  const counts = new Map<string, number>()
+  for (const content of active.values()) {
+    counts.set(content, (counts.get(content) ?? 0) + 1)
+  }
+  return [...counts]
+    .map(([content, count]) => ({ content, count }))
+    .sort((left, right) => right.count - left.count ||
+      left.content.localeCompare(right.content))
+    .slice(0, MAX_MESSAGE_REACTIONS)
 }
 
 function deliveryFor(

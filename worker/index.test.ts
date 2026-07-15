@@ -25,6 +25,7 @@ function environment(overrides: Partial<AppEnv> = {}): AppEnv {
       tag: 'release-tag',
       timestamp: '2026-07-14T19:00:00.000Z',
     },
+    IDENTITY_RATE_LIMITER: fakeRateLimiter(),
     ...overrides,
   }
 }
@@ -89,6 +90,249 @@ describe('worker API', () => {
       8531,
       'https://ethereum-rpc.publicnode.com,https://eth.llamarpc.com',
     )
+  })
+
+  it('resolves authenticated participant display identities without D1', async () => {
+    const dependencies = identityDependencies()
+    dependencies.resolveParticipantIdentities.mockResolvedValue({
+      identities: [{
+        address: '0x2222222222222222222222222222222222222222',
+        basename: 'alice.base.eth',
+        ensName: 'alice.eth',
+        farcasterFid: 10,
+        registeredFname: 'alice',
+      }],
+      status: 'complete',
+    })
+    const limiter = fakeRateLimiter()
+    const response = await handleRequest(
+      authorizedRequest('/api/identities', {
+        body: JSON.stringify({
+          addresses: ['0x2222222222222222222222222222222222222222'],
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+      environment({
+        FARCASTER_BASE_RPC_URL: 'https://base-rpc.example',
+        IDENTITY_RATE_LIMITER: limiter,
+      }),
+      dependencies,
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    await expect(response.json()).resolves.toEqual({
+      identities: [{
+        address: '0x2222222222222222222222222222222222222222',
+        basename: 'alice.base.eth',
+        ensName: 'alice.eth',
+        registeredFname: 'alice',
+      }],
+      partial: false,
+    })
+    expect(dependencies.resolveParticipantIdentities).toHaveBeenCalledWith(
+      ['0x2222222222222222222222222222222222222222'],
+      'https://ethereum-rpc.publicnode.com,https://eth.llamarpc.com',
+      expect.objectContaining({
+        baseRpcUrl: 'https://base-rpc.example',
+        signal: expect.any(AbortSignal),
+      }),
+    )
+    expect(limiter.limit).toHaveBeenCalledWith({
+      key: 'production:participant-identities:fid:8531',
+    })
+  })
+
+  it('allows ENS-only results when the optional Base secret is absent', async () => {
+    const dependencies = identityDependencies()
+    dependencies.resolveParticipantIdentities.mockResolvedValue({
+      identities: [{
+        address: '0x2222222222222222222222222222222222222222',
+        basename: 'alice.base.eth',
+        ensName: 'alice.eth',
+        farcasterFid: null,
+        registeredFname: null,
+      }],
+      status: 'complete',
+    })
+    const response = await handleRequest(
+      participantRequest(),
+      environment(),
+      dependencies,
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      identities: [{
+        ensName: 'alice.eth',
+        registeredFname: null,
+      }],
+      partial: false,
+    })
+    expect(dependencies.resolveParticipantIdentities).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(String),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+    const options = dependencies.resolveParticipantIdentities.mock.calls[0]?.[2]
+    expect(options).not.toHaveProperty('baseRpcUrl')
+  })
+
+  it('returns partial results but rejects unavailable resolver batches', async () => {
+    const dependencies = identityDependencies()
+    dependencies.resolveParticipantIdentities.mockResolvedValueOnce({
+      identities: [],
+      status: 'partial',
+    }).mockResolvedValueOnce({
+      identities: [],
+      status: 'unavailable',
+    })
+
+    const partial = await handleRequest(
+      participantRequest(),
+      environment(),
+      dependencies,
+    )
+    const unavailable = await handleRequest(
+      participantRequest(),
+      environment(),
+      dependencies,
+    )
+
+    expect(partial.status).toBe(200)
+    await expect(partial.json()).resolves.toEqual({ identities: [], partial: true })
+    expect(unavailable.status).toBe(503)
+    await expect(unavailable.json()).resolves.toEqual({
+      error: 'identity_unavailable',
+    })
+  })
+
+  it('rate-limits by verified FID before calling identity providers', async () => {
+    const dependencies = identityDependencies()
+    const limiter = fakeRateLimiter(false)
+    const response = await handleRequest(
+      participantRequest(),
+      environment({ IDENTITY_RATE_LIMITER: limiter }),
+      dependencies,
+    )
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get('retry-after')).toBe('60')
+    await expect(response.json()).resolves.toEqual({ error: 'rate_limited' })
+    expect(limiter.limit).toHaveBeenCalledWith({
+      key: 'production:participant-identities:fid:8531',
+    })
+    expect(dependencies.resolveParticipantIdentities).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the rate-limit binding is unavailable', async () => {
+    const dependencies = identityDependencies()
+    const limiter = fakeRateLimiter()
+    vi.mocked(limiter.limit).mockRejectedValueOnce(new Error('binding unavailable'))
+    const response = await handleRequest(
+      participantRequest(),
+      environment({ IDENTITY_RATE_LIMITER: limiter }),
+      dependencies,
+    )
+
+    expect(response.status).toBe(503)
+    expect(dependencies.resolveParticipantIdentities).not.toHaveBeenCalled()
+  })
+
+  it('does not spend rate-limit budget when Quick Auth fails', async () => {
+    const dependencies = identityDependencies()
+    dependencies.verifyQuickAuthToken.mockRejectedValue(new Error('bad token'))
+    const limiter = fakeRateLimiter()
+    const response = await handleRequest(
+      participantRequest(),
+      environment({ IDENTITY_RATE_LIMITER: limiter }),
+      dependencies,
+    )
+
+    expect(response.status).toBe(401)
+    expect(limiter.limit).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed or oversized participant lookup batches', async () => {
+    const dependencies = identityDependencies()
+    const malformed = await handleRequest(
+      authorizedRequest('/api/identities', {
+        body: JSON.stringify({ addresses: ['not-an-address'] }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+      environment(),
+      dependencies,
+    )
+    const oversized = await handleRequest(
+      authorizedRequest('/api/identities', {
+        body: JSON.stringify({
+          addresses: Array.from({ length: 13 }, (_, index) => (
+            `0x${String(index + 1).padStart(40, '0')}`
+          )),
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+      environment(),
+      dependencies,
+    )
+
+    expect(malformed.status).toBe(400)
+    expect(oversized.status).toBe(400)
+    expect(dependencies.resolveParticipantIdentities).not.toHaveBeenCalled()
+  })
+
+  it('enforces the byte limit when Content-Length is absent', async () => {
+    const dependencies = identityDependencies()
+    const limiter = fakeRateLimiter()
+    const request = authorizedRequest('/api/identities', {
+      body: JSON.stringify({
+        addresses: ['0x2222222222222222222222222222222222222222'],
+        padding: 'x'.repeat(17_000),
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    })
+    expect(request.headers.get('content-length')).toBeNull()
+
+    const response = await handleRequest(
+      request,
+      environment({ IDENTITY_RATE_LIMITER: limiter }),
+      dependencies,
+    )
+
+    expect(response.status).toBe(400)
+    expect(limiter.limit).not.toHaveBeenCalled()
+    expect(dependencies.resolveParticipantIdentities).not.toHaveBeenCalled()
+  })
+
+  it('ends participant resolution after the endpoint deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const dependencies = identityDependencies()
+      dependencies.resolveParticipantIdentities.mockImplementation(
+        () => new Promise(() => undefined),
+      )
+      const responsePromise = handleRequest(
+        participantRequest(),
+        environment(),
+        dependencies,
+      )
+      await vi.waitFor(() => {
+        expect(dependencies.resolveParticipantIdentities).toHaveBeenCalledOnce()
+      })
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      const response = await responsePromise
+
+      expect(response.status).toBe(503)
+      const options = dependencies.resolveParticipantIdentities.mock.calls[0]?.[2]
+      expect(options?.signal?.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('requires exact-domain Quick Auth and configured server storage', async () => {
@@ -195,6 +439,22 @@ function authorizedRequest(path: string, init: RequestInit = {}) {
   return new Request(`https://miniapp.converge.cv${path}`, { ...init, headers })
 }
 
+function participantRequest() {
+  return authorizedRequest('/api/identities', {
+    body: JSON.stringify({
+      addresses: ['0x2222222222222222222222222222222222222222'],
+    }),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  })
+}
+
+function fakeRateLimiter(success = true): RateLimit {
+  return {
+    limit: vi.fn().mockResolvedValue({ success }),
+  }
+}
+
 function identityDependencies() {
   return {
     discoverEnsIdentity: vi.fn().mockResolvedValue({
@@ -203,6 +463,10 @@ function identityDependencies() {
         name: 'deanpierce.eth',
       },
       status: 'available',
+    }),
+    resolveParticipantIdentities: vi.fn().mockResolvedValue({
+      identities: [],
+      status: 'complete',
     }),
     verifyQuickAuthToken: vi.fn().mockResolvedValue(8531),
   } satisfies WorkerDependencies

@@ -2,8 +2,11 @@ import { ArrowDownUp, ArrowLeft, RefreshCw, WifiOff } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { Avatar } from '../../components/Avatar'
+import {
+  participantPresentation,
+  type ParticipantIdentity,
+} from '../identity/useParticipantIdentities'
 import type { ActiveConversation, MessageItem, StreamHealth } from './types'
-import { shortIdentity } from './format'
 import { MessageBubble } from './MessageBubble'
 import { MessageComposer } from './MessageComposer'
 
@@ -20,6 +23,7 @@ type ConversationScreenProps = {
   onRetry: (messageId: string) => void
   onRetryLiveUpdates: () => void
   onSend: (text: string) => Promise<void>
+  participantIdentity?: ParticipantIdentity | null
   sending: boolean
   streamHealth: StreamHealth
 }
@@ -35,6 +39,7 @@ export function ConversationScreen({
   onRetry,
   onRetryLiveUpdates,
   onSend,
+  participantIdentity = null,
   sending,
   streamHealth,
 }: ConversationScreenProps) {
@@ -44,6 +49,7 @@ export function ConversationScreen({
   const loadingEarlierRef = useRef(false)
   const [hasNewMessages, setHasNewMessages] = useState(false)
   const identity = conversation.peerAddress ?? conversation.peerInboxId
+  const presentation = participantPresentation(identity, participantIdentity)
 
   useLayoutEffect(() => {
     const scroller = scrollerRef.current
@@ -113,10 +119,10 @@ export function ConversationScreen({
         <button className="icon-button" type="button" onClick={onBack} aria-label="Back to inbox">
           <ArrowLeft aria-hidden="true" />
         </button>
-        <Avatar name={identity} />
-        <div>
-          <h1 id="conversation-title">{shortIdentity(identity)}</h1>
-          <span>XMTP direct message</span>
+        <Avatar name={presentation.label.replace(/^@/u, '')} />
+        <div title={presentation.title}>
+          <h1 id="conversation-title">{presentation.label}</h1>
+          <span>{presentation.secondary} · XMTP direct message</span>
         </div>
       </header>
 

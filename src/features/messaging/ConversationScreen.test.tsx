@@ -39,6 +39,25 @@ function renderConversation(overrides: Partial<Parameters<typeof ConversationScr
 }
 
 describe('ConversationScreen', () => {
+  it('shows resolved peer identity while retaining the wallet address', () => {
+    renderConversation({
+      conversation: {
+        id: 'conversation-1',
+        peerAddress: '0x2222222222222222222222222222222222222222',
+        peerInboxId: 'peer-inbox',
+      },
+      participantIdentity: {
+        address: '0x2222222222222222222222222222222222222222',
+        basename: 'alice.base.eth',
+        ensName: 'alice.eth',
+        registeredFname: 'alice',
+      },
+    })
+
+    expect(screen.getByRole('heading', { name: 'alice.eth' })).toBeVisible()
+    expect(screen.getByText(/registered fname @alice.*alice\.base\.eth.*0x2222…2222/ui)).toBeVisible()
+  })
+
   it('does not announce initial history as newly arrived content', () => {
     const { rerender } = renderConversation({ loading: true })
     expect(screen.getByRole('log')).toHaveAttribute('aria-live', 'off')

@@ -23,6 +23,16 @@
       "migrations_dir": "migrations"
     }
   ],
+  "ratelimits": [
+    {
+      "name": "IDENTITY_RATE_LIMITER",
+      "namespace_id": "10000403",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ],
   "vars": {
     "APP_ENV": "production",
     "APP_VERSION": "0.1.0",
@@ -48,6 +58,16 @@
           "database_name": "converge-miniapp-preview-preferences",
           "database_id": "abc733c8-1305-4320-a752-a19e5b72b566",
           "migrations_dir": "migrations"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "IDENTITY_RATE_LIMITER",
+          "namespace_id": "10000403",
+          "simple": {
+            "limit": 10,
+            "period": 60
+          }
         }
       ],
       "vars": {

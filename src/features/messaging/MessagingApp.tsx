@@ -3,7 +3,7 @@ import {
   PanelsTopLeft,
   X,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '../../components/Button'
 import { StatePanel } from '../../components/StatePanel'
@@ -13,6 +13,7 @@ import {
   type EnsCandidate,
   type EnsPreference,
 } from '../identity/useEnsIdentity'
+import { useParticipantIdentities } from '../identity/useParticipantIdentities'
 import { ConversationScreen } from './ConversationScreen'
 import { InboxScreen } from './InboxScreen'
 import { NewDmScreen } from './NewDmScreen'
@@ -73,6 +74,14 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
     enabled: messaging.connection.phase === 'ready' && messaging.address !== null,
     fid: user.fid,
     inspectRelationship: messaging.inspectIdentityRelationship,
+  })
+  const participantAddresses = useMemo(() => [
+    messaging.activeConversation?.peerAddress,
+    ...messaging.conversations.map((conversation) => conversation.peerAddress),
+  ], [messaging.activeConversation?.peerAddress, messaging.conversations])
+  const participantIdentities = useParticipantIdentities({
+    addresses: participantAddresses,
+    enabled: messaging.connection.phase === 'ready',
   })
   useMiniAppBack(
     canUseBack,
@@ -276,6 +285,7 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
           onRefreshEns={ensIdentity.refresh}
           onRetryLiveUpdates={messaging.retryLiveUpdates}
           onUseEns={() => void setEnsPreference('accepted')}
+          participantIdentityFor={participantIdentities.identityFor}
           profile={user}
           refreshing={messaging.refreshing}
           streamHealth={messaging.streamHealth}
@@ -302,6 +312,9 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
           onRetry={messaging.retryMessage}
           onRetryLiveUpdates={messaging.retryLiveUpdates}
           onSend={messaging.sendMessage}
+          participantIdentity={participantIdentities.identityFor(
+            messaging.activeConversation.peerAddress,
+          )}
           sending={messaging.sending}
           streamHealth={messaging.streamHealth}
         />

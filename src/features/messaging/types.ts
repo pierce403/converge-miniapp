@@ -1,5 +1,12 @@
 export type MessageDelivery = 'sending' | 'sent' | 'failed'
 
+export const MAX_MESSAGE_REACTIONS = 24
+
+export type MessageReaction = {
+  content: string
+  count: number
+}
+
 export type MessageItem = {
   canRetry: boolean
   conversationId: string
@@ -8,6 +15,8 @@ export type MessageItem = {
   isOwn: boolean
   sentAt: Date
   sentAtNs: bigint
+  reactions?: MessageReaction[]
+  replyTo?: string
   text: string
   unsupported: boolean
 }

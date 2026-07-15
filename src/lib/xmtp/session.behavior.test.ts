@@ -19,13 +19,36 @@ vi.mock('@xmtp/browser-sdk', () => {
   return {
     Client: { create: sdkMocks.create },
     ConsentState: { Allowed: 1 },
+    ContentType: { Reaction: 9, ReadReceipt: 10 },
     DeliveryStatus: { Failed: 2, Published: 1, Unpublished: 0 },
     Dm: MockDm,
     GroupMessageKind: { Application: 1 },
     IdentifierKind: { Ethereum: 0 },
     ListConversationsOrderBy: { LastActivity: 1 },
     LogLevel: { Off: 0 },
+    ReactionAction: { Added: 1, Removed: 2 },
     SortDirection: { Ascending: 0, Descending: 1 },
+    isActions: (message: DecodedMessage) => message.contentType?.typeId === 'actions',
+    isAttachment: (message: DecodedMessage) => message.contentType?.typeId === 'attachment',
+    isGroupUpdated: (message: DecodedMessage) => message.contentType?.typeId === 'group_updated',
+    isIntent: (message: DecodedMessage) => message.contentType?.typeId === 'intent',
+    isLeaveRequest: (message: DecodedMessage) => message.contentType?.typeId === 'leave_request',
+    isMarkdown: (message: DecodedMessage) => message.contentType?.typeId === 'markdown',
+    isMultiRemoteAttachment: (message: DecodedMessage) =>
+      message.contentType?.typeId === 'multiRemoteStaticAttachment',
+    isReaction: (message: DecodedMessage) => message.contentType?.typeId === 'reaction',
+    isReadReceipt: (message: DecodedMessage) => message.contentType?.typeId === 'readReceipt',
+    isRemoteAttachment: (message: DecodedMessage) =>
+      message.contentType?.typeId === 'remoteStaticAttachment',
+    isReply: (message: DecodedMessage) => message.contentType?.typeId === 'reply',
+    isText: (message: DecodedMessage) => message.contentType?.typeId === 'text',
+    isTextReply: (message: DecodedMessage) =>
+      message.contentType?.typeId === 'reply' &&
+      typeof (message.content as { content?: unknown } | undefined)?.content === 'string',
+    isTransactionReference: (message: DecodedMessage) =>
+      message.contentType?.typeId === 'transactionReference',
+    isWalletSendCalls: (message: DecodedMessage) =>
+      message.contentType?.typeId === 'walletSendCalls',
   }
 })
 
@@ -54,11 +77,45 @@ function message(options: {
   const sentAt = new Date(options.sentAt)
   return {
     content: options.id,
+    contentType: {
+      authorityId: 'xmtp.org',
+      typeId: 'text',
+      versionMajor: 1,
+      versionMinor: 0,
+    },
     conversationId: 'conversation-1',
     deliveryStatus: options.status,
     fallback: undefined,
     id: options.id,
+    reactions: [],
     senderInboxId: 'own-inbox',
+    sentAt,
+    sentAtNs: BigInt(sentAt.getTime()) * 1_000_000n,
+  } as unknown as DecodedMessage
+}
+
+function typedMessage(options: {
+  content: unknown
+  fallback?: string
+  id: string
+  reactions?: DecodedMessage[]
+  typeId: string
+}): DecodedMessage {
+  const sentAt = new Date('2026-07-14T12:00:00Z')
+  return {
+    content: options.content,
+    contentType: {
+      authorityId: 'xmtp.org',
+      typeId: options.typeId,
+      versionMajor: 1,
+      versionMinor: 0,
+    },
+    conversationId: 'conversation-1',
+    deliveryStatus: DeliveryStatus.Published,
+    fallback: options.fallback,
+    id: options.id,
+    reactions: options.reactions ?? [],
+    senderInboxId: 'peer-inbox',
     sentAt,
     sentAtNs: BigInt(sentAt.getTime()) * 1_000_000n,
   } as unknown as DecodedMessage
@@ -245,6 +302,170 @@ describe('XmtpMessagingSession behavior', () => {
     })
   })
 
+  it('uses the stable recovery Ethereum identity as the peer display address', async () => {
+    const conversation = dm({ messages: vi.fn().mockResolvedValue([]) })
+    const fakeClient = client(conversation)
+    fakeClient.preferences.getInboxStates.mockResolvedValue([{
+      accountIdentifiers: [
+        {
+          identifier: '0x1111111111111111111111111111111111111111',
+          identifierKind: IdentifierKind.Ethereum,
+        },
+        {
+          identifier: '0x2222222222222222222222222222222222222222',
+          identifierKind: IdentifierKind.Ethereum,
+        },
+      ],
+      inboxId: 'peer-inbox',
+      recoveryIdentifier: {
+        identifier: '0x1111111111111111111111111111111111111111',
+        identifierKind: IdentifierKind.Ethereum,
+      },
+    }])
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const loaded = await session.loadConversation('conversation-1')
+
+    expect(loaded.conversation.peerAddress).toBe(
+      '0x1111111111111111111111111111111111111111',
+    )
+  })
+
+  it('drops silent control payloads instead of rendering unsupported bubbles', async () => {
+    const silentCustom = typedMessage({
+      content: 'typing',
+      id: 'typing-style-control',
+      typeId: 'typingIndicator',
+    })
+    const readReceipt = typedMessage({
+      content: {},
+      id: 'receipt',
+      typeId: 'readReceipt',
+    })
+    const visibleFallback = typedMessage({
+      content: undefined,
+      fallback: 'Open this message in a compatible client.',
+      id: 'fallback',
+      typeId: 'futureContent',
+    })
+    const conversation = dm({
+      messages: vi.fn().mockResolvedValue([
+        silentCustom,
+        readReceipt,
+        visibleFallback,
+      ]),
+    })
+    const fakeClient = client(conversation)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const loaded = await session.loadConversation('conversation-1')
+
+    expect(loaded.messages).toEqual([
+      expect.objectContaining({
+        id: 'fallback',
+        text: 'Open this message in a compatible client.',
+        unsupported: true,
+      }),
+    ])
+  })
+
+  it('projects text replies, attachment metadata, and parent reactions', async () => {
+    const reaction = typedMessage({
+      content: {
+        action: 1,
+        content: '😁',
+        reference: 'parent',
+        referenceInboxId: 'peer-inbox',
+        schema: 1,
+      },
+      id: 'reaction',
+      typeId: 'reaction',
+    })
+    const parent = typedMessage({
+      content: 'Original message',
+      id: 'parent',
+      reactions: [reaction],
+      typeId: 'text',
+    })
+    const reply = typedMessage({
+      content: {
+        content: 'A reply',
+        inReplyTo: parent,
+        referenceId: 'parent',
+      },
+      id: 'reply',
+      typeId: 'reply',
+    })
+    const attachment = typedMessage({
+      content: {
+        content: new Uint8Array(),
+        filename: 'photo.jpg',
+        mimeType: 'image/jpeg',
+      },
+      id: 'attachment',
+      typeId: 'attachment',
+    })
+    const conversation = dm({
+      messages: vi.fn().mockResolvedValue([attachment, reply, parent]),
+    })
+    const fakeClient = client(conversation)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const loaded = await session.loadConversation('conversation-1')
+
+    expect(loaded.messages).toEqual([
+      expect.objectContaining({
+        id: 'parent',
+        reactions: [{ content: '😁', count: 1 }],
+      }),
+      expect.objectContaining({
+        id: 'reply',
+        replyTo: 'Original message',
+        text: 'A reply',
+      }),
+      expect.objectContaining({
+        id: 'attachment',
+        text: 'Attachment: photo.jpg',
+        unsupported: false,
+      }),
+    ])
+  })
+
+  it('caps distinct reaction summaries on an enriched parent', async () => {
+    const reactions = Array.from({ length: 30 }, (_, index) => typedMessage({
+      content: {
+        action: 1,
+        content: `:${index}:`,
+        reference: 'parent',
+        referenceInboxId: `peer-${index}`,
+        schema: 2,
+      },
+      id: `reaction-${index}`,
+      typeId: 'reaction',
+    }))
+    reactions.forEach((reaction, index) => {
+      reaction.senderInboxId = `peer-${index}`
+    })
+    const parent = typedMessage({
+      content: 'Original message',
+      id: 'parent',
+      reactions,
+      typeId: 'text',
+    })
+    const fakeClient = client(dm({
+      messages: vi.fn().mockResolvedValue([parent]),
+    }))
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const loaded = await session.loadConversation('conversation-1')
+
+    expect(loaded.messages[0]?.reactions).toHaveLength(24)
+  })
+
   it('requests best-effort history only for a new installation', async () => {
     const newClient = client(dm())
     sdkMocks.create.mockResolvedValueOnce(newClient)
@@ -304,6 +525,106 @@ describe('XmtpMessagingSession behavior', () => {
     )
   })
 
+  it('reads one preview candidate per row and sorts by displayable activity', async () => {
+    const silentControl = typedMessage({
+      content: undefined,
+      id: 'silent-control',
+      typeId: 'typingIndicator',
+    })
+    const silentSentAt = new Date('2026-07-14T13:00:00Z')
+    silentControl.sentAt = silentSentAt
+    silentControl.sentAtNs = BigInt(silentSentAt.getTime()) * 1_000_000n
+
+    const olderVisible = message({
+      id: 'older-visible',
+      sentAt: '2026-07-14T10:00:00Z',
+      status: DeliveryStatus.Published,
+    })
+    const newerVisible = message({
+      id: 'newer-visible',
+      sentAt: '2026-07-14T12:00:00Z',
+      status: DeliveryStatus.Published,
+    })
+    const noisyMessages = vi.fn()
+      .mockResolvedValueOnce([silentControl])
+      .mockResolvedValueOnce([silentControl, olderVisible])
+    const recentMessages = vi.fn().mockResolvedValue([newerVisible])
+    const noisy = dm({
+      id: 'noisy-conversation',
+      messages: noisyMessages,
+      peerInboxId: vi.fn().mockResolvedValue('noisy-peer'),
+    })
+    const recent = dm({
+      id: 'recent-conversation',
+      messages: recentMessages,
+      peerInboxId: vi.fn().mockResolvedValue('recent-peer'),
+    })
+    const fakeClient = client(noisy)
+    fakeClient.conversations.listDms.mockResolvedValue([noisy, recent])
+    fakeClient.preferences.getInboxStates.mockResolvedValue([
+      {
+        accountIdentifiers: [{
+          identifier: '0x1111111111111111111111111111111111111111',
+          identifierKind: IdentifierKind.Ethereum,
+        }],
+        inboxId: 'noisy-peer',
+      },
+      {
+        accountIdentifiers: [{
+          identifier: '0x2222222222222222222222222222222222222222',
+          identifierKind: IdentifierKind.Ethereum,
+        }],
+        inboxId: 'recent-peer',
+      },
+    ])
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const summaries = await session.readInbox()
+
+    expect(summaries.map(({ id }) => id)).toEqual([
+      'recent-conversation',
+      'noisy-conversation',
+    ])
+    expect(noisyMessages).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      limit: 1n,
+    }))
+    expect(noisyMessages).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      limit: 200n,
+    }))
+    expect(recentMessages).toHaveBeenCalledOnce()
+    expect(recentMessages).toHaveBeenCalledWith(expect.objectContaining({ limit: 1n }))
+  })
+
+  it('reports hidden control activity when the bounded inbox preview scan is exhausted', async () => {
+    const latestControl = typedMessage({
+      content: undefined,
+      id: 'latest-control',
+      typeId: 'typingIndicator',
+    })
+    const latestSentAt = new Date('2026-07-14T13:00:00Z')
+    latestControl.sentAt = latestSentAt
+    latestControl.sentAtNs = BigInt(latestSentAt.getTime()) * 1_000_000n
+    const messages = vi.fn()
+      .mockResolvedValueOnce([latestControl])
+      .mockResolvedValueOnce(Array.from({ length: 200 }, () => latestControl))
+    const conversation = dm({ messages })
+    const fakeClient = client(conversation)
+    fakeClient.conversations.listDms.mockResolvedValue([conversation])
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const [summary] = await session.readInbox()
+
+    expect(summary).toMatchObject({
+      preview: 'Recent non-message activity',
+      updatedAt: latestSentAt,
+    })
+    expect(messages).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      limit: 200n,
+    }))
+  })
+
   it('pages older messages by expanding a contiguous newest-message window', async () => {
     const older = message({
       id: 'older',
@@ -326,6 +647,59 @@ describe('XmtpMessagingSession behavior', () => {
     }))
     expect(page).toMatchObject({ hasOlder: false })
     expect(page.messages.map((item) => item.id)).toEqual(['older'])
+  })
+
+  it('advances the raw message window when silent controls span multiple pages', async () => {
+    const silentControls = Array.from({ length: 120 }, (_, index) => typedMessage({
+      content: undefined,
+      id: `silent-${index}`,
+      typeId: 'typingIndicator',
+    }))
+    const olderVisible = message({
+      id: 'older-visible',
+      sentAt: '2026-07-14T11:00:00Z',
+      status: DeliveryStatus.Published,
+    })
+    const storedMessages = [...silentControls, olderVisible]
+    const messages = vi.fn().mockImplementation((options?: { limit?: bigint }) => (
+      Promise.resolve(storedMessages.slice(0, Number(options?.limit ?? 0n)))
+    ))
+    const conversation = dm({ messages })
+    const fakeClient = client(conversation)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const initial = await session.loadConversation('conversation-1')
+
+    expect(initial).toMatchObject({
+      hasOlder: true,
+      messages: [],
+      scannedMessageCount: 50,
+    })
+
+    const secondPage = await session.loadOlderMessages(
+      'conversation-1',
+      initial.scannedMessageCount,
+    )
+    expect(secondPage).toMatchObject({
+      hasOlder: true,
+      messages: [],
+      scannedMessageCount: 100,
+    })
+
+    const finalPage = await session.loadOlderMessages(
+      'conversation-1',
+      secondPage.scannedMessageCount,
+    )
+    expect(finalPage.hasOlder).toBe(false)
+    expect(finalPage.scannedMessageCount).toBe(121)
+    expect(finalPage.messages.map(({ id }) => id)).toEqual(['older-visible'])
+    expect(messages.mock.calls.map(([options]) => options.limit)).toEqual([
+      51n,
+      51n,
+      101n,
+      151n,
+    ])
   })
 
   it('marks a full page when another older page exists', async () => {
@@ -372,6 +746,143 @@ describe('XmtpMessagingSession behavior', () => {
     expect(fakeClient.conversations.streamAllDmMessages).toHaveBeenCalledOnce()
     callbacks?.onRestart?.()
     expect(onHealth).toHaveBeenLastCalledWith('live')
+  })
+
+  it('refreshes reaction parents without leaking rejected callback promises', async () => {
+    const reaction = typedMessage({
+      content: {
+        action: 1,
+        content: '😁',
+        reference: 'parent',
+        referenceInboxId: 'peer-inbox',
+        schema: 1,
+      },
+      id: 'reaction',
+      typeId: 'reaction',
+    })
+    const parent = typedMessage({
+      content: 'Parent message',
+      id: 'parent',
+      reactions: [reaction],
+      typeId: 'text',
+    })
+    const conversation = dm()
+    const fakeClient = client(conversation)
+    const stream = { end: vi.fn().mockResolvedValue(undefined), isDone: false }
+    let onValue: ((message: DecodedMessage) => void) | undefined
+    let resolveLateParent!: (message: DecodedMessage | undefined) => void
+    fakeClient.conversations.streamAllDmMessages.mockImplementation(async (options) => {
+      onValue = options.onValue
+      return stream
+    })
+    fakeClient.conversations.getMessageById
+      .mockResolvedValueOnce(parent)
+      .mockRejectedValueOnce(new Error('worker closed'))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveLateParent = resolve
+      }))
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const onMessage = vi.fn()
+    await session.startMessageStream(onMessage, vi.fn())
+
+    onValue?.(reaction)
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'parent',
+        reactions: [{ content: '😁', count: 1 }],
+      }),
+    ))
+
+    onValue?.(reaction)
+    await vi.waitFor(() => {
+      expect(fakeClient.conversations.getMessageById).toHaveBeenCalledTimes(2)
+    })
+    await Promise.resolve()
+    expect(onMessage).toHaveBeenCalledOnce()
+
+    onValue?.(reaction)
+    await vi.waitFor(() => {
+      expect(fakeClient.conversations.getMessageById).toHaveBeenCalledTimes(3)
+    })
+    await session.close()
+    resolveLateParent(parent)
+    await Promise.resolve()
+    expect(onMessage).toHaveBeenCalledOnce()
+  })
+
+  it('ignores an out-of-order stale reaction-parent refresh', async () => {
+    const added = typedMessage({
+      content: {
+        action: 1,
+        content: '👍',
+        reference: 'parent',
+        referenceInboxId: 'peer-inbox',
+        schema: 1,
+      },
+      id: 'reaction-added',
+      typeId: 'reaction',
+    })
+    const removed = typedMessage({
+      content: {
+        action: 2,
+        content: '👍',
+        reference: 'parent',
+        referenceInboxId: 'peer-inbox',
+        schema: 1,
+      },
+      id: 'reaction-removed',
+      typeId: 'reaction',
+    })
+    const staleParent = typedMessage({
+      content: 'Parent message',
+      id: 'parent',
+      reactions: [added],
+      typeId: 'text',
+    })
+    const latestParent = typedMessage({
+      content: 'Parent message',
+      id: 'parent',
+      reactions: [],
+      typeId: 'text',
+    })
+    const fakeClient = client(dm())
+    let onValue: ((message: DecodedMessage) => void) | undefined
+    let resolveFirst!: (message: DecodedMessage | undefined) => void
+    let resolveSecond!: (message: DecodedMessage | undefined) => void
+    fakeClient.conversations.streamAllDmMessages.mockImplementation(async (options) => {
+      onValue = options.onValue
+      return { end: vi.fn(), isDone: false }
+    })
+    fakeClient.conversations.getMessageById
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirst = resolve
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveSecond = resolve
+      }))
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const onMessage = vi.fn()
+    await session.startMessageStream(onMessage, vi.fn())
+
+    onValue?.(added)
+    onValue?.(removed)
+    await vi.waitFor(() => {
+      expect(fakeClient.conversations.getMessageById).toHaveBeenCalledTimes(2)
+    })
+
+    resolveSecond(latestParent)
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce())
+    expect(onMessage).toHaveBeenLastCalledWith(expect.not.objectContaining({
+      reactions: expect.anything(),
+    }))
+
+    resolveFirst(staleParent)
+    await Promise.resolve()
+    expect(onMessage).toHaveBeenCalledOnce()
   })
 
   it('closes the client without waiting for a stalled stream start', async () => {

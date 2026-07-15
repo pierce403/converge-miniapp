@@ -11,6 +11,10 @@ import { useState } from 'react'
 import { Avatar } from '../../components/Avatar'
 import { Button } from '../../components/Button'
 import type { EnsIdentityState } from '../identity/useEnsIdentity'
+import {
+  participantPresentation,
+  type ParticipantIdentity,
+} from '../identity/useParticipantIdentities'
 import type { ConversationSummary, StreamHealth } from './types'
 import { conversationTime, shortIdentity } from './format'
 
@@ -26,6 +30,7 @@ type InboxScreenProps = {
   onRefreshEns: () => void
   onRetryLiveUpdates: () => void
   onUseEns: () => void
+  participantIdentityFor: (address: string | null | undefined) => ParticipantIdentity | null
   profile: {
     displayName?: string
     pfpUrl?: string
@@ -47,6 +52,7 @@ export function InboxScreen({
   onRefreshEns,
   onRetryLiveUpdates,
   onUseEns,
+  participantIdentityFor,
   profile,
   refreshing,
   streamHealth,
@@ -136,21 +142,31 @@ export function InboxScreen({
         <ul className="conversation-list">
           {conversations.map((conversation) => {
             const identity = conversation.peerAddress ?? conversation.peerInboxId
+            const presentation = participantPresentation(
+              identity,
+              participantIdentityFor(conversation.peerAddress),
+            )
             return (
               <li key={conversation.id}>
                 <button
                   className="conversation-row"
                   onClick={() => onOpen(conversation.id)}
+                  title={presentation.title}
                   type="button"
                 >
-                  <Avatar name={identity} />
+                  <Avatar name={presentation.label.replace(/^@/u, '')} />
                   <span className="conversation-row__body">
                     <span className="conversation-row__topline">
-                      <strong>{shortIdentity(identity)}</strong>
+                      <strong>{presentation.label}</strong>
                       <time dateTime={conversation.updatedAt?.toISOString()}>
                         {conversationTime(conversation.updatedAt)}
                       </time>
                     </span>
+                    {presentation.fnameHint ? (
+                      <span className="conversation-row__identity-hint">
+                        {presentation.fnameHint}
+                      </span>
+                    ) : null}
                     <span className="conversation-row__preview">
                       {conversation.isOwnLastMessage ? 'You: ' : ''}{conversation.preview}
                     </span>

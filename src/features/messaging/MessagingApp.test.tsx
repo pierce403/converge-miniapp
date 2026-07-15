@@ -6,6 +6,7 @@ import { MessagingApp } from './MessagingApp'
 const mocks = vi.hoisted(() => ({
   ens: vi.fn(),
   messaging: vi.fn(),
+  participants: vi.fn(),
 }))
 
 vi.mock('./useXmtpMessaging', () => ({
@@ -14,6 +15,17 @@ vi.mock('./useXmtpMessaging', () => ({
 
 vi.mock('../identity/useEnsIdentity', () => ({
   useEnsIdentity: mocks.ens,
+}))
+
+vi.mock('../identity/useParticipantIdentities', () => ({
+  useParticipantIdentities: mocks.participants,
+  participantPresentation: (value: string) => ({
+    addressLabel: value,
+    fnameHint: null,
+    label: value,
+    secondary: value,
+    title: value,
+  }),
 }))
 
 vi.mock('../../app/useMiniAppBack', () => ({
@@ -27,6 +39,11 @@ describe('MessagingApp storage and installation states', () => {
     vi.clearAllMocks()
     mocks.messaging.mockReturnValue(readyMessaging())
     mocks.ens.mockReturnValue(readyEns())
+    mocks.participants.mockReturnValue({
+      identityFor: vi.fn().mockReturnValue(null),
+      refresh: vi.fn(),
+      status: 'ready',
+    })
   })
 
   it('starts host-wallet setup without presenting an onboarding choice', () => {
