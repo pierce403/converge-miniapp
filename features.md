@@ -315,7 +315,7 @@ This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is p
 
 #### Host integration
 
-- Use host back navigation when available; otherwise render a conventional in-app back control.
+- Use capability-gated host back navigation for nested views and retain a conventional in-app control as a visible fallback when host calls fail or are unavailable.
 - Respect safe-area insets from context/CSS for header and composer.
 - Listen for relevant host events and remove listeners on teardown.
 - Pause or close live work when the page becomes hidden if required for stability; resync when foregrounded.
@@ -1087,6 +1087,13 @@ Implemented locally on 2026-07-14:
 - initial `fc:miniapp` plus legacy `fc:frame` embed metadata; and
 - deterministic SVG sources and generated PNG icon, splash, embed, and Open Graph assets, visually inspected after generation.
 
+Extended locally on 2026-07-14:
+
+- capability-gated Farcaster host back is shown only for the New DM and conversation views, owns no duplicate browser-history adapter, and is hidden with its callback cleared on teardown;
+- the visible in-app arrow remains intentionally available as a reliable accessibility and host-failure fallback;
+- visible `visibilitychange`, `focus`, `pageshow`, and `online` recovery paths coalesce, while hidden documents defer network work until foreground; and
+- foreground recovery re-reads wallet account and chain without prompting, tears down a mismatched XMTP identity, and prevents a pending DM creation from reopening after the user navigates back.
+
 Automated coverage now includes a true 390 × 844 Playwright device viewport assertion with no horizontal overflow. Remaining in Task 3: the inbox/chat/composer states supplied by Tasks 5 and 6 and an embedded-host screenshot on the canonical domain.
 
 Deliverables:
@@ -1109,7 +1116,7 @@ Implemented on 2026-07-14:
 - dynamic Farcaster host-provider acquisition with no generated-key fallback;
 - checksummed wallet identity, chain and contract-code inspection, and EOA/SCW signer construction;
 - one origin-wide Web Lock held through XMTP Worker shutdown, with explicit second-window and restart-required states;
-- teardown on account, chain, and provider-disconnect changes; and
+- teardown on account, chain, provider-disconnect, and foreground read-only identity mismatch; and
 - phased wallet/XMTP/sync explanations plus local-storage disclosure.
 
 The pinned Browser SDK still requires a document restart if its internal Worker fails during `Client.init()` before returning a closable Client. Registration itself is app-owned and closes safely on wallet rejection. Real desktop/iOS/Android signatures, OPFS re-entry, SCW continuity, storage-loss, and installation-limit cases remain required evidence.

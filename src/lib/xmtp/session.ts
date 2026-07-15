@@ -380,13 +380,18 @@ export class XmtpMessagingSession {
     this.#messageStream = null
     const starting = this.#messageStreamStart
     this.#messageStreamStart = null
-    if (stream && !stream.isDone) await stream.end()
     // A start can be waiting indefinitely for the SDK's pre-stream sync. Do
     // not hold the origin-wide OPFS lease hostage to that promise. Closing the
     // client terminates its Worker; the generation guard suppresses any late
     // callbacks, and a late returned proxy is ended by #openMessageStream.
     if (starting) void starting.catch(() => undefined)
-    this.client.close()
+    try {
+      if (stream && !stream.isDone) void stream.end().catch(() => undefined)
+    } finally {
+      // Worker termination, not successful stream cleanup, is the boundary
+      // that makes it safe for the caller to release the origin-wide lease.
+      this.client.close()
+    }
   }
 
   private async getDm(conversationId: string): Promise<Dm> {

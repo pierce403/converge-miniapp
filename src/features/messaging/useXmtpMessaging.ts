@@ -48,6 +48,7 @@ export function useXmtpMessaging() {
   const creatingDmRef = useRef(false)
   const refreshingRef = useRef(false)
   const visibleRefreshRef = useRef(false)
+  const foregroundCheckRef = useRef(false)
   const loadingOlderRequestRef = useRef<number | null>(null)
   const sendingRef = useRef(false)
   const retryingMessageIdsRef = useRef(new Set<string>())
@@ -55,6 +56,7 @@ export function useXmtpMessaging() {
   const pendingSessionFactoryRef = useRef<PendingSessionFactory | null>(null)
   const leaseRef = useRef<XmtpLease | null>(null)
   const walletRef = useRef<HostWalletConnection | null>(null)
+  const validateWalletRef = useRef<(() => Promise<boolean>) | null>(null)
   const removeWalletListenerRef = useRef<(() => void) | null>(null)
   const inboxRefreshTimerRef = useRef<number | null>(null)
   const activeRef = useRef<ActiveConversation | null>(null)
@@ -105,6 +107,7 @@ export function useXmtpMessaging() {
     loadedMessageWindowRef.current = 0
     refreshingRef.current = false
     visibleRefreshRef.current = false
+    foregroundCheckRef.current = false
     loadingOlderRequestRef.current = null
     creatingDmRef.current = false
     sendingRef.current = false
@@ -123,6 +126,7 @@ export function useXmtpMessaging() {
 
     removeWalletListenerRef.current?.()
     removeWalletListenerRef.current = null
+    validateWalletRef.current = null
     walletRef.current = null
 
     const session = sessionRef.current
@@ -314,7 +318,7 @@ export function useXmtpMessaging() {
       const provider = wallet.provider
       let walletInvalidated = false
       const invalidateWallet = (message: string) => {
-        if (walletInvalidated) return
+        if (walletInvalidated || walletRef.current !== wallet) return
         walletInvalidated = true
         activeRef.current = null
         setConnection({ error: message, phase: 'error' })
@@ -359,6 +363,46 @@ export function useXmtpMessaging() {
       provider.on('accountsChanged', onAccountsChanged)
       provider.on('chainChanged', onChainChanged)
       provider.on('disconnect', onDisconnect)
+      validateWalletRef.current = async () => {
+        let accounts: unknown
+        let chainId: unknown
+        try {
+          [accounts, chainId] = await Promise.all([
+            provider.request({ method: 'eth_accounts' }),
+            provider.request({ method: 'eth_chainId' }),
+          ])
+        } catch {
+          // A host can briefly reject read-only RPC while resuming. Provider
+          // events and the next foreground pass still protect identity changes.
+          return true
+        }
+
+        const account = Array.isArray(accounts) && typeof accounts[0] === 'string'
+          ? accounts[0].toLowerCase()
+          : null
+        if (account !== wallet.address.toLowerCase()) {
+          invalidateWallet(
+            'Your Farcaster wallet account changed while the app was away. Reconnect to open the matching XMTP inbox.',
+          )
+          return false
+        }
+
+        try {
+          if (typeof chainId !== 'string' || BigInt(chainId) !== wallet.chainId) {
+            invalidateWallet(
+              'Your Farcaster wallet network changed while the app was away. Reconnect so XMTP can verify the active signer.',
+            )
+            return false
+          }
+        } catch {
+          invalidateWallet(
+            'The Farcaster wallet reported an invalid network after the app resumed. Reconnect to continue safely.',
+          )
+          return false
+        }
+
+        return true
+      }
       removeWalletListenerRef.current = () => {
         provider.removeListener('accountsChanged', onAccountsChanged)
         provider.removeListener('chainChanged', onChainChanged)
@@ -658,11 +702,13 @@ export function useXmtpMessaging() {
     }
 
     const generation = operationGenerationRef.current
+    const request = openRequestRef.current
     creatingDmRef.current = true
     try {
       const conversation = await session.createDm(recipient)
       if (
         operationGenerationRef.current !== generation ||
+        openRequestRef.current !== request ||
         sessionRef.current !== session
       ) return
       void loadInbox(false)
@@ -855,17 +901,35 @@ export function useXmtpMessaging() {
   }, [loadInbox, startMessageStream, updateNotice])
 
   useEffect(() => {
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && sessionRef.current) {
-        void refreshVisibleState()
+    const refreshForeground = async () => {
+      if (
+        document.visibilityState === 'hidden' ||
+        !sessionRef.current ||
+        foregroundCheckRef.current
+      ) return
+
+      foregroundCheckRef.current = true
+      try {
+        const validateWallet = validateWalletRef.current
+        if (validateWallet && !(await validateWallet())) return
+        if (sessionRef.current) await refreshVisibleState()
+      } finally {
+        foregroundCheckRef.current = false
       }
     }
-    const onOnline = () => void refreshVisibleState()
+    const onForeground = () => void refreshForeground()
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'hidden') onForeground()
+    }
     document.addEventListener('visibilitychange', onVisibilityChange)
-    window.addEventListener('online', onOnline)
+    window.addEventListener('focus', onForeground)
+    window.addEventListener('online', onForeground)
+    window.addEventListener('pageshow', onForeground)
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
-      window.removeEventListener('online', onOnline)
+      window.removeEventListener('focus', onForeground)
+      window.removeEventListener('online', onForeground)
+      window.removeEventListener('pageshow', onForeground)
     }
   }, [refreshVisibleState])
 

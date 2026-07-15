@@ -287,6 +287,24 @@ describe('XmtpMessagingSession behavior', () => {
     expect(stream.end).toHaveBeenCalledOnce()
   })
 
+  it.each([
+    ['rejects', () => Promise.reject(new Error('end failed'))],
+    ['never settles', () => new Promise<never>(() => undefined)],
+  ])('terminates the client when stream cleanup %s', async (_label, endResult) => {
+    const conversation = dm()
+    const fakeClient = client(conversation)
+    const stream = { end: vi.fn(endResult), isDone: false }
+    fakeClient.conversations.streamAllDmMessages.mockResolvedValue(stream)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    await session.startMessageStream(vi.fn(), vi.fn())
+
+    await expect(session.close()).resolves.toBeUndefined()
+    expect(stream.end).toHaveBeenCalledOnce()
+    expect(fakeClient.close).toHaveBeenCalledOnce()
+  })
+
   it('treats a true XMTP failure as terminal instead of fake-retrying it', async () => {
     const failed = message({
       id: 'failed',

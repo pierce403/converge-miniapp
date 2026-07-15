@@ -9,12 +9,14 @@ import {
 import { Avatar } from '../../components/Avatar'
 import { Button } from '../../components/Button'
 import { StatePanel } from '../../components/StatePanel'
+import { useMiniAppBack } from '../../app/useMiniAppBack'
 import { ConversationScreen } from './ConversationScreen'
 import { InboxScreen } from './InboxScreen'
 import { NewDmScreen } from './NewDmScreen'
 import { useXmtpMessaging, type ConnectionPhase } from './useXmtpMessaging'
 
 type MessagingAppProps = {
+  canUseBack: boolean
   canUseWallet: boolean
   user: {
     displayName?: string
@@ -56,8 +58,13 @@ const connectionCopy: Partial<Record<ConnectionPhase, {
   },
 }
 
-export function MessagingApp({ canUseWallet, user }: MessagingAppProps) {
+export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppProps) {
   const messaging = useXmtpMessaging()
+  useMiniAppBack(
+    canUseBack,
+    messaging.connection.phase === 'ready' && messaging.view !== 'inbox',
+    messaging.backToInbox,
+  )
 
   if (messaging.connection.phase === 'idle') {
     return (
@@ -180,7 +187,7 @@ export function MessagingApp({ canUseWallet, user }: MessagingAppProps) {
   )
 }
 
-type IdentityWelcomeProps = MessagingAppProps & {
+type IdentityWelcomeProps = Pick<MessagingAppProps, 'canUseWallet' | 'user'> & {
   connecting: boolean
   onConnect: () => void
 }

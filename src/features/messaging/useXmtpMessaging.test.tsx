@@ -36,6 +36,11 @@ vi.mock('../../lib/xmtp/session', () => {
 })
 
 const address = '0x1111111111111111111111111111111111111111' as const
+const provider = {
+  on: vi.fn(),
+  removeListener: vi.fn(),
+  request: vi.fn(),
+}
 const cachedConversation: ConversationSummary = {
   id: 'conversation-1',
   isOwnLastMessage: false,
@@ -85,6 +90,7 @@ function createSession(overrides: Record<string, unknown> = {}) {
   return {
     address,
     close: vi.fn().mockResolvedValue(undefined),
+    createDm: vi.fn(),
     environment: 'dev',
     isNewInstallation: false,
     loadConversation: vi.fn(),
@@ -100,11 +106,15 @@ function createSession(overrides: Record<string, unknown> = {}) {
 describe('useXmtpMessaging', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    const provider = {
-      on: vi.fn(),
-      removeListener: vi.fn(),
-      request: vi.fn(),
-    }
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    })
+    provider.request.mockImplementation(({ method }: { method: string }) => {
+      if (method === 'eth_accounts') return Promise.resolve([address])
+      if (method === 'eth_chainId') return Promise.resolve('0xa')
+      return Promise.resolve(null)
+    })
     mocks.acquireXmtpLease.mockResolvedValue({
       release: vi.fn().mockResolvedValue(undefined),
     })
@@ -354,6 +364,35 @@ describe('useXmtpMessaging', () => {
     expect(session.startMessageStream).not.toHaveBeenCalled()
   })
 
+  it('does not reopen a DM that finishes creating after the user goes back', async () => {
+    const creation = deferred<ActiveConversation>()
+    const session = createSession({
+      createDm: vi.fn().mockReturnValue(creation.promise),
+      loadConversation: vi.fn(),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+    act(() => result.current.setView('new-dm'))
+
+    let createPromise!: Promise<void>
+    act(() => {
+      createPromise = result.current.createDm(
+        '0x2222222222222222222222222222222222222222',
+      )
+    })
+    act(() => result.current.backToInbox())
+    await act(async () => {
+      creation.resolve(activeConversation)
+      await createPromise
+    })
+
+    expect(result.current.view).toBe('inbox')
+    expect(result.current.activeConversation).toBeNull()
+    expect(session.loadConversation).not.toHaveBeenCalled()
+  })
+
   it('refreshes an open conversation when the app comes back online', async () => {
     const savedMessage = message('message-1', 'Saved message', '2026-07-14T12:00:00Z')
     const networkMessage = message('message-2', 'New message', '2026-07-14T12:01:00Z')
@@ -390,5 +429,58 @@ describe('useXmtpMessaging', () => {
       expect(result.current.hasOlderMessages).toBe(true)
       expect(session.startMessageStream).toHaveBeenCalledTimes(2)
     })
+  })
+
+  it.each(['focus', 'pageshow'])('refreshes visible state on window %s', async (eventName) => {
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    act(() => window.dispatchEvent(new Event(eventName)))
+
+    await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
+    expect(provider.request).toHaveBeenCalledWith({ method: 'eth_accounts' })
+    expect(provider.request).toHaveBeenCalledWith({ method: 'eth_chainId' })
+  })
+
+  it('defers online recovery while the document is hidden', async () => {
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'hidden',
+    })
+
+    act(() => window.dispatchEvent(new Event('online')))
+    await act(async () => Promise.resolve())
+
+    expect(session.loadInbox).toHaveBeenCalledOnce()
+    expect(provider.request).not.toHaveBeenCalledWith({ method: 'eth_accounts' })
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    })
+  })
+
+  it('closes the old inbox when the wallet changed while the app was suspended', async () => {
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    provider.request.mockImplementation(({ method }: { method: string }) => (
+      Promise.resolve(method === 'eth_accounts'
+        ? ['0x3333333333333333333333333333333333333333']
+        : '0xa')
+    ))
+
+    act(() => window.dispatchEvent(new Event('focus')))
+
+    await waitFor(() => expect(result.current.connection.phase).toBe('error'))
+    expect(result.current.connection.error).toMatch(/account changed while the app was away/)
+    await waitFor(() => expect(session.close).toHaveBeenCalledOnce())
   })
 })

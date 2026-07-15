@@ -34,6 +34,7 @@ export default function App() {
 
       {host.status === 'embedded' && host.context ? (
         <MessagingApp
+          canUseBack={host.capabilities.includes('back')}
           canUseWallet={host.capabilities.includes('wallet.getEthereumProvider')}
           user={host.context.user}
         />
