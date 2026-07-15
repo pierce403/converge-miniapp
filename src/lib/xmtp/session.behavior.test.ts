@@ -46,6 +46,7 @@ function message(options: {
   sentAt: string
   status: DeliveryStatus
 }): DecodedMessage {
+  const sentAt = new Date(options.sentAt)
   return {
     content: options.id,
     conversationId: 'conversation-1',
@@ -53,7 +54,8 @@ function message(options: {
     fallback: undefined,
     id: options.id,
     senderInboxId: 'own-inbox',
-    sentAt: new Date(options.sentAt),
+    sentAt,
+    sentAtNs: BigInt(sentAt.getTime()) * 1_000_000n,
   } as unknown as DecodedMessage
 }
 
@@ -75,6 +77,9 @@ function client(conversation: Dm) {
     conversations: {
       getConversationById: vi.fn().mockResolvedValue(conversation),
       getMessageById: vi.fn(),
+      listDms: vi.fn().mockResolvedValue([]),
+      streamAllDmMessages: vi.fn(),
+      syncAll: vi.fn(),
     },
     env: 'dev',
     inboxId: 'own-inbox',
@@ -87,7 +92,9 @@ function client(conversation: Dm) {
         inboxId: 'peer-inbox',
       }]),
     },
+    isRegistered: vi.fn().mockResolvedValue(false),
     register: vi.fn(),
+    sendSyncRequest: vi.fn(),
   }
 }
 
@@ -129,18 +136,155 @@ describe('XmtpMessagingSession behavior', () => {
     sdkMocks.create.mockResolvedValue(fakeClient)
 
     const session = await XmtpMessagingSession.create(signer, address)
-    const loaded = await session.loadConversation('conversation-1')
+    const onCached = vi.fn()
+    const loaded = await session.loadConversation('conversation-1', onCached)
 
     expect(conversation.messages).toHaveBeenCalledWith(expect.objectContaining({
       direction: SortDirection.Descending,
       kind: GroupMessageKind.Application,
-      limit: 50n,
+      limit: 51n,
     }))
+    expect(onCached).toHaveBeenCalledWith(expect.objectContaining({
+      messages: [expect.objectContaining({ id: 'older' }), expect.objectContaining({ id: 'newer' })],
+    }))
+    expect(conversation.messages).toHaveBeenCalledTimes(2)
+    expect(conversation.messages.mock.invocationCallOrder[0]).toBeLessThan(
+      conversation.sync.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    )
     expect(loaded.messages.map((item) => item.id)).toEqual(['older', 'newer'])
     expect(loaded.messages[1]).toMatchObject({
       canRetry: true,
       delivery: 'failed',
     })
+  })
+
+  it('requests best-effort history only for a new installation', async () => {
+    const newClient = client(dm())
+    sdkMocks.create.mockResolvedValueOnce(newClient)
+
+    const newSession = await XmtpMessagingSession.create(signer, address)
+    await expect(newSession.requestHistorySync()).resolves.toBe(true)
+    expect(newClient.sendSyncRequest).toHaveBeenCalledOnce()
+
+    const resumedClient = client(dm())
+    resumedClient.isRegistered.mockResolvedValue(true)
+    sdkMocks.create.mockResolvedValueOnce(resumedClient)
+
+    const resumedSession = await XmtpMessagingSession.create(signer, address)
+    await expect(resumedSession.requestHistorySync()).resolves.toBe(false)
+    expect(resumedClient.sendSyncRequest).not.toHaveBeenCalled()
+  })
+
+  it('reads the cached inbox before synchronizing and rereads afterward', async () => {
+    const fakeClient = client(dm())
+    fakeClient.conversations.listDms
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const onCached = vi.fn()
+    await session.loadInbox(onCached)
+
+    expect(onCached).toHaveBeenCalledWith([])
+    expect(fakeClient.conversations.listDms).toHaveBeenCalledTimes(2)
+    expect(fakeClient.conversations.listDms.mock.invocationCallOrder[0]).toBeLessThan(
+      fakeClient.conversations.syncAll.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    )
+    expect(fakeClient.conversations.syncAll.mock.invocationCallOrder[0]).toBeLessThan(
+      fakeClient.conversations.listDms.mock.invocationCallOrder[1] ?? 0,
+    )
+  })
+
+  it('pages older messages by expanding a contiguous newest-message window', async () => {
+    const older = message({
+      id: 'older',
+      sentAt: '2026-07-14T11:59:00Z',
+      status: DeliveryStatus.Published,
+    })
+    const conversation = dm({ messages: vi.fn().mockResolvedValue([older]) })
+    const fakeClient = client(conversation)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const page = await session.loadOlderMessages('conversation-1', 50)
+
+    expect(conversation.messages).toHaveBeenCalledWith(expect.objectContaining({
+      direction: SortDirection.Descending,
+      limit: 101n,
+    }))
+    expect(conversation.messages).not.toHaveBeenCalledWith(expect.objectContaining({
+      sentBeforeNs: expect.anything(),
+    }))
+    expect(page).toMatchObject({ hasOlder: false })
+    expect(page.messages.map((item) => item.id)).toEqual(['older'])
+  })
+
+  it('marks a full page when another older page exists', async () => {
+    const messages = Array.from({ length: 101 }, (_, index) => message({
+      id: `message-${index}`,
+      sentAt: new Date(Date.UTC(2026, 6, 14, 12, 2, 101 - index)).toISOString(),
+      status: DeliveryStatus.Published,
+    }))
+    const conversation = dm({ messages: vi.fn().mockResolvedValue(messages) })
+    const fakeClient = client(conversation)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const page = await session.loadOlderMessages('conversation-1', 50)
+
+    expect(page.hasOlder).toBe(true)
+    expect(page.messages).toHaveLength(100)
+    expect(page.messages[0]?.id).toBe('message-99')
+    expect(page.messages.at(-1)?.id).toBe('message-0')
+  })
+
+  it('retains one stream proxy while the SDK retries an underlying failure', async () => {
+    const conversation = dm()
+    const fakeClient = client(conversation)
+    const stream = { end: vi.fn(), isDone: false }
+    let callbacks: Record<string, (...args: never[]) => void> | undefined
+    fakeClient.conversations.streamAllDmMessages.mockImplementation(async (options) => {
+      callbacks = options
+      return stream
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const onHealth = vi.fn()
+    await session.startMessageStream(vi.fn(), onHealth)
+    expect(onHealth).toHaveBeenLastCalledWith('live')
+
+    callbacks?.onRetry?.()
+    expect(onHealth).toHaveBeenLastCalledWith('retrying')
+    callbacks?.onFail?.()
+    expect(onHealth).toHaveBeenLastCalledWith('retrying')
+
+    await session.startMessageStream(vi.fn(), onHealth)
+    expect(fakeClient.conversations.streamAllDmMessages).toHaveBeenCalledOnce()
+    callbacks?.onRestart?.()
+    expect(onHealth).toHaveBeenLastCalledWith('live')
+  })
+
+  it('closes the client without waiting for a stalled stream start', async () => {
+    const conversation = dm()
+    const fakeClient = client(conversation)
+    const stream = { end: vi.fn().mockResolvedValue(undefined), isDone: false }
+    let resolveStream!: (value: typeof stream) => void
+    fakeClient.conversations.streamAllDmMessages.mockReturnValue(new Promise((resolve) => {
+      resolveStream = resolve
+    }))
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const starting = session.startMessageStream(vi.fn(), vi.fn())
+
+    await expect(session.close()).resolves.toBeUndefined()
+    expect(fakeClient.close).toHaveBeenCalledOnce()
+
+    resolveStream(stream)
+    await starting
+    expect(stream.end).toHaveBeenCalledOnce()
   })
 
   it('treats a true XMTP failure as terminal instead of fake-retrying it', async () => {

@@ -20,6 +20,7 @@ type InboxScreenProps = {
   onNewDm: () => void
   onOpen: (conversationId: string) => void
   onRefresh: () => void
+  onRetryLiveUpdates: () => void
   profile: {
     displayName?: string
     pfpUrl?: string
@@ -37,6 +38,7 @@ export function InboxScreen({
   onNewDm,
   onOpen,
   onRefresh,
+  onRetryLiveUpdates,
   profile,
   refreshing,
   streamHealth,
@@ -67,6 +69,7 @@ export function InboxScreen({
               ? 'Live updates are reconnecting. Your local inbox is still available.'
               : 'Live updates paused. Pull a fresh sync when your connection returns.'}
           </span>
+          <button type="button" onClick={onRetryLiveUpdates}>Refresh now</button>
         </div>
       ) : null}
 

@@ -44,6 +44,11 @@ const connectionCopy: Partial<Record<ConnectionPhase, {
     eyebrow: 'XMTP identity',
     title: 'Confirm inbox access in your wallet',
   },
+  history: {
+    description: 'A new Mini App installation can ask another compatible online installation for a re-encrypted archive. Recovery is best-effort and may return no older history.',
+    eyebrow: 'Optional history recovery',
+    title: 'Requesting available message history',
+  },
   syncing: {
     description: 'Conversations and message content are decrypted locally in this browser.',
     eyebrow: 'Private inbox',
@@ -140,6 +145,7 @@ export function MessagingApp({ canUseWallet, user }: MessagingAppProps) {
           onNewDm={() => messaging.setView('new-dm')}
           onOpen={messaging.openConversation}
           onRefresh={messaging.refresh}
+          onRetryLiveUpdates={messaging.retryLiveUpdates}
           profile={user}
           refreshing={messaging.refreshing}
           streamHealth={messaging.streamHealth}
@@ -157,12 +163,17 @@ export function MessagingApp({ canUseWallet, user }: MessagingAppProps) {
       {messaging.view === 'conversation' && messaging.activeConversation ? (
         <ConversationScreen
           conversation={messaging.activeConversation}
+          hasOlder={messaging.hasOlderMessages}
           loading={messaging.loadingConversation}
+          loadingOlder={messaging.loadingOlder}
           messages={messaging.messages}
           onBack={messaging.backToInbox}
+          onLoadOlder={messaging.loadOlderMessages}
           onRetry={messaging.retryMessage}
+          onRetryLiveUpdates={messaging.retryLiveUpdates}
           onSend={messaging.sendMessage}
           sending={messaging.sending}
+          streamHealth={messaging.streamHealth}
         />
       ) : null}
     </div>

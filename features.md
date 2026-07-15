@@ -278,12 +278,12 @@ This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is p
 | Identity | Host EVM wallet connection | P0 | Implemented locally | Host provider and lifecycle teardown are implemented; real Farcaster desktop/iOS/Android proof remains. |
 | Identity | EOA and supported SCW XMTP signer | P0 | Implemented locally | EOA/SCW construction is unit-tested; real host signature traces remain. |
 | Identity | Stable XMTP inbox/installation reuse | P0 | Implemented locally | Persistent OPFS defaults and a single-owner Web Lock exist; host re-entry proof remains. |
-| Inbox | Allowed DM conversation list | P0 | Implemented locally | Allowed-only sync/list/stream UI exists; dev-network and cached/offline acceptance remain. |
+| Inbox | Allowed DM conversation list | P0 | Implemented locally | Allowed-only cached-first sync/list/stream UI exists; dev-network and offline host acceptance remain. |
 | Inbox | Separate message requests | P1 | Later | Unknown contacts stay excluded from the P0 allowed list; later accept/decline updates consent. |
 | Compose | Address-first recipient reachability | P0 | Implemented locally | Normalized Ethereum address is checked with `canMessage()` before DM creation. |
 | Compose | Farcaster handle/name recipient search | P1 | Later | Trusted directory lookup maps profile to verified candidate identity before `canMessage()`. |
-| Chat | Text message history | P0 | Implemented locally | Latest text messages, ownership, timestamps, fallback, and loading exist; older-page UX remains. |
-| Chat | Live incoming text messages | P0 | Implemented locally | Allowed-DM stream, stable-ID upsert, teardown gating, and health UI exist; real reconnect proof remains. |
+| Chat | Text message history | P0 | Implemented locally | Cached-first latest history, a growing contiguous newest-message window, exact-nanosecond ordering, ownership, fallback, and loading exist. |
+| Chat | Live incoming text messages | P0 | Implemented locally | Allowed-DM stream, stable-ID upsert, one retained SDK-owned retry proxy, foreground visible-chat refresh, and health UI exist; real reconnect proof remains. |
 | Chat | Send, optimistic state, failure, retry | P0 | Implemented locally | Duplicate guards and same-ID unpublished retry exist; Browser SDK 7 terminal failures are disclosed. |
 | Local data | Single-connection protection | P0 | Implemented locally | A second tab/window cannot contend for OPFS and gets useful guidance. |
 | Local data | Storage-loss/install-limit recognition | P0 | Committed | Storage/installation failures are classified and do not trigger automatic revocation. |
@@ -496,7 +496,8 @@ Selection criteria: correctness, latency, rate limits, cost, privacy, Cloudflare
 - For a new installation, call the current SDK's explicit history-sync request when appropriate and present progress honestly.
 - Start streams only after the client and initial state are coherent.
 - Keep one stream owner per active client and stop it on identity change, logout, takeover, or teardown.
-- On stream error, apply bounded exponential backoff with visible degraded state.
+- On stream error, retain the one SDK-owned proxy while Browser SDK 7 retries it, expose retry/restart health, and never create an untracked second stream.
+- Offer an explicit visible-state refresh while the stream is degraded. Treat a synchronous stream-start rejection separately from an underlying stream failure that the SDK is still retrying.
 - On foreground/reconnect, resync before assuming no messages were missed.
 - Avoid unbounded polling.
 - Keep the last usable local view during transient network failures.
@@ -1137,7 +1138,15 @@ Implemented on 2026-07-14:
 - unsupported-content fallback, newest-page chronological display, near-bottom scroll preservation, and screen-reader log semantics; and
 - behavioral tests for newest-page order and persisted unpublished-draft recovery.
 
-Older-page pagination, cached-first/offline rendering, controlled stream restart, canonical-host persistence, and two-client dev-network receive evidence remain.
+Extended locally on 2026-07-14:
+
+- cached inbox rows and cached conversation messages render before network sync, remain visible on transient sync failure, and are replaced in place after successful sync;
+- a newly registered Mini App installation explicitly calls `sendSyncRequest()` with honest best-effort recovery copy;
+- older-message loading expands a contiguous newest-message window, uses exact-nanosecond chronological ordering, deduplicates stable IDs, and preserves the reader's anchor without trusting a sent-time cursor that late history imports could skip;
+- the active conversation and inbox resync on foreground/online, while one retained SDK proxy owns retry/restart behavior and explicit refresh plus callback-generation guards prevent duplicate or stale stream work; and
+- initial history is excluded from live-region announcements, incoming messages do not steal scroll position, and a “New messages” affordance returns intentionally to the latest message.
+
+Canonical-host persistence, storage eviction, cancellable SDK retry timers/terminal-state signaling, embedded keyboard resize, and two-client dev-network receive evidence remain. Browser SDK 7 exposes neither insertion timestamps on decoded messages nor an archive-import completion event, so history loading can remain honest and gap-safe through a growing contiguous window but cannot claim an immutable insertion-time snapshot.
 
 Deliverables:
 

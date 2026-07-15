@@ -11,6 +11,7 @@ describe('messaging models', () => {
       id: 'message-1',
       isOwn: true,
       sentAt: new Date('2026-07-14T12:00:00Z'),
+      sentAtNs: 1_784_030_400_000_000_000n,
       text: 'hello',
       unsupported: false,
     }

@@ -24,7 +24,7 @@ import type {
 
 const VISIBLE_CONSENT_STATES = [ConsentState.Allowed]
 const INBOX_LIMIT = 50n
-const MESSAGE_LIMIT = 50n
+const MESSAGE_PAGE_SIZE = 50n
 const SUPPORTED_ENVS: readonly XmtpEnv[] = [
   'local',
   'dev',
@@ -42,6 +42,12 @@ export type SendResult = {
   message: MessageItem
 }
 
+export type ConversationLoad = {
+  conversation: ActiveConversation
+  hasOlder: boolean
+  messages: MessageItem[]
+}
+
 export class XmtpClientInitializationError extends Error {
   constructor(cause: unknown) {
     super('XMTP could not initialize its local browser client.', { cause })
@@ -52,11 +58,19 @@ export class XmtpClientInitializationError extends Error {
 export class XmtpMessagingSession {
   readonly address: `0x${string}`
   readonly client: Client
+  readonly isNewInstallation: boolean
   #messageStream: AsyncStreamProxy<IncomingMessage> | null = null
+  #messageStreamStart: Promise<void> | null = null
+  #streamGeneration = 0
 
-  private constructor(client: Client, address: `0x${string}`) {
+  private constructor(
+    client: Client,
+    address: `0x${string}`,
+    isNewInstallation: boolean,
+  ) {
     this.client = client
     this.address = address
+    this.isNewInstallation = isNewInstallation
   }
 
   static async create(signer: Signer, address: `0x${string}`) {
@@ -75,8 +89,9 @@ export class XmtpMessagingSession {
     }
 
     try {
+      const isNewInstallation = !(await client.isRegistered())
       await client.register()
-      return new XmtpMessagingSession(client, address)
+      return new XmtpMessagingSession(client, address, isNewInstallation)
     } catch (error) {
       client.close()
       throw error
@@ -92,9 +107,22 @@ export class XmtpMessagingSession {
     return this.client.env ?? configuredEnvironment()
   }
 
-  async loadInbox(): Promise<ConversationSummary[]> {
+  async requestHistorySync(): Promise<boolean> {
+    if (!this.isNewInstallation) return false
+    await this.client.sendSyncRequest()
+    return true
+  }
+
+  async loadInbox(
+    onCached?: (conversations: ConversationSummary[]) => void,
+  ): Promise<ConversationSummary[]> {
+    if (onCached) onCached(await this.readInbox())
     await this.client.conversations.syncAll(VISIBLE_CONSENT_STATES)
 
+    return this.readInbox()
+  }
+
+  async readInbox(): Promise<ConversationSummary[]> {
     const conversations = await this.client.conversations.listDms({
       consentStates: VISIBLE_CONSENT_STATES,
       includeDuplicateDms: false,
@@ -135,37 +163,42 @@ export class XmtpMessagingSession {
     )
   }
 
-  async loadConversation(conversationId: string): Promise<{
-    conversation: ActiveConversation
-    messages: MessageItem[]
-  }> {
+  async loadConversation(
+    conversationId: string,
+    onCached?: (loaded: ConversationLoad) => void,
+    messageLimit = Number(MESSAGE_PAGE_SIZE),
+  ): Promise<ConversationLoad> {
     const conversation = await this.getDm(conversationId)
-    await conversation.sync()
-
-    const [messages, peerInboxId] = await Promise.all([
-      conversation.messages({
-        direction: SortDirection.Descending,
-        kind: GroupMessageKind.Application,
-        limit: MESSAGE_LIMIT,
-      }),
-      conversation.peerInboxId(),
-    ])
+    const peerInboxId = await conversation.peerInboxId()
     const [state] = await this.client.preferences.getInboxStates([peerInboxId])
     const peerAddress =
       state?.accountIdentifiers.find(
         (identifier) => identifier.identifierKind === IdentifierKind.Ethereum,
       )?.identifier ?? null
 
-    return {
-      conversation: {
-        id: conversation.id,
-        peerAddress,
-        peerInboxId,
-      },
-      messages: messages
-        .reverse()
-        .map((message) => toMessageItem(message, this.inboxId, true)),
+    const activeConversation = {
+      id: conversation.id,
+      peerAddress,
+      peerInboxId,
     }
+    const cached = await this.messageWindow(conversation, messageLimit)
+    onCached?.({ conversation: activeConversation, ...cached })
+
+    await conversation.sync()
+    return {
+      conversation: activeConversation,
+      ...(await this.messageWindow(conversation, messageLimit)),
+    }
+  }
+
+  async loadOlderMessages(
+    conversationId: string,
+    loadedMessageCount: number,
+  ): Promise<Pick<ConversationLoad, 'hasOlder' | 'messages'>> {
+    return this.messageWindow(
+      await this.getDm(conversationId),
+      normalizeMessageLimit(loadedMessageCount) + Number(MESSAGE_PAGE_SIZE),
+    )
   }
 
   async createDm(address: `0x${string}`): Promise<ActiveConversation> {
@@ -285,29 +318,74 @@ export class XmtpMessagingSession {
     onHealth: (health: StreamHealth) => void,
   ): Promise<void> {
     if (this.#messageStream) return
+    if (this.#messageStreamStart) return this.#messageStreamStart
 
-    let startupFailed = false
-    this.#messageStream = await this.client.conversations.streamAllDmMessages({
+    const generation = ++this.#streamGeneration
+    const start = this.#openMessageStream(generation, onMessage, onHealth)
+    this.#messageStreamStart = start
+    try {
+      await start
+    } finally {
+      if (this.#messageStreamStart === start) this.#messageStreamStart = null
+    }
+  }
+
+  async #openMessageStream(
+    generation: number,
+    onMessage: (message: MessageItem) => void,
+    onHealth: (health: StreamHealth) => void,
+  ): Promise<void> {
+    let startupDegraded = false
+    const stream = await this.client.conversations.streamAllDmMessages({
       consentStates: VISIBLE_CONSENT_STATES,
       onError: () => {
-        startupFailed = true
+        if (generation !== this.#streamGeneration) return
+        startupDegraded = true
         onHealth('retrying')
       },
-      onFail: () => onHealth('retrying'),
-      onRestart: () => onHealth('live'),
-      onRetry: () => onHealth('retrying'),
-      onValue: (message) => onMessage(toMessageItem(message, this.inboxId)),
+      onFail: () => {
+        if (generation !== this.#streamGeneration) return
+        // browser-sdk@7 reports an underlying stream failure here and then
+        // retries through the same proxy when retryOnFail is enabled. Retain
+        // ownership so a manual refresh cannot create an orphaned duplicate.
+        startupDegraded = true
+        onHealth('retrying')
+      },
+      onRestart: () => {
+        if (generation === this.#streamGeneration) onHealth('live')
+      },
+      onRetry: () => {
+        if (generation === this.#streamGeneration) onHealth('retrying')
+      },
+      onValue: (message) => {
+        if (generation === this.#streamGeneration) {
+          onMessage(toMessageItem(message, this.inboxId))
+        }
+      },
       retryAttempts: 6,
       retryDelay: 10_000,
       retryOnFail: true,
     })
-    if (!startupFailed) onHealth('live')
+    if (generation !== this.#streamGeneration) {
+      if (!stream.isDone) await stream.end()
+      return
+    }
+    this.#messageStream = stream
+    if (!startupDegraded) onHealth('live')
   }
 
   async close(): Promise<void> {
+    this.#streamGeneration += 1
     const stream = this.#messageStream
     this.#messageStream = null
+    const starting = this.#messageStreamStart
+    this.#messageStreamStart = null
     if (stream && !stream.isDone) await stream.end()
+    // A start can be waiting indefinitely for the SDK's pre-stream sync. Do
+    // not hold the origin-wide OPFS lease hostage to that promise. Closing the
+    // client terminates its Worker; the generation guard suppresses any late
+    // callbacks, and a late returned proxy is ended by #openMessageStream.
+    if (starting) void starting.catch(() => undefined)
     this.client.close()
   }
 
@@ -318,6 +396,33 @@ export class XmtpMessagingSession {
     }
     return conversation
   }
+
+  private async messageWindow(
+    conversation: Dm,
+    requestedLimit: number,
+  ): Promise<Pick<ConversationLoad, 'hasOlder' | 'messages'>> {
+    const messageLimit = BigInt(normalizeMessageLimit(requestedLimit))
+    const messages = await conversation.messages({
+      direction: SortDirection.Descending,
+      kind: GroupMessageKind.Application,
+      limit: messageLimit + 1n,
+    })
+    const page = messages.slice(0, Number(messageLimit))
+
+    return {
+      hasOlder: messages.length > Number(messageLimit),
+      messages: page
+        .reverse()
+        .map((message) => toMessageItem(message, this.inboxId, true)),
+    }
+  }
+}
+
+function normalizeMessageLimit(limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit < 0) {
+    throw new Error('XMTP message window size must be a non-negative safe integer.')
+  }
+  return Math.max(Number(MESSAGE_PAGE_SIZE), limit)
 }
 
 function clientOptions(): {
@@ -378,6 +483,7 @@ function toMessageItem(
     id: message.id,
     isOwn: message.senderInboxId === ownInboxId,
     sentAt: message.sentAt,
+    sentAtNs: message.sentAtNs,
     text: supported
       ? content
       : message.fallback?.trim() || 'This message type is not supported yet.',

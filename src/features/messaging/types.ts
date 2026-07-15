@@ -7,6 +7,7 @@ export type MessageItem = {
   id: string
   isOwn: boolean
   sentAt: Date
+  sentAtNs: bigint
   text: string
   unsupported: boolean
 }

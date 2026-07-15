@@ -16,7 +16,7 @@ Clearing site data for `miniapp.converge.cv` deletes the local database and app 
 
 - The Farcaster host supplies display context and the EIP-1193 wallet provider.
 - XMTP network and payer-Gateway services process protocol traffic and messaging metadata needed to deliver end-to-end encrypted messages.
-- XMTP device history sync can re-encrypt and upload conversation history so another authorized installation can recover it. This is distinct from same-origin OPFS persistence.
+- On a newly registered Mini App installation, Converge Mini sends XMTP's best-effort history-sync request. A compatible existing installation must be online to re-encrypt and upload an archive for recovery; the archive service is distinct from same-origin OPFS persistence. Sending the request does not prove that an archive has finished importing, so later manual or foreground refreshes can continue to surface recovered history.
 - Avatar/image URLs supplied by the Farcaster host can cause the browser to request an external image host.
 - Cloudflare necessarily handles ordinary HTTP request metadata for serving the app and sampled Worker observability. Application code adds no message, wallet, FID, inbox, conversation, signature, draft, or token fields to logs.
 
