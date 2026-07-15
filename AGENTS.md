@@ -31,6 +31,7 @@ These instructions apply to the entire repository.
 - Prefer on-device storage for XMTP client state and decrypted content. Any server-side data collection must be minimal, documented, and user-removable.
 - Treat wallet signatures and permission prompts as costly interactions: explain them in plain language and request them only when needed.
 - Design mobile-first for an embedded Mini App, including safe areas, constrained viewport heights, touch targets, keyboard behavior, loading states, and host-app dismissal/re-entry.
+- Treat Farcaster `safeAreaInsets` as obscured regions, as defined by the official SDK contract. Do not infer which edge is clipped from total viewport height; when a full-bleed surface should meet host chrome, extend its non-interactive background beneath the inset and apply the inset to the complete foreground-content stack.
 - Maintain usable browser behavior outside Farcaster for development and recovery, but do not let the standalone mode complicate the Mini App MVP.
 
 ## Design direction

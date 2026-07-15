@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties, type ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 
 import { BrandMark } from '../components/BrandMark'
 import type { MiniAppHostState } from './useMiniAppHost'
@@ -17,28 +17,15 @@ type SafeAreaStyle = CSSProperties & {
 
 export function AppShell({ children, host }: AppShellProps) {
   const insets = host.context?.client.safeAreaInsets
-  const effectiveTop = useMemo(() => effectiveHostTopInset(
-    insets?.top ?? 0,
-    insets?.bottom ?? 0,
-    host.context?.client.platformType,
-  ), [
-    host.context?.client.platformType,
-    insets?.bottom,
-    insets?.top,
-  ])
-  const nativeTopAlreadyApplied = (insets?.top ?? 0) > 0 && effectiveTop === 0
   const style: SafeAreaStyle = {
     '--host-safe-right': `${insets?.right ?? 0}px`,
     '--host-safe-bottom': `${insets?.bottom ?? 0}px`,
     '--host-safe-left': `${insets?.left ?? 0}px`,
-    '--host-safe-top': `${effectiveTop}px`,
+    '--host-safe-top': `${insets?.top ?? 0}px`,
   }
 
   return (
-    <div
-      className={`app-shell${nativeTopAlreadyApplied ? ' app-shell--native-top-safe' : ''}`}
-      style={style}
-    >
+    <div className="app-shell" style={style}>
       <header className="app-header">
         <div className="brand" aria-label="Converge Mini">
           <BrandMark />
@@ -60,23 +47,4 @@ export function AppShell({ children, host }: AppShellProps) {
       </footer>
     </div>
   )
-}
-
-function effectiveHostTopInset(
-  top: number,
-  bottom: number,
-  platform: 'mobile' | 'web' | undefined,
-): number {
-  const mobileViewport = platform === 'mobile' || (
-    platform === undefined && navigator.maxTouchPoints > 0
-  )
-  if (!mobileViewport || top <= 0) return top
-
-  // Some mobile clients size the webview below their native title bar while
-  // still reporting that bar as an occluding safe-area inset. A substantial
-  // screen-to-webview height difference is evidence that the chrome is
-  // already outside this viewport; other clients keep the reported inset.
-  const clippedHeight = window.screen.height - window.innerHeight
-  const reportedVerticalInset = top + Math.max(0, bottom)
-  return clippedHeight >= reportedVerticalInset + 16 ? 0 : top
 }

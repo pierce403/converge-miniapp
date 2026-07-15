@@ -1164,6 +1164,14 @@ Compact ready-messaging extension implemented and locally verified on 2026-07-15
 - the best-effort local-history warning has one accessible dismiss action remembered on that browser until site data is cleared; and
 - detailed local-storage and history-recovery disclosure remains available from the identity/privacy menu after the compact warning is dismissed.
 
+Ready-messaging top-inset correction implemented and locally verified on 2026-07-15:
+
+- the decorative 32px background grid may remain, but the ready messaging surface begins after only its intentional 8–10px outer padding instead of leaving roughly three empty grid squares above the component;
+- Farcaster's reported top safe-area inset remains reserved for obscured foreground content, but the messaging surface and contextual-header background extend beneath it so the safe region does not read as unused page space;
+- ENS offers, storage warnings, app notices, and contextual screen headers all begin below the safe region rather than being hidden by host chrome;
+- no viewport-height heuristic guesses whether total clipping came from the top, bottom, keyboard, browser chrome, or split-screen geometry; and
+- component coverage preserves raw host inset values while a browser layout test verifies the ready surface position and its internal safe padding.
+
 Automated coverage now includes a true 390 × 844 Playwright device viewport assertion with no horizontal overflow. Remaining in Task 3: the inbox/chat/composer states supplied by Tasks 5 and 6 and an embedded-host screenshot on the canonical domain.
 
 Deliverables:

@@ -38,6 +38,46 @@ test('standalone shell fits an embedded mobile viewport', async ({ page }) => {
   expect(embeds.map((embed) => embed.version)).toEqual(['1', '1'])
 })
 
+test('ready messaging surface extends beneath the reserved top safe area', async ({ page }) => {
+  await page.goto('/')
+
+  const layout = await page.evaluate(async () => {
+    const shell = document.querySelector<HTMLElement>('.app-shell')
+    const main = document.querySelector<HTMLElement>('.app-main')
+    if (!shell || !main) throw new Error('App shell did not render')
+
+    shell.style.setProperty('--host-safe-top', '72px')
+    const messaging = document.createElement('div')
+    messaging.className = 'messaging-app'
+    const screen = document.createElement('section')
+    screen.className = 'messaging-screen'
+    messaging.append(screen)
+    const ensOffer = document.createElement('dialog')
+    ensOffer.className = 'ens-offer'
+    ensOffer.setAttribute('open', '')
+    messaging.append(ensOffer)
+    main.replaceChildren(messaging)
+
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+
+    return {
+      ensOfferSafePadding: getComputedStyle(ensOffer).paddingTop,
+      messagingSafePadding: getComputedStyle(messaging).paddingTop,
+      shellPaddingTop: getComputedStyle(shell).paddingTop,
+      surfaceTop: Math.round(
+        messaging.getBoundingClientRect().top - shell.getBoundingClientRect().top,
+      ),
+    }
+  })
+
+  expect(layout).toEqual({
+    ensOfferSafePadding: '72px',
+    messagingSafePadding: '72px',
+    shellPaddingTop: '0px',
+    surfaceTop: 10,
+  })
+})
+
 test('Worker health is versioned and a noncanonical-host manifest fails closed', async ({ request }) => {
   const health = await request.get('/api/health')
   expect(health.status()).toBe(200)
