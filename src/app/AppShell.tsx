@@ -11,16 +11,21 @@ type AppShellProps = {
 type SafeAreaStyle = CSSProperties & {
   '--host-safe-bottom': string
   '--host-safe-left': string
+  '--host-messaging-safe-top': string
   '--host-safe-right': string
   '--host-safe-top': string
 }
 
 export function AppShell({ children, host }: AppShellProps) {
   const insets = host.context?.client.safeAreaInsets
+  const messagingHostTop = host.context?.client.platformType === 'mobile'
+    ? 0
+    : (insets?.top ?? 0)
   const style: SafeAreaStyle = {
     '--host-safe-right': `${insets?.right ?? 0}px`,
     '--host-safe-bottom': `${insets?.bottom ?? 0}px`,
     '--host-safe-left': `${insets?.left ?? 0}px`,
+    '--host-messaging-safe-top': `${messagingHostTop}px`,
     '--host-safe-top': `${insets?.top ?? 0}px`,
   }
 

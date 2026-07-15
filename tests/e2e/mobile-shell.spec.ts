@@ -38,7 +38,7 @@ test('standalone shell fits an embedded mobile viewport', async ({ page }) => {
   expect(embeds.map((embed) => embed.version)).toEqual(['1', '1'])
 })
 
-test('ready messaging surface extends beneath the reserved top safe area', async ({ page }) => {
+test('ready messaging does not duplicate the mobile host top inset', async ({ page }) => {
   await page.goto('/')
 
   const layout = await page.evaluate(async () => {
@@ -47,6 +47,7 @@ test('ready messaging surface extends beneath the reserved top safe area', async
     if (!shell || !main) throw new Error('App shell did not render')
 
     shell.style.setProperty('--host-safe-top', '72px')
+    shell.style.setProperty('--host-messaging-safe-top', '0px')
     const messaging = document.createElement('div')
     messaging.className = 'messaging-app'
     const screen = document.createElement('section')
@@ -71,8 +72,8 @@ test('ready messaging surface extends beneath the reserved top safe area', async
   })
 
   expect(layout).toEqual({
-    ensOfferSafePadding: '72px',
-    messagingSafePadding: '72px',
+    ensOfferSafePadding: '18px',
+    messagingSafePadding: '0px',
     shellPaddingTop: '0px',
     surfaceTop: 10,
   })

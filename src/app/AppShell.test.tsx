@@ -29,6 +29,7 @@ describe('AppShell', () => {
     expect(shell).toHaveStyle({
       '--host-safe-bottom': '18px',
       '--host-safe-left': '2px',
+      '--host-messaging-safe-top': '0px',
       '--host-safe-right': '3px',
       '--host-safe-top': '72px',
     })
@@ -38,6 +39,7 @@ describe('AppShell', () => {
     render(<AppShell host={host('web')}><span>content</span></AppShell>)
 
     expect(screen.getByText('content').closest('.app-shell')).toHaveStyle({
+      '--host-messaging-safe-top': '72px',
       '--host-safe-top': '72px',
     })
   })
