@@ -695,7 +695,7 @@ Visual acceptance for the scaffold task:
 ### Layout
 
 - One full-height column using dynamic viewport units with a fallback.
-- Compact translucent header, one flexible scrolling content region, and a composer pinned inside the app layout rather than the page body.
+- Branded setup chrome followed by ready messaging screens that use only their compact contextual header, one flexible scrolling content region, and a composer pinned inside the app layout rather than the page body.
 - Honor top/bottom safe areas and virtual-keyboard changes.
 - Target Farcaster's documented web modal size of roughly 424×695 while scaling cleanly to mobile device dimensions.
 - Message bubbles may use roughly 80–85% of the narrow viewport; `converge.cv`'s desktop-friendly 66% cap is too narrow here.
@@ -1156,6 +1156,14 @@ Extended locally on 2026-07-14:
 - visible `visibilitychange`, `focus`, `pageshow`, and `online` recovery paths coalesce, while hidden documents defer network work until foreground; and
 - foreground recovery re-reads wallet account and chain without prompting, tears down a mismatched XMTP identity, and prevents a pending DM creation from reopening after the user navigates back.
 
+Compact ready-messaging extension implemented and locally verified on 2026-07-15:
+
+- once the inbox is ready, the inbox, New DM, and conversation screens use the available viewport directly instead of retaining the global Converge header and encryption footer around their own navigation;
+- onboarding, standalone, loading, and terminal setup states keep the branded shell context;
+- host and CSS safe-area insets remain honored when the ready messaging chrome is compacted;
+- the best-effort local-history warning has one accessible dismiss action remembered on that browser until site data is cleared; and
+- detailed local-storage and history-recovery disclosure remains available from the identity/privacy menu after the compact warning is dismissed.
+
 Automated coverage now includes a true 390 × 844 Playwright device viewport assertion with no horizontal overflow. Remaining in Task 3: the inbox/chat/composer states supplied by Tasks 5 and 6 and an embedded-host screenshot on the canonical domain.
 
 Deliverables:
@@ -1183,7 +1191,7 @@ Implemented on 2026-07-14:
 
 Extended locally on 2026-07-14:
 
-- secure-context, Worker, WebAssembly, Web Locks, and OPFS availability are verified before wallet access, while denied persistence continues with a durable best-effort warning;
+- secure-context, Worker, WebAssembly, Web Locks, and OPFS availability are verified before wallet access, while denied persistence continues with a locally dismissible best-effort warning and durable disclosure in the identity/privacy menu;
 - XMTP client initialization is bounded to 30 seconds; a timed-out or otherwise unreachable hidden Worker retains the origin lease and requires reload, while any late-returned Client is closed;
 - stream teardown always terminates the Client Worker before the caller releases the OPFS lease, even if SDK stream cleanup rejects or never settles; and
 - nested/structured-clone-shaped SDK errors are reduced to curated wallet, network, storage, installation-limit, and permanent inbox-update states without returning raw WASM messages, paths, or inbox IDs to the UI.

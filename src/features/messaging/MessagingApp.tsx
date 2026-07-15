@@ -30,6 +30,17 @@ type MessagingAppProps = {
   }
 }
 
+const STORAGE_WARNING_DISMISSAL_KEY =
+  'converge-miniapp:storage-warning-dismissed:v1'
+
+function storageWarningWasDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(STORAGE_WARNING_DISMISSAL_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 const connectionCopy: Partial<Record<ConnectionPhase, {
   description: string
   eyebrow: string
@@ -69,6 +80,9 @@ const connectionCopy: Partial<Record<ConnectionPhase, {
 
 export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppProps) {
   const [ensPromptSuppressed, setEnsPromptSuppressed] = useState(false)
+  const [storageWarningDismissed, setStorageWarningDismissed] = useState(
+    storageWarningWasDismissed,
+  )
   const messaging = useXmtpMessaging({ autoConnect: canUseWallet })
   const ensIdentity = useEnsIdentity({
     enabled: messaging.connection.phase === 'ready' && messaging.address !== null,
@@ -242,6 +256,15 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
         : 'The saved ENS preference could not be deleted.')
     }
   }
+  const dismissStorageWarning = () => {
+    setStorageWarningDismissed(true)
+    try {
+      window.localStorage.setItem(STORAGE_WARNING_DISMISSAL_KEY, '1')
+    } catch {
+      // The warning still stays dismissed for this mounted app when site
+      // storage is unavailable.
+    }
+  }
   const canOfferEns = ensIdentity.candidate &&
     ensIdentity.preference === null &&
     !ensPromptSuppressed &&
@@ -257,10 +280,17 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
           onDecline={() => setEnsPreference('dismissed')}
         />
       ) : null}
-      {messaging.storageDurability === 'best-effort' ? (
-        <div className="storage-warning" role="status">
+      {messaging.storageDurability === 'best-effort' && !storageWarningDismissed ? (
+        <div className="storage-warning">
           <AlertTriangle aria-hidden="true" />
-          <span>This browser may clear local message history under storage pressure. XMTP history recovery is best effort.</span>
+          <span role="status">This browser may clear local message history.</span>
+          <button
+            aria-label="Dismiss local history warning"
+            onClick={dismissStorageWarning}
+            type="button"
+          >
+            <X aria-hidden="true" />
+          </button>
         </div>
       ) : null}
       {messaging.notice ? (

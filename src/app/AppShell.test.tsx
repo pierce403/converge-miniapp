@@ -63,4 +63,13 @@ describe('AppShell', () => {
       '--host-safe-top': '72px',
     })
   })
+
+  it('retains branded shell context outside the ready messaging view', () => {
+    render(<AppShell host={host()}><span>setup content</span></AppShell>)
+
+    expect(screen.getByLabelText('Converge Mini')).toBeInTheDocument()
+    expect(screen.getByText(
+      'Private message content is end-to-end encrypted by XMTP.',
+    )).toBeInTheDocument()
+  })
 })

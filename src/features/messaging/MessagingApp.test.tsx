@@ -37,6 +37,7 @@ const user = { fid: 403, username: 'pierce' }
 describe('MessagingApp storage and installation states', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
     mocks.messaging.mockReturnValue(readyMessaging())
     mocks.ens.mockReturnValue(readyEns())
     mocks.participants.mockReturnValue({
@@ -144,17 +145,28 @@ describe('MessagingApp storage and installation states', () => {
     expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
   })
 
-  it('keeps best-effort storage risk visible throughout the ready inbox', () => {
+  it('remembers dismissal of the best-effort storage warning locally', () => {
     mocks.messaging.mockReturnValue({
       ...readyMessaging(),
       storageDurability: 'best-effort',
     })
 
-    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+    const firstRender = render(
+      <MessagingApp canUseBack={false} canUseWallet user={user} />,
+    )
 
     expect(screen.getByRole('status')).toHaveTextContent(
-      'browser may clear local message history under storage pressure',
+      'browser may clear local message history',
     )
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Dismiss local history warning',
+    }))
+    expect(screen.queryByText(/browser may clear local message history/i)).not.toBeInTheDocument()
+
+    firstRender.unmount()
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    expect(screen.queryByText(/browser may clear local message history/i)).not.toBeInTheDocument()
   })
 
   it('does not offer a disconnect that would reopen automatic onboarding', () => {
