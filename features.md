@@ -289,7 +289,7 @@ This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is p
 | Local data | Storage-loss/install-limit recognition | P0 | Implemented locally | Browser primitives are checked before wallet access; curated storage, installation, and permanent inbox-limit states never auto-revoke or expose raw database identifiers. |
 | Local data | Installation management/revocation UI | P1 | Later | User can deliberately inspect and revoke an old installation when required. |
 | Design | Converge-derived compact visual system | P0 | Implemented locally | Palette, bubbles, surfaces, inputs, focus states, and empty states are implemented; embedded-device review remains. |
-| Backend | Cloudflare Worker Static Assets | P0 | Implemented locally | Reproducible build/preview exists; manifest, headers, canonical deploy, and validation remain Task 7. |
+| Backend | Cloudflare Worker Static Assets | P0 | Deployed | The Worker and `miniapp.converge.cv` Custom Domain are live; Cloudflare Workers Builds deploys verified `main` commits. Farcaster ownership and production XMTP remain separate release gates. |
 | Backend | Authenticated XMTP payer Gateway | P0 | Blocked | Current Browser SDK must prove Gateway selection/auth, per-user quotas, viable container hosting, and one funded production send. |
 | Backend | Protected API and minimal identity data | P1 | Later | Quick Auth-protected API is added only for a named product flow; D1 stores no keys or plaintext messages. |
 | Backend | Notification token data model | P1 | Later | D1 stores only verified, protected notification lifecycle data after notifications are promoted. |
@@ -702,6 +702,7 @@ This is the implementation target. Protocol surfaces that still require live-hos
 
 - One Cloudflare Worker deployment with Static Assets for the SPA and first-party API routes.
 - Pin a current reviewed `compatibility_date`, generate binding types from the actual Wrangler configuration, and keep preview/production bindings explicit.
+- Keep GitHub Actions read-only. Cloudflare Workers Builds pulls `main` through the Cloudflare GitHub App, runs `npm run check`, and then runs `npx wrangler deploy`; never copy Cloudflare API tokens or account credentials into GitHub secrets.
 - D1 only for structured server-side data that is genuinely required.
 - Queue only if notification fan-out/retries justify asynchronous processing.
 - Turnstile only on public abuse-prone endpoints where it works inside the Mini App flow; do not put it in front of normal authenticated messaging startup.
@@ -1052,9 +1053,9 @@ Exit criteria:
 - Task 2 names Cloudflare and records verified deployment commands; and
 - the hosting decision is committed and pushed.
 
-### Task 2: application and verification scaffold — in progress
+### Task 2: application and verification scaffold — complete
 
-Implemented locally on 2026-07-14:
+Implemented locally on 2026-07-14 and deployed on 2026-07-15:
 
 - React 19, strict TypeScript, Vite, and the Cloudflare Vite plugin;
 - a Cloudflare Worker with a tested `/api/health` endpoint and bounded API 404 behavior;
@@ -1062,7 +1063,7 @@ Implemented locally on 2026-07-14:
 - ESLint, Vitest/Testing Library, a production build, and GitHub Actions CI; and
 - a verified production-shaped local preview serving both the SPA and Worker API.
 
-Remaining before Task 2 is complete: confirm GitHub Actions on the pushed commit and deploy the shell to an authenticated Cloudflare account/domain.
+The scaffold is live. The first Cloudflare Workers Builds production run pulled and deployed exact commit `87a94baa4d0079e5f59fbfdaec2afee66fd38d4c`; GitHub Actions remains the independent read-only verification path.
 
 Deliverables:
 
@@ -1212,7 +1213,7 @@ Implemented locally on 2026-07-14:
 - Cloudflare version metadata in the tested health response; and
 - operator, rollback, security, and privacy/data-inventory documentation.
 
-Remaining: configure the exact-domain Farcaster account association, authenticate and deploy to Cloudflare, validate the canonical manifest/embed in Farcaster, and complete the payer-Gateway proof below.
+The Worker and canonical Custom Domain are deployed. Remaining: configure the exact-domain Farcaster account association, validate the canonical manifest/embed in Farcaster, and complete the payer-Gateway proof below.
 
 Deliverables:
 

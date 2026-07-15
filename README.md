@@ -37,9 +37,6 @@ Run the deterministic type/lint/unit/build gates with `npm run check`. The brows
 
 ## Deployment
 
-```sh
-npm run deploy:preview
-npm run deploy
-```
+The production Worker and `miniapp.converge.cv` Custom Domain are live. Pushes to `main` are the ordinary production delivery path: a main-only Cloudflare Workers Builds trigger pulls through the Cloudflare GitHub App, runs `npm run check`, and then runs `npx wrangler deploy`. GitHub Actions remains read-only CI; do not store Cloudflare API tokens or account credentials in GitHub secrets. The `npm run deploy` and `npm run deploy:preview` scripts are reserved for explicit operator-owned manual work.
 
-The production command is configured for `miniapp.converge.cv`. Cloudflare account access, DNS ownership, a production payer Gateway, and the final Farcaster account-association signature are external setup requirements; no credentials belong in this repository. Until account association is configured, `/.well-known/farcaster.json` fails closed with a `503` instead of publishing placeholders.
+The production payer Gateway and final Farcaster account-association values remain unconfigured. Until account association is configured, `/.well-known/farcaster.json` fails closed with a `503` instead of publishing placeholders; until the Gateway is configured, production XMTP messaging fails closed.

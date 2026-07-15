@@ -45,6 +45,8 @@ These instructions apply to the entire repository.
 - Keep completed, planned, deferred, and rejected work visibly distinct in `features.md`.
 - Every feature needs testable acceptance criteria before implementation starts.
 - Document any required Cloudflare resources, secrets, migrations, domains, and deployment commands in the repository as they are introduced.
+- GitHub Actions is read-only CI. Production delivery is owned by Cloudflare Workers Builds, which pulls `main` through the Cloudflare GitHub App, runs `npm run check`, and then runs `npx wrangler deploy`.
+- Never store Cloudflare API tokens, account IDs, or other Cloudflare account credentials in GitHub Actions secrets. Keep the GitHub workflow unable to deploy.
 - Install reproducibly with `npm ci` (or `npm install` when intentionally updating the lockfile).
 - Generate Worker bindings after changing `wrangler.jsonc` with `npm run cf-typegen`.
 - Run the full local gate with `npm run check`; its typecheck, lint, test, and production-build stages must all pass.
