@@ -1206,6 +1206,7 @@ Exit criteria:
 Implemented locally on 2026-07-14:
 
 - a schema-tested dynamic `/.well-known/farcaster.json` with canonical metadata and fail-closed account-association configuration;
+- opaque account-association signatures are preserved exactly as returned by Farcaster while the signed payload is decoded to enforce the exact canonical domain;
 - current root `fc:miniapp` and compatibility `fc:frame` embeds plus opaque, dimension-tested PNG assets;
 - static/Worker security headers, immutable hashed-asset caching, preview `noindex`, and explicit Worker-first API/manifest routing;
 - Cloudflare version metadata in the tested health response; and

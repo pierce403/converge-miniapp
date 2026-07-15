@@ -55,5 +55,6 @@ These instructions apply to the entire repository.
 ## Current boundaries
 
 - Product implementation is authorized. Keep each coherent task independently verified, committed, and pushed.
+- Treat Farcaster account-association signatures as opaque strings. Validate the base64url payload and exact canonical domain, but do not impose a signature alphabet beyond the current Farcaster schema.
 - Do not assume push notifications require the same runtime as the web app; XMTP message observation and Farcaster notification delivery need a separate compatibility review.
 - Do not commit secrets, generated credentials, local databases, dependency directories, build output, or temporary research artifacts.

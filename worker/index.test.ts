@@ -88,18 +88,34 @@ describe('Farcaster manifest', () => {
     })
   })
 
-  it('fails closed when an association value is not base64url-shaped', async () => {
+  it('fails closed when the encoded association payload is not base64url-shaped', async () => {
     const response = handleRequest(
       new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
       environment({
         ...association,
-        FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE: 'not.a.signature',
+        FARCASTER_ACCOUNT_ASSOCIATION_PAYLOAD: 'not.a.payload',
       }),
     )
 
     expect(response.status).toBe(503)
     await expect(response.json()).resolves.toEqual({
       error: 'manifest_not_configured',
+    })
+  })
+
+  it('preserves the opaque signature string returned by Farcaster', async () => {
+    const signature = 'MEUCIQD+standard/base64==.'
+    const response = handleRequest(
+      new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
+      environment({
+        ...association,
+        FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE: signature,
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      accountAssociation: { signature },
     })
   })
 

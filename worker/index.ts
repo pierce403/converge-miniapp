@@ -18,7 +18,7 @@ const manifestJsonHeaders = {
   'content-type': 'application/json; charset=utf-8',
 }
 
-const ASSOCIATION_VALUE = /^[A-Za-z0-9_-]+$/
+const BASE64URL_VALUE = /^[A-Za-z0-9_-]+$/
 
 export type AppEnv = Env & {
   FARCASTER_ACCOUNT_ASSOCIATION_HEADER?: string
@@ -138,9 +138,8 @@ function accountAssociation(env: AppEnv, canonicalDomain: string) {
     !header ||
     !payload ||
     !signature ||
-    !ASSOCIATION_VALUE.test(header) ||
-    !ASSOCIATION_VALUE.test(payload) ||
-    !ASSOCIATION_VALUE.test(signature)
+    !BASE64URL_VALUE.test(header) ||
+    !BASE64URL_VALUE.test(payload)
   ) return null
 
   const decodedPayload = decodeBase64UrlJson(payload)
