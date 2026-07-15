@@ -1074,7 +1074,18 @@ Exit criteria:
 - empty production build and selected-provider local preview pass with pinned tool versions;
 - verified commands are added to `AGENTS.md`.
 
-### Task 3: visual shell and Mini App lifecycle
+### Task 3: visual shell and Mini App lifecycle — in progress
+
+Implemented locally on 2026-07-14:
+
+- the current Farcaster Mini App detection, context, capability, and `ready()` lifecycle using `@farcaster/miniapp-sdk@0.3.0`;
+- an honest standalone state that does not silently introduce a different wallet or XMTP identity;
+- host safe-area variables, Visual Viewport keyboard tracking, reduced-motion handling, visible focus, and narrow-screen layout constraints;
+- the canonical Converge blue/orange token system, compact glass shell, identity presentation, loading/error states, and capability explanation;
+- initial `fc:miniapp` plus legacy `fc:frame` embed metadata; and
+- deterministic SVG sources and generated PNG icon, splash, embed, and Open Graph assets, visually inspected after generation.
+
+Automated coverage now includes a true 390 × 844 Playwright device viewport assertion with no horizontal overflow. Remaining in Task 3: the inbox/chat/composer states supplied by Tasks 5 and 6 and an embedded-host screenshot on the canonical domain.
 
 Deliverables:
 

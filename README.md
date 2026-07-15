@@ -6,11 +6,12 @@ The product and delivery contract lives in [`features.md`](./features.md).
 
 ## Local development
 
-Requirements: Node.js 22.11 or newer and npm.
+Requirements: Node.js 22.13 or a supported newer even-numbered release, plus npm.
 
 ```sh
 npm install
 npm run cf-typegen
+npm run assets
 npm run dev
 ```
 
@@ -23,9 +24,10 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+npm run test:e2e
 ```
 
-Run all gates with `npm run check`.
+Run the deterministic type/lint/unit/build gates with `npm run check`. The browser smoke test uses the installed Chrome release and runs separately with `npm run test:e2e`.
 
 ## Deployment
 
