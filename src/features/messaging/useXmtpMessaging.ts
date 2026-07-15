@@ -3,6 +3,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { HostWalletConnection } from '../../lib/xmtp/signer'
 import type { XmtpLease } from '../../lib/xmtp/lease'
 import type { XmtpMessagingSession } from '../../lib/xmtp/session'
+import {
+  classifyXmtpFailure,
+  type XmtpFailureKind,
+  type XmtpOperationStage,
+} from '../../lib/xmtp/errors'
+import type { StorageDurability } from '../../lib/xmtp/storage'
 import type {
   ActiveConversation,
   ConversationSummary,
@@ -12,6 +18,7 @@ import type {
 
 export type ConnectionPhase =
   | 'idle'
+  | 'storage'
   | 'locking'
   | 'wallet'
   | 'xmtp'
@@ -19,6 +26,10 @@ export type ConnectionPhase =
   | 'syncing'
   | 'ready'
   | 'locked'
+  | 'unsupported-browser'
+  | 'storage-error'
+  | 'installation-limit'
+  | 'inbox-update-limit'
   | 'restart-required'
   | 'error'
 
@@ -70,6 +81,7 @@ export function useXmtpMessaging() {
   const [address, setAddress] = useState<`0x${string}` | null>(null)
   const [walletKind, setWalletKind] = useState<'EOA' | 'SCW' | null>(null)
   const [environment, setEnvironment] = useState('')
+  const [storageDurability, setStorageDurability] = useState<StorageDurability | null>(null)
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [activeConversation, setActiveConversation] = useState<ActiveConversation | null>(null)
   const [messages, setMessages] = useState<MessageItem[]>([])
@@ -251,6 +263,7 @@ export function useXmtpMessaging() {
     setAddress(null)
     setWalletKind(null)
     setEnvironment('')
+    setStorageDurability(null)
     setConversations([])
     setActiveConversation(null)
     setMessages([])
@@ -271,7 +284,9 @@ export function useXmtpMessaging() {
 
     connectingRef.current = true
     let clientCreationFailed = false
-    setConnection({ error: null, phase: 'locking' })
+    let failureStage: XmtpOperationStage = 'preflight'
+    setConnection({ error: null, phase: 'storage' })
+    setStorageDurability(null)
     updateNotice(null)
 
     try {
@@ -281,16 +296,23 @@ export function useXmtpMessaging() {
 
       const [
         { acquireXmtpLease },
+        { prepareXmtpStorage },
         { connectHostWallet },
         { XmtpClientInitializationError, XmtpMessagingSession },
       ] =
         await Promise.all([
           import('../../lib/xmtp/lease'),
+          import('../../lib/xmtp/storage'),
           import('../../lib/xmtp/signer'),
           import('../../lib/xmtp/session'),
         ])
       if (!isCurrent()) return
 
+      const durability = await prepareXmtpStorage()
+      if (!isCurrent()) return
+      setStorageDurability(durability)
+
+      setConnection({ error: null, phase: 'locking' })
       const lease = await acquireXmtpLease()
       if (!isCurrent()) {
         await lease?.release()
@@ -306,6 +328,7 @@ export function useXmtpMessaging() {
       leaseRef.current = lease
 
       setConnection({ error: null, phase: 'wallet' })
+      failureStage = 'wallet'
       const wallet = await connectHostWallet()
       if (!isCurrent()) {
         await lease.release()
@@ -325,6 +348,7 @@ export function useXmtpMessaging() {
         setAddress(null)
         setWalletKind(null)
         setEnvironment('')
+        setStorageDurability(null)
         setConversations([])
         setActiveConversation(null)
         setMessages([])
@@ -409,9 +433,8 @@ export function useXmtpMessaging() {
         provider.removeListener('disconnect', onDisconnect)
       }
 
-      void navigator.storage?.persist?.().catch(() => false)
-
       setConnection({ error: null, phase: 'xmtp' })
+      failureStage = 'initialize'
       let session: XmtpMessagingSession
       const sessionPromise = XmtpMessagingSession.create(wallet.signer, wallet.address)
       const pendingFactory: PendingSessionFactory = {
@@ -461,6 +484,7 @@ export function useXmtpMessaging() {
       if (!mountedRef.current || sessionRef.current !== session) return
 
       setConnection({ error: null, phase: 'syncing' })
+      failureStage = 'sync'
       const finalNoticeRevision = noticeRevisionRef.current
       const inboxRequest = ++inboxRequestRef.current
       refreshingRef.current = true
@@ -531,6 +555,7 @@ export function useXmtpMessaging() {
             error: readableMessagingError(
               error,
               'XMTP setup stopped before the client could be closed safely.',
+              failureStage,
             ),
             phase: 'restart-required',
           })
@@ -540,9 +565,12 @@ export function useXmtpMessaging() {
 
       await releaseResources()
       if (shouldReport && mountedRef.current) {
+        const failure = classifyXmtpFailure(error, failureStage)
         setConnection({
-          error: readableMessagingError(error, 'XMTP could not open this inbox.'),
-          phase: 'error',
+          error: failure.kind === 'unknown'
+            ? 'XMTP could not open this inbox.'
+            : failure.message,
+          phase: connectionFailurePhase(failure.kind),
         })
       }
     } finally {
@@ -713,6 +741,15 @@ export function useXmtpMessaging() {
       ) return
       void loadInbox(false)
       await openConversation(conversation.id, conversation)
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === 'That address does not have a reachable XMTP inbox yet.'
+      ) throw error
+      throw new Error(
+        readableMessagingError(error, 'XMTP could not check that address.', 'sync'),
+        { cause: error },
+      )
     } finally {
       if (operationGenerationRef.current === generation) {
         creatingDmRef.current = false
@@ -757,7 +794,7 @@ export function useXmtpMessaging() {
         sessionRef.current === session &&
         activeRef.current?.id === conversation.id
       ) {
-        updateNotice(readableMessagingError(error, 'XMTP could not send that message.'))
+        updateNotice(readableMessagingError(error, 'XMTP could not send that message.', 'send'))
       }
       throw error
     } finally {
@@ -799,7 +836,7 @@ export function useXmtpMessaging() {
         setMessages((current) => current.map((message) => (
           message.id === messageId ? { ...message, delivery: 'failed' } : message
         )))
-        updateNotice(readableMessagingError(error, 'XMTP could not retry that message.'))
+        updateNotice(readableMessagingError(error, 'XMTP could not retry that message.', 'send'))
       }
     } finally {
       if (operationGenerationRef.current === generation) {
@@ -967,21 +1004,32 @@ export function useXmtpMessaging() {
     setNotice: updateNotice,
     setView,
     streamHealth,
+    storageDurability,
     view,
     walletKind,
   }
 }
 
-function readableMessagingError(error: unknown, fallback: string): string {
-  if (isRejectedRequest(error)) {
-    return 'The wallet request was cancelled. Nothing was sent or changed.'
-  }
-  if (error instanceof Error && error.message.trim()) return error.message
-  return fallback
+function readableMessagingError(
+  error: unknown,
+  fallback: string,
+  stage: XmtpOperationStage = 'sync',
+): string {
+  const failure = classifyXmtpFailure(error, stage)
+  return failure.kind === 'unknown' ? fallback : failure.message
 }
 
-function isRejectedRequest(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 4001
+function connectionFailurePhase(kind: XmtpFailureKind): ConnectionPhase {
+  if (kind === 'installation-limit') return 'installation-limit'
+  if (kind === 'inbox-update-limit') return 'inbox-update-limit'
+  if (kind === 'unsupported-browser') return 'unsupported-browser'
+  if (
+    kind === 'storage-contention' ||
+    kind === 'storage-full' ||
+    kind === 'storage-denied' ||
+    kind === 'storage-corrupt'
+  ) return 'storage-error'
+  return 'error'
 }
 
 function mergeMessages(...collections: MessageItem[][]): MessageItem[] {

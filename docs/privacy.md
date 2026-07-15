@@ -9,6 +9,7 @@ Converge Mini is designed so its first-party Worker does not receive or store pr
 - The active wallet address, XMTP inbox/installation identifiers, conversations, messages, drafts, and consent state are processed in the browser.
 - XMTP's Browser SDK persists its database in origin-private file-system storage under `miniapp.converge.cv`. The database is local but is not encrypted at rest by this app. Anyone who can access the unlocked browser profile or exploit same-origin script execution may be able to read decrypted data.
 - A Web Lock prevents two same-origin tabs/windows from opening the XMTP database concurrently.
+- The app asks the browser for persistent storage after a user opens the inbox. If the browser grants only best-effort storage, the inbox remains usable but shows a standing warning that local history can be evicted under storage pressure.
 
 Clearing site data for `miniapp.converge.cv` deletes the local database and app storage, but it does not delete messages from XMTP or revoke an XMTP installation. Clearing storage can create another installation on the next setup, so the app never revokes other installations automatically.
 

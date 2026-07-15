@@ -25,6 +25,7 @@ import type {
 const VISIBLE_CONSENT_STATES = [ConsentState.Allowed]
 const INBOX_LIMIT = 50n
 const MESSAGE_PAGE_SIZE = 50n
+const CLIENT_INITIALIZATION_TIMEOUT_MS = 30_000
 const SUPPORTED_ENVS: readonly XmtpEnv[] = [
   'local',
   'dev',
@@ -55,6 +56,13 @@ export class XmtpClientInitializationError extends Error {
   }
 }
 
+export class XmtpClientInitializationTimeoutError extends Error {
+  constructor() {
+    super('XMTP client initialization timed out.')
+    this.name = 'XmtpClientInitializationTimeoutError'
+  }
+}
+
 export class XmtpMessagingSession {
   readonly address: `0x${string}`
   readonly client: Client
@@ -76,13 +84,21 @@ export class XmtpMessagingSession {
   static async create(signer: Signer, address: `0x${string}`) {
     const options = clientOptions()
     let client: Client
+    let clientPromise: Promise<Client> | null = null
 
     try {
-      client = await Client.create(signer, {
+      clientPromise = Client.create(signer, {
         ...options,
         disableAutoRegister: true,
       })
+      client = await withInitializationTimeout(clientPromise)
     } catch (error) {
+      if (error instanceof XmtpClientInitializationTimeoutError && clientPromise) {
+        // WorkerBridge does not reject outstanding actions after a fatal Worker
+        // error. If initialization eventually returns, close that late client;
+        // until then the caller keeps the origin lease and requires a reload.
+        void clientPromise.then((lateClient) => lateClient.close()).catch(() => undefined)
+      }
       // browser-sdk@7.0.0 creates its Worker before init and does not expose the
       // Client on rejection, so the caller must require a document restart.
       throw new XmtpClientInitializationError(error)
@@ -420,6 +436,21 @@ export class XmtpMessagingSession {
         .reverse()
         .map((message) => toMessageItem(message, this.inboxId, true)),
     }
+  }
+}
+
+async function withInitializationTimeout(clientPromise: Promise<Client>): Promise<Client> {
+  let timeoutId: number | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new XmtpClientInitializationTimeoutError())
+    }, CLIENT_INITIALIZATION_TIMEOUT_MS)
+  })
+
+  try {
+    return await Promise.race([clientPromise, timeout])
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId)
   }
 }
 

@@ -29,7 +29,10 @@ vi.mock('@xmtp/browser-sdk', () => {
   }
 })
 
-import { XmtpMessagingSession } from './session'
+import {
+  XmtpClientInitializationError,
+  XmtpMessagingSession,
+} from './session'
 
 const address = '0x52908400098527886E0F7030069857D2E4169EE7'
 const signer = {
@@ -116,6 +119,30 @@ describe('XmtpMessagingSession behavior', () => {
       expect.objectContaining({ disableAutoRegister: true, env: 'dev' }),
     )
     expect(fakeClient.close).toHaveBeenCalledOnce()
+  })
+
+  it('bounds a stalled client initialization and closes a late client', async () => {
+    vi.useFakeTimers()
+    const fakeClient = client(dm())
+    let resolveClient!: (value: typeof fakeClient) => void
+    sdkMocks.create.mockReturnValue(new Promise((resolve) => {
+      resolveClient = resolve
+    }))
+
+    try {
+      const creating = XmtpMessagingSession.create(signer, address)
+      const rejection = expect(creating).rejects.toBeInstanceOf(
+        XmtpClientInitializationError,
+      )
+      await vi.advanceTimersByTimeAsync(30_000)
+      await rejection
+
+      resolveClient(fakeClient)
+      await vi.waitFor(() => expect(fakeClient.close).toHaveBeenCalledOnce())
+      expect(fakeClient.register).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('loads the newest page chronologically and recovers persisted drafts', async () => {

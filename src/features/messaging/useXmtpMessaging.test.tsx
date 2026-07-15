@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   acquireXmtpLease: vi.fn(),
   connectHostWallet: vi.fn(),
   createSession: vi.fn(),
+  prepareStorage: vi.fn(),
 }))
 
 vi.mock('../../lib/xmtp/lease', () => ({
@@ -20,6 +21,10 @@ vi.mock('../../lib/xmtp/lease', () => ({
 
 vi.mock('../../lib/xmtp/signer', () => ({
   connectHostWallet: mocks.connectHostWallet,
+}))
+
+vi.mock('../../lib/xmtp/storage', () => ({
+  prepareXmtpStorage: mocks.prepareStorage,
 }))
 
 vi.mock('../../lib/xmtp/session', () => {
@@ -118,6 +123,7 @@ describe('useXmtpMessaging', () => {
     mocks.acquireXmtpLease.mockResolvedValue({
       release: vi.fn().mockResolvedValue(undefined),
     })
+    mocks.prepareStorage.mockResolvedValue('persistent')
     mocks.connectHostWallet.mockResolvedValue({
       address,
       chainId: 10n,
@@ -125,6 +131,50 @@ describe('useXmtpMessaging', () => {
       provider,
       signer: {},
     })
+  })
+
+  it('stops before wallet access when secure browser storage is unsupported', async () => {
+    mocks.prepareStorage.mockRejectedValue({
+      message: 'This browser does not provide the secure local storage XMTP requires.',
+      name: 'XmtpStorageUnsupportedError',
+    })
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+
+    expect(result.current.connection.phase).toBe('unsupported-browser')
+    expect(result.current.connection.error).toMatch(/secure local storage features/)
+    expect(mocks.acquireXmtpLease).not.toHaveBeenCalled()
+    expect(mocks.connectHostWallet).not.toHaveBeenCalled()
+  })
+
+  it('continues with a persistent warning when durability is best effort', async () => {
+    const session = createSession()
+    mocks.prepareStorage.mockResolvedValue('best-effort')
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+
+    expect(result.current.connection.phase).toBe('ready')
+    expect(result.current.storageDurability).toBe('best-effort')
+  })
+
+  it('releases the lease and stops on the active-installation limit', async () => {
+    const lease = { release: vi.fn().mockResolvedValue(undefined) }
+    mocks.acquireXmtpLease.mockResolvedValue(lease)
+    mocks.createSession.mockRejectedValue(new Error(
+      'Cannot register a new installation because the InboxID private-id has already registered 10 installations. Please revoke existing installations first.',
+    ))
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+
+    expect(result.current.connection.phase).toBe('installation-limit')
+    expect(result.current.connection.error).toMatch(/maximum number of active installations/)
+    expect(result.current.connection.error).not.toContain('private-id')
+    expect(mocks.createSession).toHaveBeenCalledOnce()
+    expect(lease.release).toHaveBeenCalledOnce()
   })
 
   it('shows the cached inbox before sync settles and retains it when sync fails', async () => {
@@ -158,7 +208,7 @@ describe('useXmtpMessaging', () => {
     expect(result.current.connection.phase).toBe('ready')
     expect(result.current.refreshing).toBe(false)
     expect(result.current.conversations).toEqual([cachedConversation])
-    expect(result.current.notice).toBe('Network sync is unavailable.')
+    expect(result.current.notice).toMatch(/temporarily unreachable/)
     expect(result.current.streamHealth).toBe('failed')
     expect(session.startMessageStream).toHaveBeenCalledOnce()
   })
@@ -391,6 +441,21 @@ describe('useXmtpMessaging', () => {
     expect(result.current.view).toBe('inbox')
     expect(result.current.activeConversation).toBeNull()
     expect(session.loadConversation).not.toHaveBeenCalled()
+  })
+
+  it('does not expose raw XMTP errors in recipient validation', async () => {
+    const session = createSession({
+      createDm: vi.fn().mockRejectedValue(
+        new Error('opaque database detail for private-inbox-id'),
+      ),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    await expect(result.current.createDm(
+      '0x2222222222222222222222222222222222222222',
+    )).rejects.toThrow('XMTP could not check that address.')
   })
 
   it('refreshes an open conversation when the app comes back online', async () => {

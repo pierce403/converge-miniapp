@@ -31,6 +31,11 @@ const connectionCopy: Partial<Record<ConnectionPhase, {
   eyebrow: string
   title: string
 }>> = {
+  storage: {
+    description: 'XMTP needs secure browser storage, WebAssembly, a Worker, and a single-owner database lock before any wallet signature is requested.',
+    eyebrow: 'Browser capability check',
+    title: 'Checking local message storage',
+  },
   locking: {
     description: 'Only one Converge Mini window can use the local XMTP database at a time.',
     eyebrow: 'Local safety check',
@@ -113,6 +118,59 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
     )
   }
 
+  if (messaging.connection.phase === 'unsupported-browser') {
+    return (
+      <StatePanel
+        actions={<Button variant="ghost" onClick={messaging.disconnect}>Back</Button>}
+        description={messaging.connection.error ?? 'This browser cannot safely open XMTP local storage.'}
+        eyebrow="Unsupported browser storage"
+        icon={<AlertTriangle aria-hidden="true" />}
+        title="XMTP cannot open safely here"
+      />
+    )
+  }
+
+  if (messaging.connection.phase === 'storage-error') {
+    return (
+      <StatePanel
+        actions={(
+          <>
+            <Button onClick={() => window.location.reload()}>Reload Mini App</Button>
+            <Button variant="ghost" onClick={messaging.disconnect}>Back</Button>
+          </>
+        )}
+        description={messaging.connection.error ?? 'The local XMTP database could not open safely.'}
+        eyebrow="Local message storage"
+        icon={<AlertTriangle aria-hidden="true" />}
+        title="Browser storage needs attention"
+      />
+    )
+  }
+
+  if (messaging.connection.phase === 'installation-limit') {
+    return (
+      <StatePanel
+        actions={<Button variant="ghost" onClick={messaging.disconnect}>Back</Button>}
+        description={messaging.connection.error ?? 'Revoke an old installation in another XMTP client before returning.'}
+        eyebrow="XMTP installation limit"
+        icon={<AlertTriangle aria-hidden="true" />}
+        title="This inbox has no installation slot"
+      />
+    )
+  }
+
+  if (messaging.connection.phase === 'inbox-update-limit') {
+    return (
+      <StatePanel
+        actions={<Button variant="ghost" onClick={messaging.disconnect}>Back</Button>}
+        description={messaging.connection.error ?? 'This inbox cannot accept more identity updates.'}
+        eyebrow="Permanent XMTP inbox limit"
+        icon={<AlertTriangle aria-hidden="true" />}
+        title="This inbox cannot add another installation"
+      />
+    )
+  }
+
   if (messaging.connection.phase === 'error') {
     return (
       <StatePanel
@@ -134,6 +192,12 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
 
   return (
     <div className={`messaging-app ${messaging.notice ? 'messaging-app--notice' : ''}`}>
+      {messaging.storageDurability === 'best-effort' ? (
+        <div className="storage-warning" role="status">
+          <AlertTriangle aria-hidden="true" />
+          <span>This browser may clear local message history under storage pressure. XMTP history recovery is best effort.</span>
+        </div>
+      ) : null}
       {messaging.notice ? (
         <div className="app-notice" role="alert">
           <span>{messaging.notice}</span>
