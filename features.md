@@ -316,9 +316,9 @@ Success condition: the optional label flow never moves identity state; the expli
 | Backend | Cloudflare Worker Static Assets | P0 | Deployed | The Worker, `miniapp.converge.cv` Custom Domain, and Farcaster ownership are live; Cloudflare Workers Builds deploys verified `main` commits. Production XMTP remains a separate release gate. |
 | Backend | Authenticated XMTP payer Gateway | P0 | Blocked | A decentralized-mainnet move must prove Gateway selection/auth, per-user quotas, viable container hosting, and one funded send. Legacy `production` inbox testing can proceed independently. |
 | Backend | Protected API and minimal identity data | P1 | Implemented locally | Exact-host Quick Auth routes and isolated production/preview D1 bindings store only ENS `accepted`/`dismissed` choice by FID; migration and production route proof remain. |
-| Backend | Notification token data model | P1 | Later | D1 stores only verified, protected notification lifecycle data after notifications are promoted. |
+| Backend | Notification token data model | P1 | In progress | The encrypted, fail-closed webhook lifecycle is the first slice. Promotion still requires a current Hub verifier credential before the manifest advertises the webhook or the UI asks users to enable alerts. |
 | Operations | Redacted logs, health, and error visibility | P0 | Committed | Failures are diagnosable without leaking message content, tokens, or full wallet identifiers. |
-| Notifications | Add Mini App and store notification permission | P1 | Proposed | Signed webhooks are verified and token lifecycle is correct. |
+| Notifications | Add Mini App and store notification permission | P1 | Blocked on verifier credential | Implement the unadvertised server lifecycle first. Do not expose the permission prompt or manifest `webhookUrl` until production can verify app keys against current Farcaster network state. |
 | Notifications | Notify on incoming XMTP message | P1 | Spike | Privacy-safe bridge works while client is closed without user decryption keys. |
 | Sharing | Share app with Farcaster compose action | P1 | Later | User can share a generic app card without leaking private conversation details. |
 | Settings | Expanded privacy/identity/about sheet | P1 | Later | Add trusted profile/FID, inbox/installation details, version, notifications, and broader future account-data controls beyond the implemented compact menu. |
@@ -621,6 +621,24 @@ Selection criteria: correctness, latency, rate limits, cost, privacy, Cloudflare
 
 #### Permission and token lifecycle (P1)
 
+Server-foundation acceptance criteria:
+
+- Add one exact-host `POST /api/farcaster/webhook` route, but keep it absent from the manifest until every production dependency is configured and proven. Wrong hosts, methods, media types, oversized bodies, malformed signatures, inactive app keys, missing D1, missing encryption material, and verifier outages fail closed without persisting data.
+- Parse and verify the Farcaster Signature with the pinned official Mini App server package and a current Hub-backed app-key verifier. Never substitute unverified Mini App context, Quick Auth, a client-supplied FID, or a stale local key list for this verification.
+- Key each subscription by the verified user FID and verified Farcaster client app FID. Encrypt the exact delivery URL and token together with AES-256-GCM, a fresh 96-bit nonce, versioned key material, and additional authenticated data binding both FIDs plus the canonical domain. Store no plaintext token or delivery URL and never return either through an app API.
+- Accept only a reviewed exact HTTPS notification-delivery endpoint for the verified client, with no userinfo, non-default port, fragments, alternate host spelling, or redirects. Apply the same allowlist again at delivery time.
+- Upsert on a verified `miniapp_added` event that contains notification details and on `notifications_enabled`; delete the exact client row on `miniapp_removed`, `notifications_disabled`, or an add event without notification details. Replays are idempotent. Authenticated account deletion removes notification rows with the ENS preference.
+- Document that Farcaster webhook events contain no event timestamp or sequence. A future delivery queue must recheck that the subscription is still active and treat removal/disable and invalid-token responses as fail-closed deletion rather than assuming total event ordering.
+- Automated tests cover encryption round trips and row-swap/AAD failures, nonce uniqueness, malformed key material, signed-event lifecycle, body bounds, URL allowlist bypasses, exact-client deletion, idempotent replays, missing configuration, and redaction-safe failures.
+
+Production-promotion gate:
+
+- Configure a reviewed Hub URL and its API credential (or an operated Hub) for current app-key verification. As of the 2026-07-15 review, the deployed Worker has no such credential and no keyless public Farcaster-owned HTTPS Hub endpoint was available, so this is an explicit operator blocker rather than a reason to weaken verification.
+- Apply the additive D1 migration to preview and production before deploying Worker code that queries it; configure the encryption key as a Worker secret; prove verified add/enable/disable/remove fixtures against preview; then add the exact canonical webhook URL to the manifest.
+- Only after the signed webhook is receiving and storing lifecycle events may the ready inbox show a dismissible **Enable alerts** prompt. Calling `sdk.actions.addMiniApp()` always requires a user tap. Farcaster enables notifications by default when the user adds the Mini App, where the host supports it.
+- Treat `sdk.context.client.notificationDetails` and SDK events as display-only open-app hints. Pass only status booleans/client identity through React; never persist or log the context token or URL. The existing identity/privacy menu must always expose the current alert status and host-settings guidance after a banner dismissal.
+- Permission copy must say that adding Converge Mini enables Farcaster alerts, but must not promise incoming-message alerts until the separate closed-app XMTP observer is proven and live.
+
 - Ask the user to add/enable the Mini App only after explaining the benefit.
 - Receive `miniapp_added`, `miniapp_removed`, `notifications_enabled`, and `notifications_disabled` webhooks.
 - Verify signed webhook events against current Farcaster network state before storing anything.
@@ -811,7 +829,7 @@ This is the implementation target. Protocol surfaces that still require live-hos
 | `DELETE /api/me` | Quick Auth | Delete the verified FID's saved ENS preference. | Implemented locally with menu control |
 | `POST /api/resolve` | Quick Auth + rate limit | ENSIP-15-normalize and forward-resolve one bounded dot-separated recipient name without putting the raw query in URLs/history/referrers or persistence. | Implemented locally |
 | `POST /api/identity/link` | Quick Auth + proof | Store a verified FID/wallet/inbox mapping after a separately specified proof protocol. | P1 spike; do not implement yet |
-| `POST /api/farcaster/webhook` | Signed event verification | Apply add/remove/notification token lifecycle. | P1 |
+| `POST /api/farcaster/webhook` | Signed event verification | Apply add/remove/notification token lifecycle. | P1 foundation implemented; unadvertised and fail-closed until the Hub credential is configured |
 | `POST /api/xmtp-push-subscriptions` | Quick Auth + identity proof | Register/rotate encrypted XMTP topic/HMAC filtering material only after Browser SDK feasibility is proven. | P1 spike; blocked |
 | `POST /api/notifications/test` | Admin-only | Verify notification plumbing without exposing an open sender. | P1 |
 
@@ -829,6 +847,15 @@ There is no stored ENS name, wallet address, XMTP inbox/installation ID, Quick A
 
 Production and preview use separate `PREFERENCES` D1 databases and the same repository migration under `migrations/`.
 
+#### `farcaster_notification_subscriptions` (implemented foundation; unadvertised)
+
+- trusted positive `fid` and Farcaster client `app_fid` composite primary key;
+- one AES-256-GCM ciphertext containing the exact delivery URL and token together;
+- fresh nonce and encryption-key version; and
+- created/updated Unix timestamps.
+
+The Worker derives both FIDs only from a verified Farcaster Signature and current app-key lookup. No plaintext token, delivery URL, event body, signature, message content, or XMTP identifier is stored. Add/enable rotates the encrypted details; add without details, disable, removal, and authenticated account deletion remove the applicable row. The table is not proof that notifications are live: the manifest omits the webhook and the UI stays off until the verifier credential and end-to-end lifecycle are proven.
+
 ### Planned D1 models (not created)
 
 #### `identity_links` (P1 spike)
@@ -841,14 +868,6 @@ Production and preview use separate `PREFERENCES` D1 databases and the same repo
 - no private key material.
 
 The identity-link endpoint is intentionally gated on a separate protocol specification. That specification must define a server nonce/challenge, domain and FID binding, wallet signature format, EOA/SCW verification, XMTP environment and inbox binding, confirmation that the wallet appears in freshly fetched XMTP inbox state, expiry, one-time replay protection, account-change behavior, and verification tests before this table is created in production.
-
-#### `notification_subscriptions` (P1)
-
-- trusted `fid` and client identifier;
-- exact notification URL;
-- encrypted/token-protected notification token;
-- active state and lifecycle timestamps; and
-- last result/invalidated timestamp without notification content.
 
 #### `notification_deliveries` (only if needed)
 

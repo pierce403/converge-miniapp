@@ -9,6 +9,7 @@ import {
   resolveParticipantIdentities,
   type ParticipantIdentityBatch,
 } from './participantIdentities.js'
+import { handleFarcasterWebhook } from './farcasterWebhook.js'
 import { verifyQuickAuthToken } from './quickAuth.js'
 import { getAddress, isAddress } from 'viem'
 
@@ -53,6 +54,10 @@ export type AppEnv = {
   FARCASTER_ACCOUNT_ASSOCIATION_HEADER?: string
   FARCASTER_ACCOUNT_ASSOCIATION_PAYLOAD?: string
   FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE?: string
+  FARCASTER_HUB_API_KEY?: string
+  FARCASTER_HUB_URL?: string
+  FARCASTER_NOTIFICATION_DELIVERY_URLS?: string
+  FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1?: string
   IDENTITY_RATE_LIMITER?: RateLimit
   PREFERENCES?: D1Database
 }
@@ -105,6 +110,10 @@ export async function handleRequest(
       },
       { headers: noStoreJsonHeaders },
     )
+  }
+
+  if (url.pathname === '/api/farcaster/webhook') {
+    return handleFarcasterWebhook(request, env)
   }
 
   if (
@@ -481,9 +490,14 @@ async function identityApi(
       })
     }
 
-    await env.PREFERENCES.prepare(
-      'DELETE FROM ens_identity_preferences WHERE fid = ?1',
-    ).bind(fid).run()
+    await env.PREFERENCES.batch([
+      env.PREFERENCES.prepare(
+        'DELETE FROM ens_identity_preferences WHERE fid = ?1',
+      ).bind(fid),
+      env.PREFERENCES.prepare(
+        'DELETE FROM farcaster_notification_subscriptions WHERE fid = ?1',
+      ).bind(fid),
+    ])
     return new Response(null, {
       status: 204,
       headers: { ...securityHeaders, 'cache-control': 'no-store' },

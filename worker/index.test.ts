@@ -63,6 +63,22 @@ describe('worker API', () => {
     await expect(response.json()).resolves.toEqual({ error: 'not_found' })
   })
 
+  it('routes the unadvertised Farcaster webhook and fails closed without configuration', async () => {
+    const response = await handleRequest(
+      new Request('https://miniapp.converge.cv/api/farcaster/webhook', {
+        body: '{}',
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+      environment(),
+    )
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toEqual({
+      error: 'notification_unavailable',
+    })
+  })
+
   it('returns an authenticated, forward-verified ENS candidate and preference', async () => {
     const preferences = fakePreferences('dismissed')
     const dependencies = identityDependencies()
@@ -684,6 +700,7 @@ describe('worker API', () => {
     )
     expect(deleted.status).toBe(204)
     expect(preferences.choice()).toBeNull()
+    expect(preferences.notificationRows()).toBe(0)
   })
 
   it('rejects malformed preference writes without touching D1', async () => {
@@ -759,19 +776,25 @@ function identityDependencies() {
 
 function fakePreferences(initialChoice: 'accepted' | 'dismissed' | null = null) {
   let choice = initialChoice
+  let notificationRows = 1
   const database = {
+    batch: async (statements: Array<{ run: () => Promise<unknown> }>) =>
+      Promise.all(statements.map((statement) => statement.run())),
     prepare: (query: string) => ({
       bind: (...values: unknown[]) => ({
         first: async () => query.includes('SELECT') && choice ? { choice } : null,
         run: async () => {
           if (query.includes('INSERT')) choice = values[1] as typeof choice
-          if (query.includes('DELETE')) choice = null
+          if (query.includes('DELETE FROM ens_identity_preferences')) choice = null
+          if (query.includes('DELETE FROM farcaster_notification_subscriptions')) {
+            notificationRows = 0
+          }
           return { success: true }
         },
       }),
     }),
   } as unknown as D1Database
-  return { choice: () => choice, database }
+  return { choice: () => choice, database, notificationRows: () => notificationRows }
 }
 
 describe('Farcaster manifest', () => {
