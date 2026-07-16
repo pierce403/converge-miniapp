@@ -19,6 +19,7 @@ function renderInbox(conversations: ConversationSummary[]) {
       }}
       environment="dev · EOA"
       onClearEnsPreference={vi.fn()}
+      onJoinConvos={vi.fn()}
       onNewDm={vi.fn()}
       onOpen={vi.fn()}
       onRefresh={vi.fn()}
@@ -51,6 +52,7 @@ describe('InboxScreen', () => {
     expect(screen.queryByRole('button', { name: 'Refresh now' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Refresh inbox' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'New DM' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Join Convos' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Check ENS identity' })).toBeDisabled()
   })
 

@@ -7,6 +7,8 @@ import type {
   ConversationSummary,
   MessageItem,
 } from './types'
+import type { ParsedConvosInvite } from '../../lib/convos/invite'
+import { ConvosInviteError } from '../../lib/convos/error'
 import { XmtpClientInitializationError } from '../../lib/xmtp/session'
 import { useXmtpMessaging } from './useXmtpMessaging'
 
@@ -14,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   acquireXmtpLease: vi.fn(),
   connectHostWallet: vi.fn(),
   createSession: vi.fn(),
+  parseConvosInvite: vi.fn(),
   prepareStorage: vi.fn(),
 }))
 
@@ -27,6 +30,10 @@ vi.mock('../../lib/xmtp/signer', () => ({
 
 vi.mock('../../lib/xmtp/storage', () => ({
   prepareXmtpStorage: mocks.prepareStorage,
+}))
+
+vi.mock('../../lib/convos/invite', () => ({
+  parseConvosInvite: mocks.parseConvosInvite,
 }))
 
 vi.mock('../../lib/xmtp/session', () => {
@@ -114,6 +121,7 @@ function createSession(overrides: Record<string, unknown> = {}) {
     loadOlderMessages: vi.fn(),
     readConversation: vi.fn(),
     readInbox: vi.fn().mockResolvedValue([cachedConversation]),
+    requestConvosAccess: vi.fn(),
     requestHistorySync: vi.fn().mockResolvedValue(false),
     startMessageStream: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -123,6 +131,10 @@ function createSession(overrides: Record<string, unknown> = {}) {
 describe('useXmtpMessaging', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.parseConvosInvite.mockImplementation((slug: string) => ({
+      ...convosInvite(),
+      slug,
+    }))
     localStorage.clear()
     sessionStorage.clear()
     Object.defineProperty(navigator, 'onLine', {
@@ -1029,6 +1041,140 @@ describe('useXmtpMessaging', () => {
     expect(session.loadConversation).not.toHaveBeenCalled()
   })
 
+  it('sends one Convos request per in-flight deliberate attempt without Web Storage', async () => {
+    const sending = deferred<{
+      conversationId: string
+      messageId: string
+    }>()
+    const requestConvosAccess = vi.fn().mockReturnValue(sending.promise)
+    const session = createSession({ requestConvosAccess })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    const invite = convosInvite()
+    let first!: Promise<void>
+    let duplicate!: Promise<void>
+    act(() => {
+      first = result.current.requestConvosAccess(invite)
+      duplicate = result.current.requestConvosAccess(invite)
+    })
+
+    expect(result.current.convosAccessRequest).toMatchObject({
+      invite,
+      status: 'sending',
+    })
+    expect(requestConvosAccess).toHaveBeenCalledOnce()
+    await duplicate
+    await act(async () => {
+      sending.resolve({
+        conversationId: 'creator-transport-dm',
+        messageId: 'join-request-message',
+      })
+      await first
+    })
+
+    expect(result.current.convosAccessRequest).toMatchObject({
+      conversationId: 'creator-transport-dm',
+      error: null,
+      messageId: 'join-request-message',
+      status: 'waiting',
+    })
+    expect(storageValues(localStorage).join(' ')).not.toContain(invite.slug)
+    expect(storageValues(sessionStorage).join(' ')).not.toContain(invite.slug)
+  })
+
+  it('revalidates before every deliberate fresh Convos retry', async () => {
+    const requestConvosAccess = vi.fn()
+      .mockRejectedValueOnce(new Error('database path and bearer-secret-slug'))
+      .mockResolvedValueOnce({
+        conversationId: 'creator-transport-dm',
+        messageId: 'join-request-message',
+      })
+    const session = createSession({ requestConvosAccess })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    await act(async () => result.current.requestConvosAccess(convosInvite()))
+    expect(result.current.convosAccessRequest).toMatchObject({
+      conversationId: null,
+      error: 'XMTP could not send the Convos access request.',
+      messageId: null,
+      status: 'failed',
+    })
+    expect(result.current.convosAccessRequest?.error).not.toContain('bearer-secret')
+
+    await act(async () => result.current.retryConvosAccess())
+    expect(requestConvosAccess).toHaveBeenCalledTimes(2)
+    expect(mocks.parseConvosInvite).toHaveBeenCalledWith('bearer-secret-slug')
+    expect(result.current.convosAccessRequest?.status).toBe('waiting')
+  })
+
+  it('lets an ordinary failed Convos attempt be abandoned safely', async () => {
+    const session = createSession({
+      requestConvosAccess: vi.fn().mockRejectedValue(new Error('send failed')),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    await act(async () => result.current.requestConvosAccess(convosInvite()))
+
+    expect(result.current.convosAccessRequest).toMatchObject({
+      retryMode: 'fresh',
+      status: 'failed',
+    })
+    act(() => result.current.resetConvosAccessRequest())
+    expect(result.current.convosAccessRequest).toBeNull()
+  })
+
+  it.each([
+    ['invite_expired', 'That Convos invite has expired.'],
+    ['conversation_expired', 'That Convos conversation has expired.'],
+  ] as const)('blocks Convos retry after %s revalidation', async (code, message) => {
+    const requestConvosAccess = vi.fn().mockRejectedValue(
+      new Error('network send failed'),
+    )
+    const session = createSession({ requestConvosAccess })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    await act(async () => result.current.requestConvosAccess(convosInvite()))
+    mocks.parseConvosInvite.mockImplementationOnce(() => {
+      throw new ConvosInviteError(code)
+    })
+
+    await act(async () => result.current.retryConvosAccess())
+
+    expect(requestConvosAccess).toHaveBeenCalledOnce()
+    expect(result.current.convosAccessRequest).toMatchObject({
+      error: message,
+      retryMode: 'reset',
+      status: 'failed',
+    })
+    act(() => result.current.resetConvosAccessRequest())
+    expect(result.current.convosAccessRequest).toBeNull()
+  })
+
+  it('preserves a pending Convos request on back and clears it on disconnect', async () => {
+    const session = createSession({
+      requestConvosAccess: vi.fn().mockResolvedValue({
+        conversationId: 'creator-transport-dm',
+        messageId: 'join-request-message',
+      }),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    act(() => result.current.setView('join-convos'))
+    await act(async () => result.current.requestConvosAccess(convosInvite()))
+
+    act(() => result.current.backToInbox())
+    expect(result.current.convosAccessRequest?.status).toBe('waiting')
+    await act(async () => result.current.disconnect())
+    expect(result.current.convosAccessRequest).toBeNull()
+  })
+
   it('does not expose raw XMTP errors in recipient validation', async () => {
     const session = createSession({
       createDm: vi.fn().mockRejectedValue(
@@ -1164,3 +1310,15 @@ describe('useXmtpMessaging', () => {
     await waitFor(() => expect(session.close).toHaveBeenCalledOnce())
   })
 })
+
+function convosInvite(): ParsedConvosInvite {
+  return {
+    creatorInboxId: 'creator-inbox',
+    emoji: '🌱',
+    expiresAfterUse: false,
+    name: 'Garden chat',
+    reusable: true,
+    slug: 'bearer-secret-slug',
+    tag: 'secret-conversation-tag',
+  }
+}

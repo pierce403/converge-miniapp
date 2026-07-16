@@ -26,12 +26,20 @@ import {
   isTransactionReference,
   isWalletSendCalls,
   type AsyncStreamProxy,
+  type BuiltInContentTypes,
   type DecodedMessage,
+  type EnrichedReply,
   type Identifier,
   type InboxState,
   type Signer,
   type XmtpEnv,
 } from '@xmtp/browser-sdk'
+import type { ContentCodec } from '@xmtp/content-type-primitives'
+import {
+  convosJoinRequestCodec,
+  type ConvosJoinRequest,
+} from '../convos/joinRequestCodec'
+import type { ParsedConvosInvite } from '../convos/invite'
 
 import {
   MAX_MESSAGE_REACTIONS,
@@ -49,6 +57,7 @@ import {
 const INBOX_PREVIEW_SCAN_SIZE = 200n
 
 type LatestDisplayableMessage = {
+  hideConversation: boolean
   hiddenActivityAt: Date | null
   message: DecodedMessage | undefined
 }
@@ -74,11 +83,34 @@ const GATEWAY_REQUIRED_ENVS: readonly XmtpEnv[] = [
   'mainnet',
 ]
 
-type IncomingMessage = DecodedMessage
+type AppContentTypes =
+  | ConvosJoinRequest
+  | BuiltInContentTypes
+  | EnrichedReply<
+    ConvosJoinRequest | BuiltInContentTypes,
+    ConvosJoinRequest | BuiltInContentTypes
+  >
+/*
+ * browser-sdk@7's ContentCodec[] constraint is invariant under strict function
+ * types even though Client.create accepts and registers typed codecs at runtime.
+ * Keep the cast at this single SDK boundary; the codec itself remains strongly
+ * typed and independently tested.
+ */
+const APP_CODECS = [
+  convosJoinRequestCodec as unknown as ContentCodec,
+]
+type AppClient = Client<AppContentTypes>
+type AppDm = Dm<AppContentTypes>
+type IncomingMessage = DecodedMessage<AppContentTypes>
 
 export type SendResult = {
   error: string | null
   message: MessageItem
+}
+
+export type ConvosAccessRequestResult = {
+  conversationId: string
+  messageId: string
 }
 
 export type ConversationLoad = {
@@ -124,7 +156,7 @@ export class XmtpGatewayConfigurationError extends Error {
 
 export class XmtpMessagingSession {
   readonly address: `0x${string}`
-  readonly client: Client
+  readonly client: AppClient
   readonly isNewInstallation: boolean
   #messageStream: AsyncStreamProxy<IncomingMessage> | null = null
   #messageStreamHealth: Extract<StreamHealth, 'live' | 'retrying'> = 'retrying'
@@ -133,7 +165,7 @@ export class XmtpMessagingSession {
   #streamGeneration = 0
 
   private constructor(
-    client: Client,
+    client: AppClient,
     address: `0x${string}`,
     isNewInstallation: boolean,
   ) {
@@ -148,14 +180,15 @@ export class XmtpMessagingSession {
     expectedInboxId?: string,
   ) {
     const options = clientOptions()
-    let client: Client
-    let clientPromise: Promise<Client> | null = null
+    let client: AppClient
+    let clientPromise: Promise<AppClient> | null = null
 
     try {
       clientPromise = Client.create(signer, {
         ...options,
+        codecs: APP_CODECS,
         disableAutoRegister: true,
-      })
+      }) as Promise<AppClient>
       client = await withInitializationTimeout(clientPromise)
     } catch (error) {
       if (error instanceof XmtpClientInitializationTimeoutError && clientPromise) {
@@ -257,6 +290,7 @@ export class XmtpMessagingSession {
         const peerInboxId = peerInboxIds[index]
         if (!peerInboxId) throw new Error('XMTP returned a DM without a peer inbox.')
         const latest = await this.latestDisplayableMessage(conversation)
+        if (latest.hideConversation) return null
         const lastMessage = latest.message
 
         return {
@@ -273,7 +307,9 @@ export class XmtpMessagingSession {
       }),
     )
 
-    return summaries.sort(compareConversationActivity)
+    return summaries
+      .filter((summary): summary is ConversationSummary => summary !== null)
+      .sort(compareConversationActivity)
   }
 
   async loadConversation(
@@ -344,6 +380,29 @@ export class XmtpMessagingSession {
       ethereumIdentifier(address),
     ])
     return reachability.get(address.toLowerCase()) === true
+  }
+
+  async requestConvosAccess(
+    invite: ParsedConvosInvite,
+  ): Promise<ConvosAccessRequestResult> {
+    if (invite.creatorInboxId.toLowerCase() === this.inboxId.toLowerCase()) {
+      throw new Error('This Convos invite points back to the inbox already open here.')
+    }
+    await this.client.conversations.sync()
+    const existing = await this.client.conversations.getDmByInboxId(
+      invite.creatorInboxId,
+    ) as AppDm | undefined
+    const conversation =
+      existing ??
+      (await this.client.conversations.createDm(invite.creatorInboxId))
+    const encoded = convosJoinRequestCodec.encode({ inviteSlug: invite.slug })
+    const messageId = await conversation.send(encoded, {
+      shouldPush: true,
+    })
+    // A resolved non-optimistic send is the published boundary. Do not turn a
+    // lagging local read-back into a duplicate request; retain the stable ID
+    // returned by the SDK and let the normal sync path observe it.
+    return { conversationId: conversation.id, messageId }
   }
 
   async sendText(
@@ -581,7 +640,7 @@ export class XmtpMessagingSession {
     }
   }
 
-  private async getDm(conversationId: string): Promise<Dm> {
+  private async getDm(conversationId: string): Promise<AppDm> {
     const conversation = await this.client.conversations.getConversationById(conversationId)
     if (!(conversation instanceof Dm)) {
       throw new Error('The selected XMTP conversation is not a direct message.')
@@ -590,7 +649,7 @@ export class XmtpMessagingSession {
   }
 
   private async latestDisplayableMessage(
-    conversation: Dm,
+    conversation: AppDm,
   ): Promise<LatestDisplayableMessage> {
     const [latestCandidate] = await conversation.messages({
       direction: SortDirection.Descending,
@@ -599,7 +658,11 @@ export class XmtpMessagingSession {
       limit: 1n,
     })
     if (!latestCandidate || displayContentFor(latestCandidate) !== null) {
-      return { hiddenActivityAt: null, message: latestCandidate }
+      return {
+        hideConversation: false,
+        hiddenActivityAt: null,
+        message: latestCandidate,
+      }
     }
 
     const messages = await conversation.messages({
@@ -608,14 +671,20 @@ export class XmtpMessagingSession {
       kind: GroupMessageKind.Application,
       limit: INBOX_PREVIEW_SCAN_SIZE,
     })
+    const message = messages.find((candidate) => displayContentFor(candidate) !== null)
     return {
+      hideConversation:
+        !message &&
+        messages.length < Number(INBOX_PREVIEW_SCAN_SIZE) &&
+        messages.length > 0 &&
+        messages.every(isConvosControlMessage),
       hiddenActivityAt: latestCandidate.sentAt,
-      message: messages.find((message) => displayContentFor(message) !== null),
+      message,
     }
   }
 
   private async messageWindow(
-    conversation: Dm,
+    conversation: AppDm,
     requestedLimit: number,
   ): Promise<Pick<ConversationLoad, 'hasOlder' | 'messages' | 'scannedMessageCount'>> {
     const messageLimit = BigInt(normalizeMessageLimit(requestedLimit))
@@ -638,7 +707,9 @@ export class XmtpMessagingSession {
   }
 }
 
-async function withInitializationTimeout(clientPromise: Promise<Client>): Promise<Client> {
+async function withInitializationTimeout(
+  clientPromise: Promise<AppClient>,
+): Promise<AppClient> {
   let timeoutId: number | undefined
   const timeout = new Promise<never>((_resolve, reject) => {
     timeoutId = window.setTimeout(() => {
@@ -783,6 +854,8 @@ type DisplayContent = {
 }
 
 function displayContentFor(message: DecodedMessage): DisplayContent | null {
+  if (isConvosControlMessage(message)) return null
+
   if (isText(message) || isMarkdown(message)) {
     return typeof message.content === 'string'
       ? { text: message.content, unsupported: false }
@@ -858,6 +931,23 @@ function displayContentFor(message: DecodedMessage): DisplayContent | null {
   }
 
   return fallbackContent(message)
+}
+
+function isConvosJoinRequest(message: DecodedMessage) {
+  return isConvosContentType(message, 'join_request')
+}
+
+function isConvosControlMessage(message: DecodedMessage) {
+  return isConvosJoinRequest(message) ||
+    isConvosContentType(message, 'invite_join_error') ||
+    isConvosContentType(message, 'invite_join_handled')
+}
+
+function isConvosContentType(message: DecodedMessage, typeId: string) {
+  return message.contentType.authorityId === 'convos.org' &&
+    message.contentType.typeId === typeId &&
+    message.contentType.versionMajor === 1 &&
+    message.contentType.versionMinor === 0
 }
 
 function fallbackContent(message: DecodedMessage): DisplayContent | null {

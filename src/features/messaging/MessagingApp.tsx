@@ -27,6 +27,7 @@ import { ConversationScreen } from './ConversationScreen'
 import { EnsInboxSwitchDialog } from './EnsInboxSwitchDialog'
 import { shortIdentity } from './format'
 import { InboxScreen } from './InboxScreen'
+import { JoinConvosScreen } from './JoinConvosScreen'
 import { NewDmScreen } from './NewDmScreen'
 import { useXmtpMessaging, type ConnectionPhase } from './useXmtpMessaging'
 
@@ -594,6 +595,7 @@ export function MessagingApp({
           ensTargetNameVerified={verifiedTargetName !== undefined}
           environment={`${messaging.environment} · ${messaging.walletKind ?? 'wallet'}`}
           onClearEnsPreference={() => void clearEnsPreference()}
+          onJoinConvos={() => messaging.setView('join-convos')}
           onNewDm={() => {
             resetRecipientResolution()
             messaging.setView('new-dm')
@@ -624,6 +626,17 @@ export function MessagingApp({
           onResetResolution={recipientResolution.reset}
           onResolveEns={recipientResolution.resolve}
           resolutionError={recipientResolution.error}
+        />
+      ) : null}
+
+      {messaging.view === 'join-convos' ? (
+        <JoinConvosScreen
+          offline={offline}
+          onBack={backToInbox}
+          onRequestAccess={messaging.requestConvosAccess}
+          onReset={messaging.resetConvosAccessRequest}
+          onRetry={messaging.retryConvosAccess}
+          request={messaging.convosAccessRequest}
         />
       ) : null}
 

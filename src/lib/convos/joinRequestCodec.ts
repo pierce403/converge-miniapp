@@ -2,7 +2,7 @@ import type {
   ContentCodec,
   EncodedContent,
 } from '@xmtp/content-type-primitives'
-import { normalizeConvosInviteSlug } from './invite'
+import { normalizeConvosInviteSlug } from './slug'
 
 const utf8Encoder = new TextEncoder()
 const utf8Decoder = new TextDecoder('utf-8', { fatal: true })

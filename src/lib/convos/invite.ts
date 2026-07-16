@@ -1,10 +1,16 @@
 import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { Inflate } from 'fflate'
 import { sha256 } from 'viem'
+import { ConvosInviteError } from './error'
+import {
+  decodeConvosInviteSlug,
+  normalizeConvosInviteSlug,
+} from './slug'
+
+export { ConvosInviteError } from './error'
 
 const COMPRESSION_MARKER = 0x1f
 const MAX_DECOMPRESSED_BYTES = 1024 * 1024
-const MAX_SLUG_CHARACTERS = 1_410_000
 const MAX_COMPRESSION_RATIO = 100
 const INFLATE_INPUT_CHUNK_BYTES = 256
 const MIN_TOKEN_BYTES = 32
@@ -19,37 +25,6 @@ const MAX_EMOJI_BYTES = 64
 const MAX_DATE_UNIX_SECONDS = 8_640_000_000_000
 
 const utf8Decoder = new TextDecoder('utf-8', { fatal: true })
-
-export type ConvosInviteErrorCode =
-  | 'invalid_input'
-  | 'unsupported_link'
-  | 'invalid_encoding'
-  | 'invalid_compression'
-  | 'invalid_payload'
-  | 'invalid_signature'
-  | 'invite_expired'
-  | 'conversation_expired'
-
-const errorMessages: Record<ConvosInviteErrorCode, string> = {
-  invalid_input: 'Enter a Convos invite link or code.',
-  unsupported_link: 'That is not a supported Convos invite link.',
-  invalid_encoding: 'That Convos invite code is malformed.',
-  invalid_compression: 'That Convos invite could not be safely opened.',
-  invalid_payload: 'That Convos invite is invalid.',
-  invalid_signature: 'That Convos invite has an invalid signature.',
-  invite_expired: 'That Convos invite has expired.',
-  conversation_expired: 'That Convos conversation has expired.',
-}
-
-export class ConvosInviteError extends Error {
-  readonly code: ConvosInviteErrorCode
-
-  constructor(code: ConvosInviteErrorCode) {
-    super(errorMessages[code])
-    this.name = 'ConvosInviteError'
-    this.code = code
-  }
-}
 
 export type ParsedConvosInvite = {
   slug: string
@@ -393,65 +368,6 @@ function validateRecoverableSignature(payload: Uint8Array, signature: Uint8Array
   }
 }
 
-function decodeBase64Url(value: string) {
-  if (!value || value.length % 4 === 1 || !/^[A-Za-z0-9_-]+$/u.test(value)) {
-    throw new ConvosInviteError('invalid_encoding')
-  }
-
-  const output = new Uint8Array(Math.floor((value.length * 6) / 8))
-  let accumulator = 0
-  let availableBits = 0
-  let outputOffset = 0
-
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index)
-    let digit: number
-    if (code >= 65 && code <= 90) digit = code - 65
-    else if (code >= 97 && code <= 122) digit = code - 71
-    else if (code >= 48 && code <= 57) digit = code + 4
-    else if (code === 45) digit = 62
-    else if (code === 95) digit = 63
-    else throw new ConvosInviteError('invalid_encoding')
-
-    accumulator = (accumulator << 6) | digit
-    availableBits += 6
-    if (availableBits >= 8) {
-      availableBits -= 8
-      output[outputOffset] = (accumulator >> availableBits) & 0xff
-      outputOffset += 1
-      accumulator &= availableBits === 0 ? 0 : (1 << availableBits) - 1
-    }
-  }
-
-  if (accumulator !== 0 || outputOffset !== output.length) {
-    throw new ConvosInviteError('invalid_encoding')
-  }
-  return output
-}
-
-export function normalizeConvosInviteSlug(input: string) {
-  if (!input || input.length > MAX_SLUG_CHARACTERS) {
-    throw new ConvosInviteError('invalid_encoding')
-  }
-
-  const chunks = input.split('*')
-  if (chunks.length > 1) {
-    if (
-      chunks.some((chunk, index) =>
-        index < chunks.length - 1
-          ? chunk.length !== 300
-          : chunk.length < 1 || chunk.length > 300,
-      )
-    ) {
-      throw new ConvosInviteError('invalid_encoding')
-    }
-  }
-
-  const slug = chunks.join('')
-  decodeBase64Url(slug)
-  return slug
-}
-
 function boundedInflate(bytes: Uint8Array, expectedLength: number) {
   const chunks: Uint8Array[] = []
   let outputLength = 0
@@ -490,7 +406,7 @@ function boundedInflate(bytes: Uint8Array, expectedLength: number) {
 }
 
 function decodeInviteBytes(slug: string) {
-  const encoded = decodeBase64Url(slug)
+  const encoded = decodeConvosInviteSlug(slug)
   if (!encoded.length) throw new ConvosInviteError('invalid_encoding')
 
   if (encoded[0] !== COMPRESSION_MARKER) {

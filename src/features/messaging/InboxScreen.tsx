@@ -1,6 +1,7 @@
 import {
   ArrowDownUp,
   CircleUserRound,
+  Link2,
   MessageCircleMore,
   Plus,
   RefreshCw,
@@ -25,6 +26,7 @@ type InboxScreenProps = {
   ensIdentity: EnsIdentityState
   ensTargetNameVerified?: boolean | undefined
   environment: string
+  onJoinConvos: () => void
   onNewDm: () => void
   onOpen: (conversationId: string) => void
   onClearEnsPreference: () => void
@@ -52,6 +54,7 @@ export function InboxScreen({
   ensIdentity,
   ensTargetNameVerified = false,
   environment,
+  onJoinConvos,
   onNewDm,
   onOpen,
   onClearEnsPreference,
@@ -171,6 +174,10 @@ export function InboxScreen({
           >
             <RefreshCw className={refreshing ? 'is-spinning' : ''} aria-hidden="true" />
           </button>
+          <Button disabled={offline} onClick={onJoinConvos} variant="secondary">
+            <Link2 aria-hidden="true" />
+            Join Convos
+          </Button>
           <Button disabled={offline} onClick={onNewDm}>
             <Plus aria-hidden="true" />
             New DM

@@ -1494,15 +1494,24 @@ Exit evidence:
 - the production-shaped local SPA and `/api/health` both return 200; and
 - all five mobile Playwright checks pass.
 
-### Task 11b: Convos request-access flow — next
+### Task 11b: Convos request-access flow — implemented locally 2026-07-15
 
-Deliverables:
+Implemented and locally verified:
 
-- register the codec at XMTP client construction;
-- add the paste/preview/request UX without persisting the bearer slug in Web Storage;
-- sync/find/create the exact creator-inbox DM and send one typed request only after the explicit tap;
-- hide join/control content and its fallback slug from ordinary inbox previews and timelines; and
-- show an honest recoverable pending state without claiming group membership.
+- the join-request codec is registered when the XMTP client is constructed, without loading the full invite parser on the initial inbox path;
+- the compact **Join Convos** surface parses only on device, exposes only the clamped name/emoji preview, rechecks expiry at the explicit **Request access** tap, and never copies the bearer slug into browser key/value storage;
+- the request path synchronizes conversations, reuses or creates a DM to the exact declared creator inbox, rejects a self-invite, and uses XMTP's normal published send with push intent without changing consent or opening the transport DM; it deliberately creates no optimistic draft that a later unrelated batch publication could revive;
+- exact `convos.org/join_request:1.0`, `invite_join_error:1.0`, and `invite_join_handled:1.0` content is removed before fallback rendering in cached timelines, inbox previews, and live streams, while near-miss future content remains visible through its fallback;
+- a complete control-only transport DM is hidden, but a bounded scan can neither hide an older real DM nor claim that uncertain older history is empty; and
+- the in-memory request state says **Request sent. Waiting for the inviter's device…**, survives back navigation, clears with the XMTP session, redacts raw SDK failures, and deduplicates in-flight taps; every failed attempt requires a fresh, deliberate, expiry-revalidated normal send, while terminal expiry exposes a safe **Use a different invite** reset.
+
+This task deliberately does not claim that the user joined a group. Task 11c must recover pending request state after restart where possible, decode handled/error controls, and match the allowed group by exact tag plus creator evidence before the imported conversation can open.
+
+Exit evidence:
+
+- `npm run check` passes 35 test files and 386 tests;
+- the production-shaped local Worker serves both the SPA and versioned `/api/health`; and
+- all five mobile Playwright checks pass.
 
 ## Later feature backlog
 

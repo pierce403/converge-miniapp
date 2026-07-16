@@ -1,3 +1,5 @@
+import type { ParsedConvosInvite } from '../../lib/convos/invite'
+
 export type MessageDelivery = 'sending' | 'sent' | 'failed'
 
 export const MAX_MESSAGE_REACTIONS = 24
@@ -37,3 +39,12 @@ export type ActiveConversation = {
 }
 
 export type StreamHealth = 'live' | 'retrying' | 'failed' | 'offline'
+
+export type ConvosAccessRequest = {
+  conversationId: string | null
+  error: string | null
+  invite: ParsedConvosInvite
+  messageId: string | null
+  retryMode: 'fresh' | 'reset' | 'none'
+  status: 'sending' | 'waiting' | 'failed'
+}

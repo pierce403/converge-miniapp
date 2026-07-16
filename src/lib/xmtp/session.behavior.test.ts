@@ -59,6 +59,8 @@ import {
   XmtpMessagingSession,
   xmtpClientOptions,
 } from './session'
+import { convosJoinRequestCodec } from '../convos/joinRequestCodec'
+import type { ParsedConvosInvite } from '../convos/invite'
 
 const address = '0x52908400098527886E0F7030069857D2E4169EE7'
 const signer = {
@@ -96,23 +98,28 @@ function message(options: {
 }
 
 function typedMessage(options: {
+  authorityId?: string
   content: unknown
+  conversationId?: string
   fallback?: string
   id: string
   reactions?: DecodedMessage[]
+  status?: DeliveryStatus
   typeId: string
+  versionMajor?: number
+  versionMinor?: number
 }): DecodedMessage {
   const sentAt = new Date('2026-07-14T12:00:00Z')
   return {
     content: options.content,
     contentType: {
-      authorityId: 'xmtp.org',
+      authorityId: options.authorityId ?? 'xmtp.org',
       typeId: options.typeId,
-      versionMajor: 1,
-      versionMinor: 0,
+      versionMajor: options.versionMajor ?? 1,
+      versionMinor: options.versionMinor ?? 0,
     },
-    conversationId: 'conversation-1',
-    deliveryStatus: DeliveryStatus.Published,
+    conversationId: options.conversationId ?? 'conversation-1',
+    deliveryStatus: options.status ?? DeliveryStatus.Published,
     fallback: options.fallback,
     id: options.id,
     reactions: options.reactions ?? [],
@@ -128,6 +135,7 @@ function dm(methods: Record<string, unknown> = {}) {
     messages: vi.fn(),
     peerInboxId: vi.fn().mockResolvedValue('peer-inbox'),
     publishMessages: vi.fn(),
+    send: vi.fn(),
     sendText: vi.fn(),
     sync: vi.fn(),
     updateConsentState: vi.fn(),
@@ -140,12 +148,15 @@ function client(conversation: Dm) {
     canMessage: vi.fn(),
     close: vi.fn(),
     conversations: {
+      createDm: vi.fn().mockResolvedValue(conversation),
       createDmWithIdentifier: vi.fn().mockResolvedValue(conversation),
       fetchDmByIdentifier: vi.fn().mockResolvedValue(null),
       getConversationById: vi.fn().mockResolvedValue(conversation),
+      getDmByInboxId: vi.fn().mockResolvedValue(undefined),
       getMessageById: vi.fn(),
       listDms: vi.fn().mockResolvedValue([]),
       streamAllDmMessages: vi.fn(),
+      sync: vi.fn(),
       syncAll: vi.fn(),
     },
     env: 'dev',
@@ -219,6 +230,7 @@ describe('XmtpMessagingSession behavior', () => {
     expect(sdkMocks.create).toHaveBeenCalledWith(
       signer,
       expect.objectContaining({
+        codecs: [convosJoinRequestCodec],
         disableAutoRegister: true,
         env: 'production',
       }),
@@ -226,6 +238,122 @@ describe('XmtpMessagingSession behavior', () => {
     expect(sdkMocks.create.mock.calls[0]?.[1]).not.toHaveProperty('gatewayHost')
     expect(fakeClient.register).toHaveBeenCalledOnce()
     await session.close()
+  })
+
+  it('sends one typed Convos request to the exact creator inbox with push intent', async () => {
+    const requestMessage = typedMessage({
+      authorityId: 'convos.org',
+      content: { inviteSlug: 'bearer-secret-slug' },
+      conversationId: 'creator-transport-dm',
+      fallback: 'bearer-secret-slug',
+      id: 'join-request-message',
+      typeId: 'join_request',
+    })
+    const conversation = dm({
+      id: 'creator-transport-dm',
+      send: vi.fn().mockResolvedValue('join-request-message'),
+    })
+    const fakeClient = client(conversation)
+    fakeClient.conversations.getMessageById.mockResolvedValue(requestMessage)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const result = await session.requestConvosAccess(convosInvite())
+
+    expect(fakeClient.conversations.sync).toHaveBeenCalledOnce()
+    expect(fakeClient.conversations.getDmByInboxId).toHaveBeenCalledWith(
+      'creator-inbox',
+    )
+    expect(fakeClient.conversations.createDm).toHaveBeenCalledWith('creator-inbox')
+    expect(fakeClient.conversations.sync.mock.invocationCallOrder[0]).toBeLessThan(
+      fakeClient.conversations.getDmByInboxId.mock.invocationCallOrder[0] ?? Infinity,
+    )
+    expect(conversation.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fallback: 'bearer-secret-slug',
+        type: expect.objectContaining({
+          authorityId: 'convos.org',
+          typeId: 'join_request',
+          versionMajor: 1,
+          versionMinor: 0,
+        }),
+      }),
+      { shouldPush: true },
+    )
+    expect(conversation.publishMessages).not.toHaveBeenCalled()
+    expect(fakeClient.conversations.getMessageById).not.toHaveBeenCalled()
+    expect(conversation.updateConsentState).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      conversationId: 'creator-transport-dm',
+      messageId: 'join-request-message',
+    })
+  })
+
+  it('reuses an existing creator DM without creating a duplicate transport', async () => {
+    const requestMessage = typedMessage({
+      authorityId: 'convos.org',
+      content: { inviteSlug: 'bearer-secret-slug' },
+      conversationId: 'existing-transport-dm',
+      fallback: 'bearer-secret-slug',
+      id: 'join-request-message',
+      typeId: 'join_request',
+    })
+    const existing = dm({
+      id: 'existing-transport-dm',
+      send: vi.fn().mockResolvedValue('join-request-message'),
+    })
+    const fakeClient = client(existing)
+    fakeClient.conversations.getDmByInboxId.mockResolvedValue(existing)
+    fakeClient.conversations.getMessageById.mockResolvedValue(requestMessage)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    await session.requestConvosAccess(convosInvite())
+
+    expect(fakeClient.conversations.getDmByInboxId).toHaveBeenCalledWith(
+      'creator-inbox',
+    )
+    expect(fakeClient.conversations.createDm).not.toHaveBeenCalled()
+    expect(existing.send).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a self-invite before syncing or creating a transport DM', async () => {
+    const existing = dm({ id: 'existing-transport-dm' })
+    const fakeClient = client(existing)
+    fakeClient.conversations.getDmByInboxId.mockResolvedValue(existing)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    await expect(session.requestConvosAccess({
+      ...convosInvite(),
+      creatorInboxId: 'OWN-INBOX',
+    })).rejects.toThrow(/points back to the inbox/i)
+
+    expect(fakeClient.conversations.sync).not.toHaveBeenCalled()
+    expect(fakeClient.conversations.createDm).not.toHaveBeenCalled()
+    expect(existing.send).not.toHaveBeenCalled()
+  })
+
+  it('does not create an optimistic draft when the Convos request send rejects', async () => {
+    const conversation = dm({
+      send: vi.fn().mockRejectedValue(
+        new Error('network failure for bearer-secret-slug and private-inbox'),
+      ),
+    })
+    const fakeClient = client(conversation)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    await expect(session.requestConvosAccess(convosInvite())).rejects.toThrow(
+      /network failure/,
+    )
+
+    expect(conversation.send).toHaveBeenCalledWith(
+      expect.anything(),
+      { shouldPush: true },
+    )
+    expect(conversation.publishMessages).not.toHaveBeenCalled()
+    expect(fakeClient.conversations.getMessageById).not.toHaveBeenCalled()
   })
 
   it('owns registration cleanup after client initialization', async () => {
@@ -396,6 +524,85 @@ describe('XmtpMessagingSession behavior', () => {
         unsupported: true,
       }),
     ])
+  })
+
+  it('suppresses exact Convos controls before fallback while preserving near misses', async () => {
+    const controls = [
+      'join_request',
+      'invite_join_error',
+      'invite_join_handled',
+    ].map((typeId) => typedMessage({
+      authorityId: 'convos.org',
+      content: { inviteSlug: 'bearer-secret-slug' },
+      fallback: `secret fallback for ${typeId}`,
+      id: typeId,
+      typeId,
+    }))
+    const nearMiss = typedMessage({
+      authorityId: 'convos.org',
+      content: undefined,
+      fallback: 'Visible future-version fallback',
+      id: 'future-join-request',
+      typeId: 'join_request',
+      versionMinor: 1,
+    })
+    const conversation = dm({
+      messages: vi.fn().mockResolvedValue([...controls, nearMiss]),
+    })
+    const fakeClient = client(conversation)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    const loaded = await session.loadConversation('conversation-1')
+
+    expect(loaded.messages).toEqual([
+      expect.objectContaining({
+        id: 'future-join-request',
+        text: 'Visible future-version fallback',
+      }),
+    ])
+    expect(loaded.messages.map(({ text }) => text).join(' ')).not.toContain(
+      'bearer-secret-slug',
+    )
+    expect(loaded.messages.map(({ text }) => text).join(' ')).not.toContain(
+      'secret fallback',
+    )
+  })
+
+  it('does not emit exact Convos control fallbacks from the live DM stream', async () => {
+    const conversation = dm()
+    const fakeClient = client(conversation)
+    let onValue: ((message: DecodedMessage) => void) | undefined
+    fakeClient.conversations.streamAllDmMessages.mockImplementation(async (options) => {
+      onValue = options.onValue
+      return { end: vi.fn(), isDone: false }
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+    const onMessage = vi.fn()
+    await session.startMessageStream(onMessage, vi.fn())
+
+    onValue?.(typedMessage({
+      authorityId: 'convos.org',
+      content: { inviteSlug: 'bearer-secret-slug' },
+      fallback: 'bearer-secret-slug',
+      id: 'join-request',
+      typeId: 'join_request',
+    }))
+    onValue?.(typedMessage({
+      authorityId: 'convos.org',
+      content: undefined,
+      fallback: 'Compatible-client fallback',
+      id: 'near-miss',
+      typeId: 'join_request',
+      versionMajor: 2,
+    }))
+
+    expect(onMessage).toHaveBeenCalledOnce()
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'near-miss',
+      text: 'Compatible-client fallback',
+    }))
   })
 
   it('projects text replies, attachment metadata, and parent reactions', async () => {
@@ -670,6 +877,86 @@ describe('XmtpMessagingSession behavior', () => {
     }))
     expect(recentMessages).toHaveBeenCalledOnce()
     expect(recentMessages).toHaveBeenCalledWith(expect.objectContaining({ limit: 1n }))
+  })
+
+  it('hides a transport DM only when a complete local scan contains Convos controls', async () => {
+    const control = typedMessage({
+      authorityId: 'convos.org',
+      content: { inviteSlug: 'bearer-secret-slug' },
+      fallback: 'bearer-secret-slug',
+      id: 'join-request',
+      typeId: 'join_request',
+    })
+    const messages = vi.fn()
+      .mockResolvedValueOnce([control])
+      .mockResolvedValueOnce([control])
+    const conversation = dm({ messages })
+    const fakeClient = client(conversation)
+    fakeClient.conversations.listDms.mockResolvedValue([conversation])
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    await expect(session.readInbox()).resolves.toEqual([])
+    expect(messages).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      limit: 200n,
+    }))
+  })
+
+  it('keeps an older real DM visible behind newer Convos control traffic', async () => {
+    const control = typedMessage({
+      authorityId: 'convos.org',
+      content: { inviteSlug: 'bearer-secret-slug' },
+      fallback: 'bearer-secret-slug',
+      id: 'join-request',
+      typeId: 'join_request',
+    })
+    const olderVisible = message({
+      id: 'older-real-message',
+      sentAt: '2026-07-14T10:00:00Z',
+      status: DeliveryStatus.Published,
+    })
+    const conversation = dm({
+      messages: vi.fn()
+        .mockResolvedValueOnce([control])
+        .mockResolvedValueOnce([control, olderVisible]),
+    })
+    const fakeClient = client(conversation)
+    fakeClient.conversations.listDms.mockResolvedValue([conversation])
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const [summary] = await session.readInbox()
+
+    expect(summary).toMatchObject({
+      id: 'conversation-1',
+      preview: 'older-real-message',
+    })
+    expect(summary?.preview).not.toContain('bearer-secret-slug')
+  })
+
+  it('keeps a generic row when 200 Convos controls leave older history uncertain', async () => {
+    const control = typedMessage({
+      authorityId: 'convos.org',
+      content: { inviteSlug: 'bearer-secret-slug' },
+      fallback: 'bearer-secret-slug',
+      id: 'join-request',
+      typeId: 'join_request',
+    })
+    const conversation = dm({
+      messages: vi.fn()
+        .mockResolvedValueOnce([control])
+        .mockResolvedValueOnce(Array.from({ length: 200 }, () => control)),
+    })
+    const fakeClient = client(conversation)
+    fakeClient.conversations.listDms.mockResolvedValue([conversation])
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const [summary] = await session.readInbox()
+
+    expect(summary).toMatchObject({ preview: 'Recent non-message activity' })
+    expect(summary?.preview).not.toContain('bearer-secret-slug')
   })
 
   it('reports hidden control activity when the bounded inbox preview scan is exhausted', async () => {
@@ -1071,3 +1358,15 @@ describe('XmtpMessagingSession behavior', () => {
     })
   })
 })
+
+function convosInvite(): ParsedConvosInvite {
+  return {
+    creatorInboxId: 'creator-inbox',
+    emoji: '🌱',
+    expiresAfterUse: false,
+    name: 'Garden chat',
+    reusable: true,
+    slug: 'bearer-secret-slug',
+    tag: 'secret-conversation-tag',
+  }
+}

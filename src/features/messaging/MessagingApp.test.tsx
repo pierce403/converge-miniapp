@@ -190,6 +190,48 @@ describe('MessagingApp storage and installation states', () => {
     expect(screen.getByText(/browser message storage is local but not encrypted at rest/i)).toBeInTheDocument()
   })
 
+  it('opens the dedicated Convos invite surface from the inbox', () => {
+    const setView = vi.fn()
+    mocks.messaging.mockReturnValue({ ...readyMessaging(), setView })
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Join Convos' }))
+
+    expect(setView).toHaveBeenCalledWith('join-convos')
+  })
+
+  it('renders a retained Convos waiting state without claiming membership', () => {
+    const backToInbox = vi.fn()
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      backToInbox,
+      convosAccessRequest: {
+        conversationId: 'creator-transport-dm',
+        error: null,
+        invite: {
+          creatorInboxId: 'creator-inbox',
+          emoji: '🌱',
+          expiresAfterUse: false,
+          name: 'Garden chat',
+          reusable: true,
+          slug: 'bearer-secret-slug',
+          tag: 'secret-conversation-tag',
+        },
+        messageId: 'join-request-message',
+        retryMode: 'none',
+        status: 'waiting',
+      },
+      view: 'join-convos',
+    })
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    expect(screen.getByText("Request sent. Waiting for the inviter's device…")).toBeVisible()
+    expect(screen.queryByText(/joined/i)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to inbox' }))
+    expect(backToInbox).toHaveBeenCalledOnce()
+  })
+
   it('offers a forward-verified ENS name only when it is already this inbox', () => {
     const setPreference = vi.fn().mockResolvedValue(undefined)
     mocks.ens.mockReturnValue(readyEns({
@@ -768,6 +810,7 @@ function readyMessaging() {
     inspectIdentityRelationship: vi.fn(),
     prepareInboxSwitch: vi.fn(),
     canMessageAddress: vi.fn(),
+    convosAccessRequest: null,
     loadOlderMessages: vi.fn(),
     loadingConversation: false,
     loadingOlder: false,
@@ -775,8 +818,11 @@ function readyMessaging() {
     notice: null,
     openConversation: vi.fn(),
     refresh: vi.fn().mockResolvedValue(null),
+    requestConvosAccess: vi.fn(),
+    resetConvosAccessRequest: vi.fn(),
     refreshing: false,
     retryLiveUpdates: vi.fn(),
+    retryConvosAccess: vi.fn(),
     retryMessage: vi.fn(),
     sendMessage: vi.fn(),
     sending: false,

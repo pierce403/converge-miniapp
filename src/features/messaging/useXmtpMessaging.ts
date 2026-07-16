@@ -15,10 +15,13 @@ import {
 import type { StorageDurability } from '../../lib/xmtp/storage'
 import type {
   ActiveConversation,
+  ConvosAccessRequest,
   ConversationSummary,
   MessageItem,
   StreamHealth,
 } from './types'
+import type { ParsedConvosInvite } from '../../lib/convos/invite'
+import { ConvosInviteError } from '../../lib/convos/error'
 
 export type ConnectionPhase =
   | 'idle'
@@ -41,7 +44,7 @@ export type ConnectionPhase =
   | 'target-unavailable'
   | 'error'
 
-export type MessagingView = 'inbox' | 'new-dm' | 'conversation'
+export type MessagingView = 'inbox' | 'new-dm' | 'join-convos' | 'conversation'
 
 type ConnectionState = {
   error: string | null
@@ -85,6 +88,8 @@ export function useXmtpMessaging({
   const loadingOlderRequestRef = useRef<number | null>(null)
   const sendingRef = useRef(false)
   const retryingMessageIdsRef = useRef(new Set<string>())
+  const requestingConvosRef = useRef(false)
+  const convosAccessRequestRef = useRef<ConvosAccessRequest | null>(null)
   const sessionRef = useRef<XmtpMessagingSession | null>(null)
   const pendingSessionFactoryRef = useRef<PendingSessionFactory | null>(null)
   const leaseRef = useRef<XmtpLease | null>(null)
@@ -118,6 +123,13 @@ export function useXmtpMessaging({
     browserIsKnownOffline() ? 'offline' : 'live'
   ))
   const [notice, setNotice] = useState<string | null>(null)
+  const [convosAccessRequest, setConvosAccessRequest] =
+    useState<ConvosAccessRequest | null>(null)
+
+  const updateConvosAccessRequest = useCallback((next: ConvosAccessRequest | null) => {
+    convosAccessRequestRef.current = next
+    setConvosAccessRequest(next)
+  }, [])
 
   const updateNotice = useCallback((next: string | null) => {
     noticeRevisionRef.current += 1
@@ -150,6 +162,8 @@ export function useXmtpMessaging({
     creatingDmRef.current = false
     sendingRef.current = false
     retryingMessageIdsRef.current.clear()
+    requestingConvosRef.current = false
+    convosAccessRequestRef.current = null
 
     const existingCleanup = cleanupPromiseRef.current
     if (existingCleanup) {
@@ -334,9 +348,10 @@ export function useXmtpMessaging({
     setHasOlderMessages(false)
     setRefreshing(false)
     setSending(false)
+    updateConvosAccessRequest(null)
     setStreamHealth('live')
     updateNotice(null)
-  }, [releaseResources, updateNotice])
+  }, [releaseResources, updateConvosAccessRequest, updateNotice])
 
   const connect = useCallback(async () => {
     if (connectingRef.current || sessionRef.current) return
@@ -355,6 +370,7 @@ export function useXmtpMessaging({
     let failureStage: XmtpOperationStage = 'preflight'
     setConnection({ error: null, phase: 'storage' })
     setStorageDurability(null)
+    updateConvosAccessRequest(null)
     updateNotice(null)
 
     try {
@@ -430,6 +446,7 @@ export function useXmtpMessaging({
         setHasOlderMessages(false)
         setLoadingOlder(false)
         setView('inbox')
+        updateConvosAccessRequest(null)
         updateNotice(null)
         void releaseResources()
       }
@@ -696,7 +713,7 @@ export function useXmtpMessaging({
     } finally {
       if (connectionAttemptRef.current === attempt) connectingRef.current = false
     }
-  }, [inboxTarget, releaseResources, startMessageStream, updateNotice])
+  }, [inboxTarget, releaseResources, startMessageStream, updateConvosAccessRequest, updateNotice])
 
   const prepareInboxSwitch = useCallback(async (
     candidateAddress: `0x${string}`,
@@ -979,6 +996,142 @@ export function useXmtpMessaging({
       }
     }
   }, [loadInbox, openConversation])
+
+  const requestConvosAccess = useCallback(async (invite: ParsedConvosInvite) => {
+    const session = sessionRef.current
+    if (!session) throw new Error('Connect the XMTP inbox first.')
+    if (browserIsKnownOffline()) {
+      throw new Error('Reconnect before requesting access to this conversation.')
+    }
+    if (requestingConvosRef.current) return
+
+    const generation = operationGenerationRef.current
+    requestingConvosRef.current = true
+    updateConvosAccessRequest({
+      conversationId: null,
+      error: null,
+      invite,
+      messageId: null,
+      retryMode: 'none',
+      status: 'sending',
+    })
+    try {
+      const result = await session.requestConvosAccess(invite)
+      if (
+        !mountedRef.current ||
+        operationGenerationRef.current !== generation ||
+        sessionRef.current !== session
+      ) return
+      updateConvosAccessRequest({
+        conversationId: result.conversationId,
+        error: null,
+        invite,
+        messageId: result.messageId,
+        retryMode: 'none',
+        status: 'waiting',
+      })
+    } catch (error) {
+      if (
+        mountedRef.current &&
+        operationGenerationRef.current === generation &&
+        sessionRef.current === session
+      ) {
+        updateConvosAccessRequest({
+          conversationId: null,
+          error: readableMessagingError(
+            error,
+            'XMTP could not send the Convos access request.',
+            'send',
+          ),
+          invite,
+          messageId: null,
+          retryMode: 'fresh',
+          status: 'failed',
+        })
+      }
+    } finally {
+      if (operationGenerationRef.current === generation) {
+        requestingConvosRef.current = false
+      }
+    }
+  }, [updateConvosAccessRequest])
+
+  const retryConvosAccess = useCallback(async () => {
+    const session = sessionRef.current
+    const pending = convosAccessRequestRef.current
+    if (
+      !session ||
+      !pending ||
+      pending.status !== 'failed' ||
+      pending.retryMode !== 'fresh' ||
+      requestingConvosRef.current
+    ) return
+    if (browserIsKnownOffline()) {
+      throw new Error('Reconnect before retrying this access request.')
+    }
+
+    const generation = operationGenerationRef.current
+    requestingConvosRef.current = true
+    updateConvosAccessRequest({
+      ...pending,
+      error: null,
+      retryMode: 'none',
+      status: 'sending',
+    })
+    try {
+      const { parseConvosInvite } = await import('../../lib/convos/invite')
+      const freshInvite = parseConvosInvite(pending.invite.slug)
+      const result = await session.requestConvosAccess(freshInvite)
+      if (
+        !mountedRef.current ||
+        operationGenerationRef.current !== generation ||
+        sessionRef.current !== session
+      ) return
+      updateConvosAccessRequest({
+        ...pending,
+        conversationId: result.conversationId,
+        error: null,
+        invite: freshInvite,
+        messageId: result.messageId,
+        retryMode: 'none',
+        status: 'waiting',
+      })
+    } catch (error) {
+      if (
+        mountedRef.current &&
+        operationGenerationRef.current === generation &&
+        sessionRef.current === session
+      ) {
+        updateConvosAccessRequest({
+          ...pending,
+          error: error instanceof ConvosInviteError
+            ? error.message
+            : readableMessagingError(
+              error,
+              'XMTP could not retry the Convos access request.',
+              'send',
+            ),
+          retryMode: error instanceof ConvosInviteError
+            ? 'reset'
+            : 'fresh',
+          status: 'failed',
+        })
+      }
+    } finally {
+      if (operationGenerationRef.current === generation) {
+        requestingConvosRef.current = false
+      }
+    }
+  }, [updateConvosAccessRequest])
+
+  const resetConvosAccessRequest = useCallback(() => {
+    const pending = convosAccessRequestRef.current
+    if (
+      requestingConvosRef.current ||
+      pending?.status !== 'failed'
+    ) return
+    updateConvosAccessRequest(null)
+  }, [updateConvosAccessRequest])
 
   const sendMessage = useCallback(async (text: string) => {
     const session = sessionRef.current
@@ -1270,6 +1423,7 @@ export function useXmtpMessaging({
     canMessageAddress,
     connect,
     connection,
+    convosAccessRequest,
     conversations,
     createDm,
     disconnect,
@@ -1284,7 +1438,10 @@ export function useXmtpMessaging({
     notice,
     openConversation,
     refresh: () => loadInbox(true),
+    requestConvosAccess,
+    resetConvosAccessRequest,
     retryLiveUpdates: refreshVisibleState,
+    retryConvosAccess,
     refreshing,
     retryMessage,
     sendMessage,
