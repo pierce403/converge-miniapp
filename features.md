@@ -320,6 +320,9 @@ Success condition: the optional label flow never moves identity state; the expli
 | Operations | Redacted logs, health, and error visibility | P0 | Committed | Failures are diagnosable without leaking message content, tokens, or full wallet identifiers. |
 | Notifications | Add Mini App and store notification permission | P1 | Blocked on verifier credential | Implement the unadvertised server lifecycle first. Do not expose the permission prompt or manifest `webhookUrl` until production can verify app keys against current Farcaster network state. |
 | Notifications | Notify on incoming XMTP message | P1 | Spike | Privacy-safe bridge works while client is closed without user decryption keys. |
+| Convos | Import a signed Convos invite | P1 | In progress | Exact production invite URLs and raw slugs are validated locally, a typed XMTP join request is sent only after an explicit tap, and the UI remains pending until the matching group actually arrives. |
+| Convos | Read and send in an imported group | P1 | In progress | Allowed groups share the cached-first timeline and live-stream reliability of DMs without weakening consent or exposing invite/control traffic as ordinary chat. |
+| Convos | Re-share and open an imported invite | P1 | In progress | A still-valid reusable signed invite can produce a local QR/share link and explicit Convos/Converge handoff links without placing the bearer slug in backend requests, logs, or Web Storage. |
 | Sharing | Share app with Farcaster compose action | P1 | Later | User can share a generic app card without leaking private conversation details. |
 | Settings | Expanded privacy/identity/about sheet | P1 | Later | Add trusted profile/FID, inbox/installation details, version, notifications, and broader future account-data controls beyond the implemented compact menu. |
 
@@ -666,7 +669,37 @@ Before implementation, prove an architecture that:
 
 XMTP push HMAC keys are privacy-sensitive filtering material, but they are not message-decryption keys. They still need encryption, rotation, deletion, strict access control, and a precise disclosure. Current official push examples do not establish the required Browser SDK flow, so do not promise per-message Farcaster notifications until it is proven on the target hosts. Use a generic inbox notification target by default; exact-conversation routing requires a separate metadata/privacy review and an opaque mapping.
 
-### 11. Identity/privacy menu and expanded settings sheet
+### 11. Convos invite interoperability
+
+Converge Mini may consume and re-share a signed invite created by Convos or another compatible client. It must not mint a Convos invite from the Farcaster wallet: current invites require a 32-byte private key for both recoverable secp256k1 signing and conversation-token encryption, and an EVM signature prompt does not expose or reproduce that key.
+
+#### Protocol primitives acceptance criteria
+
+- Accept only a raw signed slug or these exact production forms: `https://popup.convos.org/v2?i=…`, `https://app.convos.org/v2?i=…`, `convos://join/…`, `convos://invite/…`, `https://convos.org/i/…`, and `https://convos.org/invite?code=…`. Reject HTTP, credentials, non-default ports, fragments, lookalike hosts, arbitrary hosts with an invite-shaped query, development/test domains, extra path components, duplicate relevant query parameters, and empty values.
+- Decode strict URL-safe base64 without padding while permitting only Convos' `*` separator at exact 300-character boundaries. Accept the current optional whole-message compression envelope (`0x1f`, four-byte big-endian output size, raw DEFLATE bytes) only when the declared output is nonzero and at most 1 MiB, the compression ratio is at most 100:1, and bounded streaming decompression produces the exact declared length.
+- Preserve the exact signed payload bytes. Decode the current protobuf fields with bounded lengths and safe integer handling: token field 1, creator inbox bytes field 2, nonempty tag field 3, public preview strings fields 4–6 and 10, `sfixed64` Unix-second expiries fields 7–8, and single-use boolean field 9. Reject duplicate critical fields, unsupported wire types, malformed/truncated data, a token shorter than 32 bytes or whose first byte is not version 1, an empty or implausibly sized creator inbox, empty/control-character tags, unsafe timestamps, expired invites, and expired conversations. Current Convos fixtures use both 20-byte and 32-byte creator inbox values even though real XMTP inbox IDs are normally 32 bytes, so the importer uses a conservative bounded range and lets the XMTP SDK authoritatively reject an unrouteable inbox rather than inventing an incompatible exact wire length.
+- Require one exact payload and one exact 65-byte compact recoverable secp256k1 signature in the outer message. Hash the exact payload with SHA-256, require recovery ID 0–3, and reject signatures whose public-key recovery fails. Recovery proves structural signature validity; it does not by itself prove that the recovered key belongs to the declared creator inbox, so the creator's Convos client remains the authority that validates a join request.
+- Expose only length-clamped plain-text name and emoji as the pre-join preview. Never load the invite's public image URL, render HTML, or include the slug or decoded fields in errors, analytics, logs, Worker requests, crash reports, URLs on this origin, `localStorage`, or `sessionStorage`.
+- Encode/decode the XMTP content type `convos.org/join_request:1.0` as UTF-8 JSON containing only `{ "inviteSlug": "…" }`; retain the raw slug as fallback content and set `shouldPush: true`. The Mini App sends it in a DM to the exact creator inbox ID, never to an inferred wallet address.
+- Canonical outbound links are `https://popup.convos.org/v2?i=…` for QR/share, `https://app.convos.org/v2?i=…&open=1` for **Open in Convos**, and `https://converge.cv/invite?i=…&auto=1` for **Continue in Converge**. The latter is an invite handoff, not a promise that a particular conversation is already open.
+- Automated tests cover every accepted form, all host/scheme/query bypasses, uncompressed and compressed fixtures, separator rules, protobuf field/wire/boundary failures, both expiry fields, invalid tokens/inbox IDs/tags/signatures, recovery IDs 0–3, redaction-safe errors, canonical link escaping, codec round trips, fallback content, and push intent.
+
+#### Join and group UX acceptance criteria
+
+- **Join Convos conversation** opens a paste/import surface. Successful local parsing shows only safe public preview text and an explicit **Request access** action; parsing alone sends no message, creates no conversation, and makes no “joined” claim.
+- A request is sent at most once per deliberate attempt. After send, copy says **Request sent. Waiting for the inviter's device…** because the creator device automatically validates the signed invite when available; do not imply a person must approve it.
+- Keep the invite only in memory and the local encrypted XMTP database as typed request/fallback content. Recover a pending invite from that local message after restart when possible, but never duplicate it into browser key/value storage.
+- Sync and stream allowed groups as well as DMs. Consider the import successful only when an allowed group with the exact invite tag arrives and membership evidence is consistent with the declared creator; a handled marker alone is not success, and a wrong-tag or unknown-creator group must never satisfy the request.
+- Decode `convos.org/invite_join_error:1.0` into a bounded actionable failure and `convos.org/invite_join_handled:1.0` into a handled-but-still-waiting state without displaying either control message on the ordinary timeline.
+- Imported groups use the same cached-first, offline-readable, stable-order, live-stream, send/retry, keyboard, and accessibility behavior as DMs. The inbox visually distinguishes a group without adding group creation, administration, or member-management scope.
+- Once the matching group is present, offer **Show QR**, **Share invite**, **Open in Convos**, and **Continue in Converge** only while the retained invite is reusable, unexpired, and still matches the group tag. Generate the QR entirely in the browser with high contrast, a quiet zone, a text copy fallback, and no remote image/API call.
+- If no compatible invite can be recovered, or it is single-use/expired/mismatched, hide or disable external actions and direct the user to create a fresh link in Convos or Converge. Never synthesize, repair, re-sign, or weaken validation of an invite.
+
+#### Privacy model
+
+A Convos slug is a bearer capability. It exposes public preview fields and the creator inbox ID, allows its holder to contact that inbox, and carries an encrypted group identifier. Keep it out of the Worker, application logs, same-origin routing, telemetry, and general clipboard use; place it on the clipboard only after the user's explicit copy/share action.
+
+### 12. Identity/privacy menu and expanded settings sheet
 
 The compact menu is available from the inbox header rather than as a permanent navigation destination. It shows the active Farcaster wallet, XMTP environment/wallet kind, local-storage disclosure, and the ENS discovery/relationship state. It can rerun discovery, opt into a safe same-inbox ENS label after a prior dismissal, delete the saved ENS choice, or open the explicit leave/join confirmation for an existing separate ENS inbox. When the exact target signer is not exposed by the Farcaster provider, the menu explains that ENS resolution proves the destination but does not grant Converge signing access; no inbox changes.
 
@@ -1442,6 +1475,35 @@ Exit criteria:
 - target domain and idempotency rules are correct;
 - notification content leaks no private message or participant data.
 
+### Task 11a: Convos protocol primitives — implemented locally 2026-07-15
+
+Implemented and locally verified:
+
+- an exact production URL allowlist plus canonical Convos, app, and Converge handoff builders;
+- strict base64url/separator handling and bounded raw-DEFLATE compatibility with Convos iOS;
+- a bounded current-schema protobuf reader that preserves the exact signed payload, accepts compatible 20-byte and 32-byte creator fixtures, applies both fixed-width expiries, and exposes only clamped name/emoji preview text;
+- structural compact-secp256k1 public-key recovery over SHA-256 of the exact payload, with an explicit creator-authentication boundary;
+- a privacy-minimal `convos.org/join_request:1.0` codec with raw-slug fallback and push intent; and
+- adversarial coverage for all accepted links, allowlist bypasses, separator and compression bounds through the exact 1 MiB limit, malformed/duplicate/unknown protobuf fields, unsafe required fields, expiry, signature recovery IDs, error redaction, handoff escaping, and codec behavior.
+
+The primitives are intentionally not wired to the UI or XMTP client in this task. Parsing has no network side effect, and no join request can be sent until Task 11b adds the explicit **Request access** interaction.
+
+Exit evidence:
+
+- `npm run check` passes 34 test files and 361 tests;
+- the production-shaped local SPA and `/api/health` both return 200; and
+- all five mobile Playwright checks pass.
+
+### Task 11b: Convos request-access flow — next
+
+Deliverables:
+
+- register the codec at XMTP client construction;
+- add the paste/preview/request UX without persisting the bearer slug in Web Storage;
+- sync/find/create the exact creator-inbox DM and send one typed request only after the explicit tap;
+- hide join/control content and its fallback slug from ordinary inbox previews and timelines; and
+- show an honest recoverable pending state without claiming group membership.
+
 ## Later feature backlog
 
 These features should be reconsidered only after P0 quality and usage justify them.
@@ -1454,8 +1516,8 @@ These features should be reconsidered only after P0 quality and usage justify th
 | Read receipts | P2 | Later | Consent, cross-client semantics, and network cost are acceptable. |
 | Reactions and replies | P2 | Later | Unsupported fallback and text DMs are robust. |
 | Image/file attachments | P2 | Later | Encryption, off-network storage, consent, moderation, CSP, and cost are designed. |
-| Group conversations | P2 | Later | DMs prove demand and installation/member semantics are well understood. |
-| Group invite links | P2 | Later | Groups and safe public deep links exist. |
+| Arbitrary group creation and administration | P2 | Later | Imported Convos group reliability proves the shared group timeline and member semantics. |
+| Create new Convos-compatible invite links | P2 | Blocked | A compatible client-controlled invite private key is available without exporting or deriving it from the Farcaster wallet. Imported signed links remain P1. |
 | Typing indicators | P2 | Later | Message costs and privacy justify ephemeral traffic. |
 | Full-text local search | P2 | Later | A safe local index/storage design exists. |
 | Multiple wallet identities per inbox | P2 | Later | Real users need it and recovery/update limits are addressed. |
