@@ -539,10 +539,11 @@ export function MessagingApp({
     !ensPromptSuppressed &&
     (ensIdentity.relationship === 'active-address' ||
       ensIdentity.relationship === 'same-inbox')
+  const offline = messaging.streamHealth === 'offline'
 
   return (
     <div className={`messaging-app ${messaging.notice ? 'messaging-app--notice' : ''}`}>
-      {ensSwitchCandidate ? (
+      {ensSwitchCandidate && !offline ? (
         <EnsInboxSwitchDialog
           candidate={ensSwitchCandidate}
           onCancel={closeEnsSwitch}
@@ -553,7 +554,7 @@ export function MessagingApp({
           }}
         />
       ) : null}
-      {canOfferEns && ensIdentity.candidate && messaging.view === 'inbox' ? (
+      {canOfferEns && ensIdentity.candidate && messaging.view === 'inbox' && !offline ? (
         <EnsIdentityOffer
           candidate={ensIdentity.candidate}
           onAccept={() => setEnsPreference('accepted')}
@@ -600,7 +601,7 @@ export function MessagingApp({
           onOpen={messaging.openConversation}
           onRefresh={messaging.refresh}
           onRefreshEns={ensIdentity.refresh}
-          onReviewEnsSwitch={inboxTarget ? undefined : reviewEnsSwitch}
+          onReviewEnsSwitch={inboxTarget || offline ? undefined : reviewEnsSwitch}
           onRetryLiveUpdates={messaging.retryLiveUpdates}
           onUseFarcasterInbox={inboxTarget ? useFarcasterInbox : undefined}
           onUseEns={() => void setEnsPreference('accepted')}
@@ -614,6 +615,7 @@ export function MessagingApp({
 
       {messaging.view === 'new-dm' ? (
         <NewDmScreen
+          offline={offline}
           ownAddress={messaging.address}
           onBack={backToInbox}
           onCheckReachability={messaging.canMessageAddress}

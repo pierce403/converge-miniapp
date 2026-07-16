@@ -103,4 +103,35 @@ describe('ConversationScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh now' }))
     expect(onRetryLiveUpdates).toHaveBeenCalledOnce()
   })
+
+  it('keeps saved messages readable and disables network actions while offline', () => {
+    const failed = {
+      ...message('saved failed message'),
+      canRetry: true,
+      delivery: 'failed' as const,
+      isOwn: true,
+    }
+    renderConversation({
+      messages: [message('saved offline message'), failed],
+      streamHealth: 'offline',
+    })
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Offline. Showing messages saved on this device.',
+    )
+    expect(screen.getByText('saved offline message')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Refresh now' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Message')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Retry failed message' })).toBeDisabled()
+  })
+
+  it('does not claim an empty offline cache is the start of the conversation', () => {
+    renderConversation({ messages: [], streamHealth: 'offline' })
+
+    expect(screen.getByText('No messages are saved on this device.')).toBeVisible()
+    expect(screen.getByText('Reconnect to check for conversation history.')).toBeVisible()
+    expect(screen.queryByText(
+      'This is the beginning of your private conversation.',
+    )).not.toBeInTheDocument()
+  })
 })

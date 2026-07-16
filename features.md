@@ -309,6 +309,7 @@ Success condition: the optional label flow never moves identity state; the expli
 | Chat | Live incoming text messages | P0 | Implemented locally | Allowed-DM stream, stable-ID upsert, one retained SDK-owned retry proxy, foreground visible-chat refresh, and health UI exist; real reconnect proof remains. |
 | Chat | Send, optimistic state, failure, retry | P0 | Implemented locally | Duplicate guards and same-ID unpublished retry exist; Browser SDK 7 terminal failures are disclosed. |
 | Local data | Single-connection protection | P0 | Implemented locally | A second tab/window cannot contend for OPFS and gets useful guidance. |
+| Local data | Offline cached reading | P0 | Implemented locally | The installed static shell can reopen without network, an already resumable XMTP client reads its OPFS inbox/messages without attempting sync while the browser reports offline, and network-only actions are clearly unavailable. Cold offline XMTP client construction remains an SDK boundary until the pinned Browser SDK exposes a supported offline-init path. |
 | Local data | Storage-loss/install-limit recognition | P0 | Implemented locally | Browser primitives are checked before wallet access; curated storage, installation, and permanent inbox-limit states never auto-revoke or expose raw database identifiers. |
 | Local data | Installation management/revocation UI | P1 | Later | User can deliberately inspect and revoke an old installation when required. |
 | Design | Converge-derived compact visual system | P0 | Implemented locally | Palette, bubbles, surfaces, inputs, focus states, and empty states are implemented; embedded-device review remains. |
@@ -461,6 +462,21 @@ Requirements:
 - Recognize the ten-active-installation limit and the cumulative inbox-update risk.
 - First release recognizes the installation-limit error, stops safely, and explains that an old installation must be revoked; the focused management/revocation sheet is P1.
 - Never revoke another installation automatically.
+
+#### Offline cached reading
+
+Acceptance criteria:
+
+- Keep XMTP's per-inbox OPFS database as the only decrypted message store. Do not copy message bodies, drafts, conversation previews, or attachments into Web Storage, Cache Storage, a service worker, the Worker backend, or analytics.
+- Cache only the static app shell and same-origin fingerprinted assets in the browser service-worker cache. Retain at most the current and previous complete shell generations so rollback safety cannot grow without bound into XMTP's origin quota. Never cache `/api/*`, `/.well-known/*`, Quick Auth responses, notification tokens, or other personalized requests.
+- After an online visit installs the static cache, reopening `/` without network renders the Converge Mini shell. This is offline shell availability, not proof that the pinned XMTP SDK can construct its client offline.
+- Once the XMTP client is available, read the cached inbox and selected conversation from OPFS before any network sync. When `navigator.onLine` is false, return that cached state directly without waiting for `syncAll()`, `conversation.sync()`, or a stream connection to fail.
+- Show one clear **Offline** state while preserving the inbox/message timeline. Disable refresh, new-recipient checks, send, and retry actions that require XMTP network access; do not claim offline queueing or sending.
+- When the browser returns online, validate the wallet, sync visible state, and restart the message stream without discarding the cached timeline.
+- Automated browser coverage must prove the shell reopens offline after one online load. Unit/integration coverage must prove cached inbox and conversation reads do not call XMTP sync while offline and that the UI keeps cached content visible.
+- Do not claim cold offline message access until a real-host test proves the Browser SDK can construct the existing OPFS client without its initial inbox/network lookup. The pinned Browser SDK 7.0.0 currently passes `allowOffline` as unavailable in its public client construction path; do not fork private bindings or add a second plaintext cache to work around that boundary.
+
+Implemented on 2026-07-15: the browser registers a same-origin static service worker whose entry-hash generations are promoted only after every required asset is cached and MIME-validated. It retains the current and previous complete generations, bypasses poisoned immutable HTTP-cache fallbacks, and excludes protected or personalized routes. The messaging lifecycle reads cached inbox and conversation state through the existing XMTP OPFS client whenever the browser is offline, keeps that timeline visible, disables network-only actions, and queues one wallet-validation/sync/stream recovery pass when connectivity returns. Direct worker tests cover incomplete updates, quota failures, corruptible cache boundaries, rollback generations, and root poisoning; hook/session tests cover stable and in-flight connectivity transitions; Playwright proves the public shell reloads offline after one online production-shaped visit. A canonical Farcaster-host test is still required before claiming cold-launch message access.
 
 ### 5. Conversation inbox
 
@@ -1429,7 +1445,7 @@ These features should be reconsidered only after P0 quality and usage justify th
 | History backup/recovery UX | P2 | Later | Current XMTP history-sync model is stable and understandable. |
 | Block/mute/report controls | P2 | Later | Abuse model and XMTP semantics are defined; decline remains available now. |
 | Dedicated desktop layout | P2 | Out | Embedded mobile-first usage proves a real desktop need. |
-| PWA/service-worker install | P2 | Out | Standalone demand justifies a second lifecycle/push model. |
+| Installable PWA lifecycle | P2 | Out | The narrow static offline cache does not add an install prompt, web app manifest, background sync, or a second notification model. |
 | General multi-inbox chooser | P2 | Out | The narrow ENS-backed switch does not introduce arbitrary wallet/key/inbox selection. |
 | Raw key import/export | P2 | Out | A separate custody/recovery security design is approved. |
 | Onchain transaction actions | — | Out | The product direction changes beyond focused messaging. |

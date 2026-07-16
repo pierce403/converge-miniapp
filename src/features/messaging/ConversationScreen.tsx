@@ -50,6 +50,7 @@ export function ConversationScreen({
   const [hasNewMessages, setHasNewMessages] = useState(false)
   const identity = conversation.peerAddress ?? conversation.peerInboxId
   const presentation = participantPresentation(identity, participantIdentity)
+  const offline = streamHealth === 'offline'
 
   useLayoutEffect(() => {
     const scroller = scrollerRef.current
@@ -132,11 +133,15 @@ export function ConversationScreen({
             ? <ArrowDownUp aria-hidden="true" />
             : <WifiOff aria-hidden="true" />}
           <span>
-            {streamHealth === 'retrying'
+            {offline
+              ? 'Offline. Showing messages saved on this device.'
+              : streamHealth === 'retrying'
               ? 'Live updates are reconnecting. Saved messages remain available.'
               : 'Live updates paused. Refresh and retry when your connection returns.'}
           </span>
-          <button type="button" onClick={onRetryLiveUpdates}>Refresh now</button>
+          {!offline ? (
+            <button type="button" onClick={onRetryLiveUpdates}>Refresh now</button>
+          ) : null}
         </div>
       ) : null}
 
@@ -173,12 +178,21 @@ export function ConversationScreen({
         ) : null}
         {!loading && !messages.length ? (
           <div className="conversation-start">
-            <strong>This is the beginning of your private conversation.</strong>
-            <span>Messages are end-to-end encrypted by XMTP.</span>
+            <strong>{offline
+              ? 'No messages are saved on this device.'
+              : 'This is the beginning of your private conversation.'}</strong>
+            <span>{offline
+              ? 'Reconnect to check for conversation history.'
+              : 'Messages are end-to-end encrypted by XMTP.'}</span>
           </div>
         ) : null}
         {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} onRetry={onRetry} />
+          <MessageBubble
+            key={message.id}
+            message={message}
+            onRetry={onRetry}
+            retryDisabled={offline}
+          />
         ))}
       </div>
 
@@ -188,7 +202,7 @@ export function ConversationScreen({
         </button>
       ) : null}
 
-      <MessageComposer disabled={loading} onSend={onSend} sending={sending} />
+      <MessageComposer disabled={loading || offline} onSend={onSend} sending={sending} />
     </section>
   )
 }

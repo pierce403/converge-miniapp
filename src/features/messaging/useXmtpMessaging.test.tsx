@@ -78,6 +78,12 @@ function deferred<T>(): Deferred<T> {
   return { promise, reject, resolve }
 }
 
+function storageValues(storage: Storage): string[] {
+  return Array.from({ length: storage.length }, (_, index) => (
+    storage.getItem(storage.key(index) ?? '') ?? ''
+  ))
+}
+
 function message(id: string, text: string, sentAt: string): MessageItem {
   const date = new Date(sentAt)
   return {
@@ -106,6 +112,7 @@ function createSession(overrides: Record<string, unknown> = {}) {
     loadConversation: vi.fn(),
     loadInbox: vi.fn().mockResolvedValue([cachedConversation]),
     loadOlderMessages: vi.fn(),
+    readConversation: vi.fn(),
     readInbox: vi.fn().mockResolvedValue([cachedConversation]),
     requestHistorySync: vi.fn().mockResolvedValue(false),
     startMessageStream: vi.fn().mockResolvedValue(undefined),
@@ -116,6 +123,12 @@ function createSession(overrides: Record<string, unknown> = {}) {
 describe('useXmtpMessaging', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
+    sessionStorage.clear()
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: true,
+    })
     Object.defineProperty(document, 'visibilityState', {
       configurable: true,
       value: 'visible',
@@ -530,6 +543,209 @@ describe('useXmtpMessaging', () => {
     expect(result.current.notice).toMatch(/temporarily unreachable/)
     expect(result.current.streamHealth).toBe('failed')
     expect(session.startMessageStream).toHaveBeenCalledOnce()
+  })
+
+  it('opens saved messages without sync while offline and refreshes once online', async () => {
+    const sentinel = 'OFFLINE_SENTINEL_DO_NOT_COPY_TO_WEB_STORAGE'
+    const savedMessage = message('saved-offline', sentinel, '2026-07-14T12:00:00Z')
+    const refreshedMessage = message(
+      'refreshed-online',
+      'Arrived after reconnecting',
+      '2026-07-14T12:01:00Z',
+    )
+    const startMessageStream = vi.fn(async (
+      _onMessage: unknown,
+      onHealth: (health: 'live') => void,
+    ) => onHealth('live'))
+    const session = createSession({
+      loadConversation: vi.fn().mockResolvedValue({
+        conversation: activeConversation,
+        hasOlder: false,
+        messages: [savedMessage, refreshedMessage],
+        scannedMessageCount: 2,
+      }),
+      readConversation: vi.fn().mockResolvedValue({
+        conversation: activeConversation,
+        hasOlder: false,
+        messages: [savedMessage],
+        scannedMessageCount: 1,
+      }),
+      startMessageStream,
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+    expect(session.loadInbox).toHaveBeenCalledOnce()
+
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: false,
+    })
+    act(() => window.dispatchEvent(new Event('offline')))
+    expect(result.current.streamHealth).toBe('offline')
+
+    await act(async () => result.current.refresh())
+    expect(session.readInbox).toHaveBeenCalledOnce()
+    expect(session.loadInbox).toHaveBeenCalledOnce()
+
+    await act(async () => result.current.openConversation(activeConversation.id))
+
+    expect(result.current.loadingConversation).toBe(false)
+    expect(result.current.messages).toEqual([savedMessage])
+    expect(session.readConversation).toHaveBeenCalledOnce()
+    expect(session.loadConversation).not.toHaveBeenCalled()
+    expect(session.startMessageStream).toHaveBeenCalledOnce()
+    expect([...storageValues(localStorage), ...storageValues(sessionStorage)].join('\n'))
+      .not.toContain(sentinel)
+
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: true,
+    })
+    act(() => window.dispatchEvent(new Event('online')))
+
+    await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(session.loadConversation).toHaveBeenCalledOnce())
+    await waitFor(() => expect(result.current.streamHealth).toBe('live'))
+    expect(result.current.messages.map(({ id }) => id)).toEqual([
+      'saved-offline',
+      'refreshed-online',
+    ])
+  })
+
+  it('uses only the local inbox when an already-created session begins offline', async () => {
+    const session = createSession({ isNewInstallation: true })
+    mocks.createSession.mockResolvedValue(session)
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: false,
+    })
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+
+    expect(result.current.connection.phase).toBe('ready')
+    expect(result.current.streamHealth).toBe('offline')
+    expect(session.readInbox).toHaveBeenCalledOnce()
+    expect(session.requestHistorySync).not.toHaveBeenCalled()
+    expect(session.loadInbox).not.toHaveBeenCalled()
+    expect(session.startMessageStream).not.toHaveBeenCalled()
+  })
+
+  it('stops waiting for online refresh work when connectivity drops', async () => {
+    const sync = deferred<ConversationSummary[]>()
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+    session.loadInbox.mockReturnValueOnce(sync.promise)
+
+    let refresh!: Promise<void>
+    act(() => {
+      refresh = result.current.retryLiveUpdates()
+    })
+    await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
+
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: false,
+    })
+    act(() => window.dispatchEvent(new Event('offline')))
+    await act(async () => refresh)
+
+    expect(result.current.streamHealth).toBe('offline')
+    expect(session.readInbox).toHaveBeenCalledOnce()
+    expect(session.startMessageStream).toHaveBeenCalledOnce()
+
+    await act(async () => sync.resolve([cachedConversation]))
+    expect(session.startMessageStream).toHaveBeenCalledOnce()
+  })
+
+  it('finishes opening from saved messages when conversation sync loses connectivity', async () => {
+    const sync = deferred<{
+      conversation: ActiveConversation
+      hasOlder: boolean
+      messages: MessageItem[]
+      scannedMessageCount: number
+    }>()
+    const savedMessage = message('saved-during-drop', 'Still readable', '2026-07-14T12:00:00Z')
+    const savedLoad = {
+      conversation: activeConversation,
+      hasOlder: false,
+      messages: [savedMessage],
+      scannedMessageCount: 1,
+    }
+    const session = createSession({
+      loadConversation: vi.fn((
+        _conversationId: string,
+        onCached?: (loaded: typeof savedLoad) => void,
+      ) => {
+        onCached?.(savedLoad)
+        return sync.promise
+      }),
+      readConversation: vi.fn().mockResolvedValue(savedLoad),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+    let opening!: Promise<void>
+    act(() => {
+      opening = result.current.openConversation(activeConversation.id)
+    })
+    await waitFor(() => expect(result.current.messages).toEqual([savedMessage]))
+    expect(result.current.loadingConversation).toBe(true)
+
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: false,
+    })
+    act(() => window.dispatchEvent(new Event('offline')))
+    await act(async () => opening)
+
+    expect(result.current.loadingConversation).toBe(false)
+    expect(result.current.view).toBe('conversation')
+    expect(result.current.messages).toEqual([savedMessage])
+    expect(session.readConversation).toHaveBeenCalledOnce()
+
+    await act(async () => sync.resolve(savedLoad))
+    expect(result.current.messages).toEqual([savedMessage])
+  })
+
+  it('does not lose an online recovery that arrives during an offline cache read', async () => {
+    const offlineRead = deferred<ConversationSummary[]>()
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+    session.readInbox.mockReturnValueOnce(offlineRead.promise)
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: false,
+    })
+    act(() => window.dispatchEvent(new Event('offline')))
+
+    let offlineRefresh!: Promise<void>
+    act(() => {
+      offlineRefresh = result.current.retryLiveUpdates()
+    })
+    await waitFor(() => expect(session.readInbox).toHaveBeenCalledOnce())
+
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: true,
+    })
+    act(() => window.dispatchEvent(new Event('online')))
+    await act(async () => {
+      offlineRead.resolve([cachedConversation])
+      await offlineRefresh
+    })
+
+    await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(session.startMessageStream).toHaveBeenCalledTimes(2))
   })
 
   it('does not leave a conversation or overwrite its notice when initial sync finishes', async () => {

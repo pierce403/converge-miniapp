@@ -676,7 +676,7 @@ img { max-width: 100%; }
   background: rgb(30 64 175 / 52%);
 }
 
-.identity-menu__ens > button:disabled { cursor: wait; opacity: 0.6; }
+.identity-menu__ens > button:disabled { cursor: not-allowed; opacity: 0.6; }
 .identity-menu__ens .identity-menu__connected { color: #bbf7d0; font-weight: 750; }
 .identity-menu__ens .identity-menu__warning { color: var(--accent-200); }
 
@@ -815,7 +815,7 @@ img { max-width: 100%; }
 .connection-banner--retrying { color: var(--primary-100); background: rgb(30 64 175 / 42%); }
 .connection-banner svg { width: 16px; height: 16px; flex: 0 0 auto; }
 .connection-banner button {
-  min-height: 36px;
+  min-height: 44px;
   flex: 0 0 auto;
   padding: 6px 10px;
   border: 1px solid currentColor;
@@ -935,6 +935,7 @@ img { max-width: 100%; }
 .address-input svg { width: 18px; height: 18px; flex: 0 0 auto; color: var(--primary-300); }
 .address-input input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--primary-50); background: transparent; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
 .address-input input::placeholder { color: rgb(191 219 254 / 76%); }
+.address-input input:disabled { cursor: not-allowed; opacity: 0.58; }
 .field-help { margin: 0; color: rgb(191 219 254 / 64%); font-size: 0.7rem; line-height: 1.45; }
 .field-error { margin: 0; color: var(--accent-200); font-size: 0.74rem; line-height: 1.4; }
 .new-dm-form .button { width: 100%; margin-top: 6px; }
@@ -1105,6 +1106,7 @@ img { max-width: 100%; }
 .message-bubble footer span { display: inline-flex; align-items: center; gap: 3px; }
 .message-bubble footer svg { width: 10px; height: 10px; }
 .message-bubble footer button { display: inline-flex; min-height: 44px; align-items: center; gap: 3px; padding: 5px 8px; border: 0; border-radius: 9px; color: #fff7ed; background: rgb(124 45 18 / 38%); cursor: pointer; font-size: 0.61rem; }
+.message-bubble footer button:disabled { cursor: not-allowed; filter: saturate(0.4); opacity: 0.52; }
 
 .message-composer {
   display: flex;
@@ -1136,6 +1138,7 @@ img { max-width: 100%; }
 
 .message-composer textarea:focus { border-color: var(--accent-400); box-shadow: 0 0 0 3px rgb(249 115 22 / 12%); }
 .message-composer textarea::placeholder { color: rgb(191 219 254 / 76%); }
+.message-composer textarea:disabled { cursor: not-allowed; opacity: 0.58; }
 
 .send-button {
   display: grid;

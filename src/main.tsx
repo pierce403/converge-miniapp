@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 
 import App from './App'
 import './index.css'
+import { registerOfflineShell } from './lib/offline/registerOfflineShell'
 
 const root = document.getElementById('root')
 
@@ -15,3 +16,5 @@ createRoot(root).render(
     <App />
   </StrictMode>,
 )
+
+registerOfflineShell()

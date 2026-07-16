@@ -17,6 +17,7 @@ type RecipientResult = {
 }
 
 type NewDmScreenProps = {
+  offline?: boolean
   ownAddress: `0x${string}`
   onBack: () => void
   onCheckReachability: (address: `0x${string}`) => Promise<boolean>
@@ -30,6 +31,7 @@ type NewDmScreenProps = {
 }
 
 export function NewDmScreen({
+  offline = false,
   ownAddress,
   onBack,
   onCheckReachability,
@@ -50,7 +52,7 @@ export function NewDmScreen({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    if (checkingRef.current || openingRef.current) return
+    if (offline || checkingRef.current || openingRef.current) return
 
     const value = query.trim()
     const request = ++checkRequestRef.current
@@ -102,7 +104,7 @@ export function NewDmScreen({
   const visibleError = error ?? resolutionError
 
   const openDm = async () => {
-    if (!result?.reachable || openingRef.current || checkingRef.current) return
+    if (offline || !result?.reachable || openingRef.current || checkingRef.current) return
     const address = result.address
     openingRef.current = true
     setOpening(true)
@@ -133,6 +135,13 @@ export function NewDmScreen({
         </div>
       </header>
 
+      {offline ? (
+        <div className="connection-banner connection-banner--offline" role="status">
+          <XCircle aria-hidden="true" />
+          <span>Reconnect before checking or opening a new conversation.</span>
+        </div>
+      ) : null}
+
       <form className="new-dm-form" onSubmit={submit}>
         <label htmlFor="recipient-address">Ethereum address or ENS name</label>
         <div className="address-input">
@@ -144,6 +153,7 @@ export function NewDmScreen({
             autoCapitalize="none"
             autoComplete="off"
             autoCorrect="off"
+            disabled={offline}
             inputMode="text"
             onChange={(event) => {
               checkRequestRef.current += 1
@@ -165,7 +175,7 @@ export function NewDmScreen({
             {visibleError}
           </p>
         ) : null}
-        <Button busy={checking} disabled={!query.trim() || opening} type="submit">
+        <Button busy={checking} disabled={offline || !query.trim() || opening} type="submit">
           <Search aria-hidden="true" />
           {checking ? 'Checking recipient…' : 'Check recipient'}
         </Button>
@@ -185,7 +195,7 @@ export function NewDmScreen({
           {result.name ? <h2>{result.name}</h2> : null}
           <code>{result.address}</code>
           {result.reachable ? (
-            <Button busy={opening} disabled={checking} onClick={() => void openDm()}>
+            <Button busy={opening} disabled={offline || checking} onClick={() => void openDm()}>
               {opening ? 'Opening DM…' : 'Open DM'}
             </Button>
           ) : (

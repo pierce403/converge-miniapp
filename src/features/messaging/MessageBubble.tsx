@@ -6,9 +6,10 @@ import { messageTime } from './format'
 type MessageBubbleProps = {
   message: MessageItem
   onRetry: (messageId: string) => void
+  retryDisabled?: boolean
 }
 
-export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
+export function MessageBubble({ message, onRetry, retryDisabled = false }: MessageBubbleProps) {
   const sender = message.isOwn ? 'You' : 'Recipient'
   const reactions = message.reactions?.slice(0, MAX_MESSAGE_REACTIONS)
 
@@ -39,6 +40,7 @@ export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
         {message.isOwn && message.delivery === 'failed' && message.canRetry ? (
           <button
             aria-label="Retry failed message"
+            disabled={retryDisabled}
             type="button"
             onClick={() => onRetry(message.id)}
           >

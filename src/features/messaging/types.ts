@@ -36,4 +36,4 @@ export type ActiveConversation = {
   peerInboxId: string
 }
 
-export type StreamHealth = 'live' | 'retrying' | 'failed'
+export type StreamHealth = 'live' | 'retrying' | 'failed' | 'offline'

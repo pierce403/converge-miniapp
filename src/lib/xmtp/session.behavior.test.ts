@@ -307,6 +307,28 @@ describe('XmtpMessagingSession behavior', () => {
     })
   })
 
+  it('reads a saved conversation without starting a network sync', async () => {
+    const saved = message({
+      id: 'saved-offline',
+      sentAt: '2026-07-14T12:00:00Z',
+      status: DeliveryStatus.Published,
+    })
+    const conversation = dm({
+      messages: vi.fn().mockResolvedValue([saved]),
+    })
+    const fakeClient = client(conversation)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const loaded = await session.readConversation('conversation-1')
+
+    expect(loaded.messages).toEqual([
+      expect.objectContaining({ id: 'saved-offline', text: 'saved-offline' }),
+    ])
+    expect(conversation.sync).not.toHaveBeenCalled()
+    expect(fakeClient.conversations.syncAll).not.toHaveBeenCalled()
+  })
+
   it('uses the stable recovery Ethereum identity as the peer display address', async () => {
     const conversation = dm({ messages: vi.fn().mockResolvedValue([]) })
     const fakeClient = client(conversation)
@@ -799,6 +821,27 @@ describe('XmtpMessagingSession behavior', () => {
     await session.startMessageStream(vi.fn(), onHealth)
     expect(fakeClient.conversations.streamAllDmMessages).toHaveBeenCalledOnce()
     callbacks?.onRestart?.()
+    expect(onHealth).toHaveBeenLastCalledWith('live')
+  })
+
+  it('replaces an exhausted stream proxy during foreground recovery', async () => {
+    const conversation = dm()
+    const fakeClient = client(conversation)
+    const first = { end: vi.fn(), isDone: false }
+    const replacement = { end: vi.fn(), isDone: false }
+    fakeClient.conversations.streamAllDmMessages
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(replacement)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const onHealth = vi.fn()
+    await session.startMessageStream(vi.fn(), onHealth)
+    first.isDone = true
+
+    await session.startMessageStream(vi.fn(), onHealth)
+
+    expect(fakeClient.conversations.streamAllDmMessages).toHaveBeenCalledTimes(2)
     expect(onHealth).toHaveBeenLastCalledWith('live')
   })
 

@@ -38,6 +38,106 @@ test('standalone shell fits an embedded mobile viewport', async ({ page }) => {
   expect(embeds.map((embed) => embed.version)).toEqual(['1', '1'])
 })
 
+test('the public app shell reopens offline after one online visit', async ({ context, page }) => {
+  await page.goto('/')
+  await expect(page.getByRole('heading', {
+    name: 'Private messages, right where the conversation starts.',
+  })).toBeVisible()
+  await page.evaluate(async () => {
+    if (!('serviceWorker' in navigator)) throw new Error('Service workers are unavailable')
+    await navigator.serviceWorker.ready
+    if (!navigator.serviceWorker.controller) {
+      await new Promise<void>((resolve) => {
+        navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), {
+          once: true,
+        })
+      })
+    }
+  })
+  await expect.poll(async () => await page.evaluate(async () => {
+    const metadataCache = await caches.open('converge-miniapp-static-meta-v1')
+    const pointer = await metadataCache.match('/__converge-offline-shell-metadata__')
+    if (!pointer) return ['offline-shell metadata']
+    const metadata = await pointer.json() as {
+      current?: string
+      previous?: string | null
+    }
+    if (!metadata.current?.startsWith('converge-miniapp-static-shell-index-')) {
+      return ['valid current generation']
+    }
+    const shellCacheNames = (await caches.keys()).filter(
+      (name) => name.startsWith('converge-miniapp-static-shell-'),
+    )
+    if (shellCacheNames.length > 2) return ['at most two shell generations']
+    if (!shellCacheNames.includes(metadata.current)) return ['current generation cache']
+    if (
+      metadata.previous != null &&
+      (!metadata.previous.startsWith('converge-miniapp-static-shell-index-') ||
+        metadata.previous === metadata.current ||
+        !shellCacheNames.includes(metadata.previous))
+    ) return ['valid previous generation']
+    const cache = await caches.open(metadata.current)
+    if (!await cache.match('/')) return ['cached root shell']
+    const urls = performance.getEntriesByType('resource')
+      .map((entry) => new URL(entry.name))
+      .filter((url) => url.origin === window.location.origin && url.pathname.startsWith('/assets/'))
+    const missing = []
+    for (const url of urls) {
+      if (!await cache.match(url.pathname, { ignoreVary: true })) missing.push(url.pathname)
+    }
+    return missing
+  })).toEqual([])
+  const protectedPathsCached = await page.evaluate(async () => {
+    await fetch('/api/health')
+    await fetch('/.well-known/farcaster.json')
+    const cacheNames = await caches.keys()
+    for (const name of cacheNames) {
+      if (!name.startsWith('converge-miniapp-static-shell-')) continue
+      const keys = await (await caches.open(name)).keys()
+      if (keys.some(({ url }) => {
+        const { pathname } = new URL(url)
+        return pathname === '/api' || pathname.startsWith('/api/') ||
+          pathname === '/.well-known' || pathname.startsWith('/.well-known/')
+      })) return true
+    }
+    return false
+  })
+  expect(protectedPathsCached).toBe(false)
+
+  // A controlled navigation to a public subresource must never overwrite the
+  // cached root, and a Cloudflare-style HTML fallback must never enter an
+  // immutable asset generation.
+  const subresourcePage = await context.newPage()
+  await subresourcePage.goto('/mark.svg')
+  await subresourcePage.goto('/service-worker.js')
+  await subresourcePage.close()
+  await page.evaluate(async () => {
+    await fetch('/assets/converge-offline-review-missing.js')
+  })
+  const fallbackWasCached = await page.evaluate(async () => {
+    const cacheNames = await caches.keys()
+    for (const name of cacheNames) {
+      if (!name.startsWith('converge-miniapp-static-shell-')) continue
+      if (await (await caches.open(name)).match(
+        '/assets/converge-offline-review-missing.js',
+        { ignoreVary: true },
+      )) return true
+    }
+    return false
+  })
+  expect(fallbackWasCached).toBe(false)
+
+  try {
+    await context.setOffline(true)
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await expect(page.getByRole('heading', {
+      name: 'Private messages, right where the conversation starts.',
+    })).toBeVisible()
+  } finally {
+    await context.setOffline(false)
+  }
+})
+
 test('ready messaging does not duplicate the mobile host top inset', async ({ page }) => {
   await page.goto('/')
 

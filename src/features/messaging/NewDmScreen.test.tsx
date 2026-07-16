@@ -32,6 +32,19 @@ function props(overrides: Record<string, unknown> = {}) {
 }
 
 describe('NewDmScreen', () => {
+  it('disables recipient checks while offline', () => {
+    const options = props({ offline: true })
+    render(<NewDmScreen {...options} />)
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Reconnect before checking or opening a new conversation.',
+    )
+    expect(screen.getByLabelText('Ethereum address or ENS name')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Check recipient' })).toBeDisabled()
+    expect(options.onResolveEns).not.toHaveBeenCalled()
+    expect(options.onCheckReachability).not.toHaveBeenCalled()
+  })
+
   it('rejects incomplete input and the active address before checking XMTP', async () => {
     const options = props()
     render(<NewDmScreen {...options} />)

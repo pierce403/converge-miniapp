@@ -80,6 +80,7 @@ export function useXmtpMessaging({
   const creatingDmRef = useRef(false)
   const refreshingRef = useRef(false)
   const visibleRefreshRef = useRef(false)
+  const onlineRefreshPendingRef = useRef(false)
   const foregroundCheckRef = useRef(false)
   const loadingOlderRequestRef = useRef<number | null>(null)
   const sendingRef = useRef(false)
@@ -113,7 +114,9 @@ export function useXmtpMessaging({
   const [hasOlderMessages, setHasOlderMessages] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [sending, setSending] = useState(false)
-  const [streamHealth, setStreamHealth] = useState<StreamHealth>('live')
+  const [streamHealth, setStreamHealth] = useState<StreamHealth>(() => (
+    browserIsKnownOffline() ? 'offline' : 'live'
+  ))
   const [notice, setNotice] = useState<string | null>(null)
 
   const updateNotice = useCallback((next: string | null) => {
@@ -141,6 +144,7 @@ export function useXmtpMessaging({
     loadedMessageWindowRef.current = 0
     refreshingRef.current = false
     visibleRefreshRef.current = false
+    onlineRefreshPendingRef.current = false
     foregroundCheckRef.current = false
     loadingOlderRequestRef.current = null
     creatingDmRef.current = false
@@ -224,7 +228,19 @@ export function useXmtpMessaging({
     refreshingRef.current = true
     if (showSpinner) setRefreshing(true)
     try {
-      const next = await session.loadInbox()
+      let offline = browserIsKnownOffline()
+      let next: ConversationSummary[]
+      if (offline) {
+        next = await session.readInbox()
+      } else {
+        const outcome = await settleUntilOffline(session.loadInbox())
+        if (outcome.status === 'offline') {
+          offline = true
+          next = await session.readInbox()
+        } else {
+          next = outcome.value
+        }
+      }
       if (
         mountedRef.current &&
         operationGenerationRef.current === generation &&
@@ -232,6 +248,7 @@ export function useXmtpMessaging({
         sessionRef.current === session
       ) {
         setConversations(next)
+        if (offline) setStreamHealth('offline')
         updateNotice(null)
       }
     } catch (error) {
@@ -273,7 +290,11 @@ export function useXmtpMessaging({
   }, [])
 
   const startMessageStream = useCallback(async (session: XmtpMessagingSession) => {
-    await session.startMessageStream(
+    if (browserIsKnownOffline()) {
+      if (mountedRef.current && sessionRef.current === session) setStreamHealth('offline')
+      return
+    }
+    const outcome = await settleUntilOffline(session.startMessageStream(
       (message) => {
         if (sessionRef.current !== session) return
         if (activeRef.current?.id === message.conversationId) upsertMessage(message)
@@ -281,10 +302,15 @@ export function useXmtpMessaging({
       },
       (health) => {
         if (mountedRef.current && sessionRef.current === session) {
-          setStreamHealth(health)
+          setStreamHealth(browserIsKnownOffline() ? 'offline' : health)
         }
       },
-    )
+    ))
+    if (
+      outcome.status === 'offline' &&
+      mountedRef.current &&
+      sessionRef.current === session
+    ) setStreamHealth('offline')
   }, [scheduleInboxRefresh, upsertMessage])
 
   const disconnect = useCallback(async () => {
@@ -528,10 +554,16 @@ export function useXmtpMessaging({
       setEnvironment(session.environment)
 
       let recoveryNotice: string | null = null
-      if (session.isNewInstallation) {
+      let offline = browserIsKnownOffline()
+      if (offline) setStreamHealth('offline')
+      if (session.isNewInstallation && !offline) {
         setConnection({ error: null, phase: 'history' })
         try {
-          await session.requestHistorySync()
+          const outcome = await settleUntilOffline(session.requestHistorySync())
+          if (outcome.status === 'offline') {
+            offline = true
+            setStreamHealth('offline')
+          }
         } catch (error) {
           recoveryNotice = readableMessagingError(
             error,
@@ -548,7 +580,7 @@ export function useXmtpMessaging({
       refreshingRef.current = true
       let cachedInboxRead = false
       try {
-        const nextConversations = await session.loadInbox((cached) => {
+        const onCachedInbox = (cached: ConversationSummary[]) => {
           if (
             !mountedRef.current ||
             sessionRef.current !== session ||
@@ -560,7 +592,24 @@ export function useXmtpMessaging({
             setRefreshing(true)
             setConnection({ error: null, phase: 'ready' })
           }
-        })
+        }
+        let nextConversations: ConversationSummary[]
+        if (offline) {
+          nextConversations = await session.readInbox()
+        } else {
+          const outcome = await settleUntilOffline(session.loadInbox(onCachedInbox))
+          if (outcome.status === 'offline') {
+            offline = true
+            setStreamHealth('offline')
+            nextConversations = await session.readInbox()
+          } else {
+            nextConversations = outcome.value
+          }
+        }
+        if (offline) {
+          cachedInboxRead = true
+          onCachedInbox(nextConversations)
+        }
         if (
           !mountedRef.current ||
           sessionRef.current !== session ||
@@ -584,15 +633,17 @@ export function useXmtpMessaging({
 
       if (!mountedRef.current || sessionRef.current !== session) return
 
-      try {
-        await startMessageStream(session)
-      } catch (error) {
-        if (mountedRef.current && sessionRef.current === session) {
-          setStreamHealth('failed')
-          recoveryNotice = readableMessagingError(
-            error,
-            'Live updates could not start. Manual refresh is still available.',
-          )
+      if (!offline) {
+        try {
+          await startMessageStream(session)
+        } catch (error) {
+          if (mountedRef.current && sessionRef.current === session) {
+            setStreamHealth('failed')
+            recoveryNotice = readableMessagingError(
+              error,
+              'Live updates could not start. Manual refresh is still available.',
+            )
+          }
         }
       }
 
@@ -708,6 +759,9 @@ export function useXmtpMessaging({
   ): Promise<boolean> => {
     const session = sessionRef.current
     if (!session) throw new Error('Open the XMTP inbox before checking a recipient.')
+    if (browserIsKnownOffline()) {
+      throw new Error('Reconnect before checking a new recipient.')
+    }
     try {
       return await session.canMessageAddress(candidateAddress)
     } catch (error) {
@@ -754,7 +808,10 @@ export function useXmtpMessaging({
 
     let cachedConversationRead = false
     try {
-      const loaded = await session.loadConversation(conversationId, (cached) => {
+      let offline = browserIsKnownOffline()
+      const onCachedConversation = (cached: Awaited<ReturnType<
+        XmtpMessagingSession['readConversation']
+      >>) => {
         if (
           !mountedRef.current ||
           request !== openRequestRef.current ||
@@ -774,7 +831,26 @@ export function useXmtpMessaging({
           scannedWindowSize(cached),
         )
         setHasOlderMessages(cached.hasOlder)
-      })
+      }
+      let loaded: Awaited<ReturnType<XmtpMessagingSession['readConversation']>>
+      if (offline) {
+        loaded = await session.readConversation(conversationId)
+      } else {
+        const outcome = await settleUntilOffline(
+          session.loadConversation(conversationId, onCachedConversation),
+        )
+        if (outcome.status === 'offline') {
+          offline = true
+          loaded = await session.readConversation(conversationId)
+        } else {
+          loaded = outcome.value
+        }
+      }
+      if (offline) {
+        cachedConversationRead = true
+        onCachedConversation(loaded)
+        setStreamHealth('offline')
+      }
       if (
         !mountedRef.current ||
         request !== openRequestRef.current ||
@@ -868,6 +944,9 @@ export function useXmtpMessaging({
   const createDm = useCallback(async (recipient: `0x${string}`) => {
     const session = sessionRef.current
     if (!session) throw new Error('Connect the XMTP inbox first.')
+    if (browserIsKnownOffline()) {
+      throw new Error('Reconnect before starting a new conversation.')
+    }
     if (creatingDmRef.current) return
     if (recipient.toLowerCase() === session.address.toLowerCase()) {
       throw new Error('That is the wallet already connected to this inbox.')
@@ -905,6 +984,11 @@ export function useXmtpMessaging({
     const session = sessionRef.current
     const conversation = activeRef.current
     if (!session || !conversation || sendingRef.current) return
+    if (browserIsKnownOffline()) {
+      const error = new Error('Reconnect before sending this message.')
+      updateNotice(error.message)
+      throw error
+    }
 
     const generation = operationGenerationRef.current
     sendingRef.current = true
@@ -953,6 +1037,10 @@ export function useXmtpMessaging({
     const session = sessionRef.current
     const conversation = activeRef.current
     if (!session || !conversation || retryingMessageIdsRef.current.has(messageId)) return
+    if (browserIsKnownOffline()) {
+      updateNotice('Reconnect before retrying this message.')
+      return
+    }
 
     const generation = operationGenerationRef.current
     retryingMessageIdsRef.current.add(messageId)
@@ -1002,23 +1090,46 @@ export function useXmtpMessaging({
     setView('inbox')
   }, [])
 
-  const refreshVisibleState = useCallback(async () => {
+  const refreshVisibleState = useCallback(async function refreshVisibleState() {
     const session = sessionRef.current
     if (!session || visibleRefreshRef.current) return
 
     const generation = operationGenerationRef.current
+    let offline = browserIsKnownOffline()
+    onlineRefreshPendingRef.current = false
+    if (offline) setStreamHealth('offline')
     visibleRefreshRef.current = true
     try {
       await loadInbox(false)
+      offline = browserIsKnownOffline()
 
       const conversation = activeRef.current
       if (conversation) {
         try {
-          const loaded = await session.loadConversation(
-            conversation.id,
-            undefined,
-            loadedMessageWindowRef.current,
-          )
+          let loaded: Awaited<ReturnType<XmtpMessagingSession['readConversation']>>
+          if (offline) {
+            loaded = await session.readConversation(
+              conversation.id,
+              loadedMessageWindowRef.current,
+            )
+          } else {
+            const outcome = await settleUntilOffline(
+              session.loadConversation(
+                conversation.id,
+                undefined,
+                loadedMessageWindowRef.current,
+              ),
+            )
+            if (outcome.status === 'offline') {
+              offline = true
+              loaded = await session.readConversation(
+                conversation.id,
+                loadedMessageWindowRef.current,
+              )
+            } else {
+              loaded = outcome.value
+            }
+          }
           if (
             mountedRef.current &&
             operationGenerationRef.current === generation &&
@@ -1054,6 +1165,8 @@ export function useXmtpMessaging({
       }
 
       if (
+        !browserIsKnownOffline() &&
+        !onlineRefreshPendingRef.current &&
         mountedRef.current &&
         operationGenerationRef.current === generation &&
         sessionRef.current === session
@@ -1077,6 +1190,15 @@ export function useXmtpMessaging({
     } finally {
       if (operationGenerationRef.current === generation) {
         visibleRefreshRef.current = false
+        if (
+          onlineRefreshPendingRef.current &&
+          !browserIsKnownOffline() &&
+          mountedRef.current &&
+          sessionRef.current === session
+        ) {
+          onlineRefreshPendingRef.current = false
+          window.setTimeout(() => void refreshVisibleState(), 0)
+        }
       }
     }
   }, [loadInbox, startMessageStream, updateNotice])
@@ -1099,17 +1221,30 @@ export function useXmtpMessaging({
       }
     }
     const onForeground = () => void refreshForeground()
+    const onOnline = () => {
+      if (mountedRef.current && sessionRef.current) {
+        onlineRefreshPendingRef.current = true
+        setStreamHealth('retrying')
+        if (visibleRefreshRef.current || foregroundCheckRef.current) return
+      }
+      onForeground()
+    }
+    const onOffline = () => {
+      if (mountedRef.current && sessionRef.current) setStreamHealth('offline')
+    }
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'hidden') onForeground()
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
     window.addEventListener('focus', onForeground)
-    window.addEventListener('online', onForeground)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
     window.addEventListener('pageshow', onForeground)
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('focus', onForeground)
-      window.removeEventListener('online', onForeground)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
       window.removeEventListener('pageshow', onForeground)
     }
   }, [refreshVisibleState])
@@ -1161,6 +1296,41 @@ export function useXmtpMessaging({
     view,
     walletKind,
   }
+}
+
+function browserIsKnownOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false
+}
+
+async function settleUntilOffline<T>(promise: Promise<T>): Promise<
+  | { status: 'completed'; value: T }
+  | { status: 'offline' }
+> {
+  return await new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (
+      result: { status: 'completed'; value: T } | { status: 'offline' },
+    ) => {
+      if (settled) return
+      settled = true
+      window.removeEventListener('offline', onOffline)
+      resolve(result)
+    }
+    const fail = (error: unknown) => {
+      if (settled) return
+      settled = true
+      window.removeEventListener('offline', onOffline)
+      reject(error)
+    }
+    const onOffline = () => finish({ status: 'offline' })
+
+    window.addEventListener('offline', onOffline, { once: true })
+    if (browserIsKnownOffline()) onOffline()
+    void promise.then(
+      (value) => finish({ status: 'completed', value }),
+      fail,
+    )
+  })
 }
 
 function walletAccountIsAvailable(

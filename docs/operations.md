@@ -18,6 +18,7 @@ This runbook covers the Cloudflare-hosted SPA and Worker API at `https://miniapp
 | Farcaster identity | Quick Auth JWKS + official primary-address API | Verifies the exact-domain FID and resolves its public primary Ethereum address. |
 | XMTP environment | `VITE_XMTP_ENV` at build time | `dev` for preview/local; legacy `production` for the current canonical build; decentralized `mainnet` remains gated. |
 | XMTP Gateway | `VITE_XMTP_GATEWAY_HOST` at build time | Required for `mainnet` and decentralized testnets. Public hostname only; never put a credential in a `VITE_` variable. |
+| Offline shell | Browser service worker + Cache Storage | Caches only the public shell and static same-origin assets. XMTP remains the sole local message store in OPFS; no binding or server resource is involved. |
 
 The production `PREFERENCES` database is `converge-miniapp-preferences`; preview uses the separate `converge-miniapp-preview-preferences` database. There is no KV, R2, Queue, Durable Object, identity-link table, notification token store, or persistent application session store.
 
@@ -50,6 +51,18 @@ Ordinary production delivery is a push to `main`; do not run a second manual dep
 For an operator-owned preview, authenticate Wrangler interactively and run `npm run deploy:preview`. This builds with `CLOUDFLARE_ENV=preview` and XMTP `dev`. Preview `workers.dev` responses are marked `noindex`, and the preview manifest route always fails closed even if association values are accidentally configured there.
 
 When the payer Gateway is ready, set `VITE_XMTP_GATEWAY_HOST` as a Cloudflare production build variable, switch `VITE_XMTP_ENV` to `mainnet`, and add the Gateway's exact HTTPS/WSS origins to `public/_headers` in the same reviewed commit. The hostname is browser-visible configuration, never a credential. Until then, the canonical build stays on legacy XMTP `production`; any `mainnet` or decentralized-testnet build without a Gateway stops with a non-retryable configuration state before XMTP requests a signature.
+
+### Static offline shell
+
+`public/service-worker.js` installs after the initial page load and precaches `/` plus the same-origin static assets referenced by that shell. Navigations are network-first with `/` as the offline fallback; fingerprinted assets are cache-first. The worker ignores non-GET and cross-origin requests and never intercepts `/api/*` or `/.well-known/*`. Do not broaden that allowlist to XMTP, Quick Auth, notification, or personalized application responses.
+
+This cache only makes the public interface loadable after one online visit. The pinned Browser SDK still performs an inbox/network lookup while constructing an XMTP client, so a cold offline browser launch is not a supported message-recovery guarantee. Once an XMTP session is already open, the app can read its OPFS inbox and messages without waiting for sync while `navigator.onLine` is false.
+
+Each complete shell generation is named from its validated Vite entry asset. A metadata cache points to only the current and previous complete generations; a new root is promoted only after every referenced fingerprinted asset has the expected MIME type and has reached Cache Storage. A deploy or rollback therefore retains one known-good fallback while removing older generations so static assets cannot grow without bound in the same origin quota used by XMTP OPFS. Warm-up messages must include the validated entry path and can write only to one of those two retained generations. Change the worker's metadata version only when this pointer schema changes.
+
+Cloudflare currently answers an unknown `/assets/*.js` URL with the SPA's `200 text/html` fallback while also applying the `/assets/*` one-year immutable cache header. The worker deliberately forces `cache: reload` for an asset cache miss and MIME-validates the response before writing it. Removing either safeguard can pin an HTML fallback in the browser HTTP cache and break a later rollback or an old tab's lazy chunk.
+
+A normal online deployment or rollback serves a fresh network-first shell and its matching fingerprinted assets. After either action, verify one online load, wait for `navigator.serviceWorker.ready`, confirm Cache Storage retains no more than two `converge-miniapp-static-shell-*` generations, switch the browser offline, reload `/`, and confirm only the public shell appears. Clearing site data removes both these static caches and the separate XMTP OPFS database.
 
 ## ENS preference database and protected API
 

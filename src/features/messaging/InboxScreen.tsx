@@ -76,6 +76,7 @@ export function InboxScreen({
   const name = activeInboxName ?? (ensConnected && ensIdentity.candidate
     ? ensIdentity.candidate.name
     : profile.displayName ?? profile.username ?? shortIdentity(address))
+  const offline = streamHealth === 'offline'
 
   return (
     <section className="messaging-screen inbox-screen" aria-labelledby="inbox-title">
@@ -103,6 +104,7 @@ export function InboxScreen({
             <p>{environment}</p>
             <EnsMenuIdentity
               identity={ensIdentity}
+              offline={offline}
               onClearPreference={onClearEnsPreference}
               onRefresh={onRefreshEns}
               onReview={onReviewEnsSwitch ? () => {
@@ -142,11 +144,15 @@ export function InboxScreen({
         <div className={`connection-banner connection-banner--${streamHealth}`} role="status">
           {streamHealth === 'retrying' ? <ArrowDownUp aria-hidden="true" /> : <WifiOff aria-hidden="true" />}
           <span>
-            {streamHealth === 'retrying'
+            {offline
+              ? 'Offline. Showing conversations saved on this device.'
+              : streamHealth === 'retrying'
               ? 'Live updates are reconnecting. Your local inbox is still available.'
               : 'Live updates paused. Pull a fresh sync when your connection returns.'}
           </span>
-          <button type="button" onClick={onRetryLiveUpdates}>Refresh now</button>
+          {!offline ? (
+            <button type="button" onClick={onRetryLiveUpdates}>Refresh now</button>
+          ) : null}
         </div>
       ) : null}
 
@@ -160,12 +166,12 @@ export function InboxScreen({
             className="icon-button"
             type="button"
             onClick={onRefresh}
-            disabled={refreshing}
+            disabled={refreshing || offline}
             aria-label="Refresh inbox"
           >
             <RefreshCw className={refreshing ? 'is-spinning' : ''} aria-hidden="true" />
           </button>
-          <Button onClick={onNewDm}>
+          <Button disabled={offline} onClick={onNewDm}>
             <Plus aria-hidden="true" />
             New DM
           </Button>
@@ -213,9 +219,11 @@ export function InboxScreen({
       ) : (
         <div className="empty-inbox">
           <span className="empty-inbox__icon"><MessageCircleMore aria-hidden="true" /></span>
-          <h2>No allowed conversations yet</h2>
-          <p>Start with an Ethereum address or ENS name that reaches an XMTP inbox.</p>
-          <Button onClick={onNewDm}>
+          <h2>{offline ? 'No conversations saved on this device' : 'No allowed conversations yet'}</h2>
+          <p>{offline
+            ? 'Reconnect to check this inbox for conversations.'
+            : 'Start with an Ethereum address or ENS name that reaches an XMTP inbox.'}</p>
+          <Button disabled={offline} onClick={onNewDm}>
             <Plus aria-hidden="true" />
             Start a private message
           </Button>
@@ -227,6 +235,7 @@ export function InboxScreen({
 
 type EnsMenuIdentityProps = {
   identity: EnsIdentityState
+  offline: boolean
   onClearPreference: () => void
   onRefresh: () => void
   onReview?: (() => void) | undefined
@@ -236,6 +245,7 @@ type EnsMenuIdentityProps = {
 
 function EnsMenuIdentity({
   identity,
+  offline,
   onClearPreference,
   onRefresh,
   onReview,
@@ -257,11 +267,15 @@ function EnsMenuIdentity({
           : identity.status === 'none'
             ? 'No forward-verified ENS primary name was found.'
             : 'ENS identity discovery is unavailable right now.'}</span>
-        <button type="button" onClick={onRefresh} disabled={identity.status === 'checking'}>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={offline || identity.status === 'checking'}
+        >
           Check ENS identity
         </button>
         {identity.preference !== null ? (
-          <button type="button" onClick={onClearPreference}>
+          <button type="button" onClick={onClearPreference} disabled={offline}>
             Delete saved ENS choice
           </button>
         ) : null}
@@ -285,7 +299,7 @@ function EnsMenuIdentity({
               {targetNameVerified ? 'ENS name verified for this inbox' : 'ENS name in use'}
             </span>
           ) : (
-            <button type="button" onClick={onUse}>Use ENS name</button>
+            <button type="button" onClick={onUse} disabled={offline}>Use ENS name</button>
           )}
         </>
       ) : (
@@ -309,7 +323,7 @@ function EnsMenuIdentity({
               <button
                 type="button"
                 onClick={onRefresh}
-                disabled={identity.status === 'checking'}
+                disabled={offline || identity.status === 'checking'}
               >
                 Check ENS identity again
               </button>
@@ -318,7 +332,7 @@ function EnsMenuIdentity({
         </>
       )}
       {identity.preference !== null ? (
-        <button type="button" onClick={onClearPreference}>
+        <button type="button" onClick={onClearPreference} disabled={offline}>
           Delete saved ENS choice
         </button>
       ) : null}

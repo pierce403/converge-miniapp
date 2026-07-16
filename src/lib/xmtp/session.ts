@@ -127,6 +127,7 @@ export class XmtpMessagingSession {
   readonly client: Client
   readonly isNewInstallation: boolean
   #messageStream: AsyncStreamProxy<IncomingMessage> | null = null
+  #messageStreamHealth: Extract<StreamHealth, 'live' | 'retrying'> = 'retrying'
   #messageStreamStart: Promise<void> | null = null
   #reactionRefreshVersions = new Map<string, number>()
   #streamGeneration = 0
@@ -280,6 +281,19 @@ export class XmtpMessagingSession {
     onCached?: (loaded: ConversationLoad) => void,
     messageLimit = Number(MESSAGE_PAGE_SIZE),
   ): Promise<ConversationLoad> {
+    const cached = await this.readConversation(conversationId, messageLimit)
+    onCached?.(cached)
+
+    const conversation = await this.getDm(conversationId)
+    await conversation.sync()
+    return this.readConversation(conversationId, messageLimit)
+  }
+
+  /** Reads one conversation only from the already-open local XMTP database. */
+  async readConversation(
+    conversationId: string,
+    messageLimit = Number(MESSAGE_PAGE_SIZE),
+  ): Promise<ConversationLoad> {
     const conversation = await this.getDm(conversationId)
     const peerInboxId = await conversation.peerInboxId()
     const [state] = await this.client.preferences.getInboxStates([peerInboxId])
@@ -291,12 +305,9 @@ export class XmtpMessagingSession {
       peerInboxId,
     }
     const cached = await this.messageWindow(conversation, messageLimit)
-    onCached?.({ conversation: activeConversation, ...cached })
-
-    await conversation.sync()
     return {
       conversation: activeConversation,
-      ...(await this.messageWindow(conversation, messageLimit)),
+      ...cached,
     }
   }
 
@@ -432,8 +443,15 @@ export class XmtpMessagingSession {
     onMessage: (message: MessageItem) => void,
     onHealth: (health: StreamHealth) => void,
   ): Promise<void> {
-    if (this.#messageStream) return
-    if (this.#messageStreamStart) return this.#messageStreamStart
+    if (this.#messageStream && !this.#messageStream.isDone) {
+      onHealth(this.#messageStreamHealth)
+      return
+    }
+    if (this.#messageStream?.isDone) this.#messageStream = null
+    if (this.#messageStreamStart) {
+      await this.#messageStreamStart
+      return this.startMessageStream(onMessage, onHealth)
+    }
 
     const generation = ++this.#streamGeneration
     const start = this.#openMessageStream(generation, onMessage, onHealth)
@@ -456,6 +474,7 @@ export class XmtpMessagingSession {
       onError: () => {
         if (generation !== this.#streamGeneration) return
         startupDegraded = true
+        this.#messageStreamHealth = 'retrying'
         onHealth('retrying')
       },
       onFail: () => {
@@ -464,13 +483,20 @@ export class XmtpMessagingSession {
         // retries through the same proxy when retryOnFail is enabled. Retain
         // ownership so a manual refresh cannot create an orphaned duplicate.
         startupDegraded = true
+        this.#messageStreamHealth = 'retrying'
         onHealth('retrying')
       },
       onRestart: () => {
-        if (generation === this.#streamGeneration) onHealth('live')
+        if (generation === this.#streamGeneration) {
+          this.#messageStreamHealth = 'live'
+          onHealth('live')
+        }
       },
       onRetry: () => {
-        if (generation === this.#streamGeneration) onHealth('retrying')
+        if (generation === this.#streamGeneration) {
+          this.#messageStreamHealth = 'retrying'
+          onHealth('retrying')
+        }
       },
       onValue: (message) => {
         if (generation !== this.#streamGeneration) return
@@ -505,7 +531,10 @@ export class XmtpMessagingSession {
       return
     }
     this.#messageStream = stream
-    if (!startupDegraded) onHealth('live')
+    if (!startupDegraded) {
+      this.#messageStreamHealth = 'live'
+      onHealth('live')
+    }
   }
 
   async #emitReactionParent(
@@ -535,6 +564,7 @@ export class XmtpMessagingSession {
     this.#reactionRefreshVersions.clear()
     const stream = this.#messageStream
     this.#messageStream = null
+    this.#messageStreamHealth = 'retrying'
     const starting = this.#messageStreamStart
     this.#messageStreamStart = null
     // A start can be waiting indefinitely for the SDK's pre-stream sync. Do
