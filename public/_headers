@@ -1,5 +1,5 @@
 /*
-  Content-Security-Policy: default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; frame-ancestors *; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://auth.farcaster.xyz https://*.xmtp.network:* wss://*.xmtp.network:* https://*.ephemera.network:* wss://*.ephemera.network:*; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
+  Content-Security-Policy: default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; frame-ancestors *; frame-src 'self' https://verify.walletconnect.com https://verify.walletconnect.org; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://auth.farcaster.xyz https://*.xmtp.network:* wss://*.xmtp.network:* https://*.ephemera.network:* wss://*.ephemera.network:* https://echo.walletconnect.com https://pulse.walletconnect.org https://rpc.walletconnect.org https://verify.walletconnect.com https://verify.walletconnect.org wss://relay.walletconnect.org; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
   Referrer-Policy: no-referrer
   Strict-Transport-Security: max-age=31536000

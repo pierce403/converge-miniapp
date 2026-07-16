@@ -2,9 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getAddress, stringToHex, type Address, type Hex } from 'viem'
 
 import {
+  connectEip1193Wallet,
   connectHostWallet,
   HostWalletSourceMismatchError,
   HostWalletTargetUnavailableError,
+  verifyHostWalletSource,
+  WalletPreferredAccountMismatchError,
+  WalletTargetUnavailableError,
   type HostWalletProvider,
 } from './signer'
 
@@ -27,12 +31,13 @@ const signature = `0x${'11'.repeat(65)}` as Hex
 function createProvider(options: {
   account: Address
   accounts?: unknown
-  chainId: Hex
+  chainId: unknown
   code: Hex
 }) {
   const request = vi.fn(async ({ method, params }: ProviderRequest) => {
     switch (method) {
       case 'eth_requestAccounts':
+      case 'eth_accounts':
         return options.accounts ?? [options.account]
       case 'eth_chainId':
         return options.chainId
@@ -53,6 +58,139 @@ function createProvider(options: {
 
   return { provider, request }
 }
+
+describe('connectEip1193Wallet', () => {
+  afterEach(() => {
+    miniAppMocks.getEthereumProvider.mockReset()
+  })
+
+  it('selects an exact external account without consulting the Farcaster host', async () => {
+    const firstAccount = getAddress('0xde709f2102306220921060314715629080e2fb77')
+    const target = getAddress('0x52908400098527886e0f7030069857d2e4169ee7')
+    const { provider, request } = createProvider({
+      account: target,
+      accounts: [firstAccount, target.toLowerCase()],
+      chainId: '0x1',
+      code: '0x',
+    })
+
+    const connection = await connectEip1193Wallet(provider, {
+      targetAddress: target,
+      accountRequestMethod: 'eth_accounts',
+    })
+
+    expect(connection).toMatchObject({
+      address: target,
+      chainId: 1n,
+      kind: 'EOA',
+      provider,
+    })
+    expect(miniAppMocks.getEthereumProvider).not.toHaveBeenCalled()
+    expect(request).toHaveBeenNthCalledWith(1, { method: 'eth_accounts' })
+    expect(request).toHaveBeenNthCalledWith(3, {
+      method: 'eth_getCode',
+      params: [target, 'latest'],
+    })
+  })
+
+  it('accepts the numeric chain ID returned by the WalletConnect provider', async () => {
+    const target = getAddress('0x52908400098527886e0f7030069857d2e4169ee7')
+    const { provider } = createProvider({
+      account: target,
+      chainId: 8453,
+      code: '0x',
+    })
+
+    await expect(connectEip1193Wallet(provider, {
+      targetAddress: target,
+      accountRequestMethod: 'eth_accounts',
+    })).resolves.toMatchObject({
+      address: target,
+      chainId: 8453n,
+      kind: 'EOA',
+    })
+  })
+
+  it('fails closed when an exact target is absent', async () => {
+    const available = getAddress('0xde709f2102306220921060314715629080e2fb77')
+    const target = getAddress('0x52908400098527886e0f7030069857d2e4169ee7')
+    const { provider, request } = createProvider({
+      account: available,
+      chainId: '0x1',
+      code: '0x',
+    })
+
+    await expect(connectEip1193Wallet(provider, {
+      targetAddress: target,
+    })).rejects.toMatchObject({
+      code: 'wallet-target-unavailable',
+      name: WalletTargetUnavailableError.name,
+      targetAddress: target,
+    })
+    expect(request).toHaveBeenCalledOnce()
+  })
+
+  it('can require an exact preferred account independently of target selection', async () => {
+    const expected = getAddress('0xde709f2102306220921060314715629080e2fb77')
+    const different = getAddress('0x7ab874eeef0169ada0d225e9801a3ffffa26aac3')
+    const { provider, request } = createProvider({
+      account: different,
+      chainId: '0x1',
+      code: '0x',
+    })
+
+    await expect(connectEip1193Wallet(provider, {
+      expectedPreferredAddress: expected,
+    })).rejects.toMatchObject({
+      code: 'wallet-preferred-account-mismatch',
+      name: WalletPreferredAccountMismatchError.name,
+      expectedAddress: expected,
+    })
+    expect(request).toHaveBeenCalledOnce()
+  })
+})
+
+describe('verifyHostWalletSource', () => {
+  afterEach(() => {
+    miniAppMocks.getEthereumProvider.mockReset()
+  })
+
+  it('verifies only the preferred Farcaster source account', async () => {
+    const sourceAddress = getAddress('0xde709f2102306220921060314715629080e2fb77')
+    const targetAddress = getAddress('0x52908400098527886e0f7030069857d2e4169ee7')
+    const { provider, request } = createProvider({
+      account: sourceAddress,
+      accounts: [sourceAddress, targetAddress],
+      chainId: '0x2105',
+      code: '0x',
+    })
+    miniAppMocks.getEthereumProvider.mockResolvedValue(provider)
+
+    await expect(verifyHostWalletSource(sourceAddress)).resolves.toEqual({
+      address: sourceAddress,
+      provider,
+    })
+    expect(request).toHaveBeenCalledOnce()
+    expect(request).toHaveBeenCalledWith({ method: 'eth_requestAccounts' })
+  })
+
+  it('keeps the existing host source-mismatch error contract', async () => {
+    const sourceAddress = getAddress('0xde709f2102306220921060314715629080e2fb77')
+    const differentAddress = getAddress('0x7ab874eeef0169ada0d225e9801a3ffffa26aac3')
+    const { provider } = createProvider({
+      account: differentAddress,
+      chainId: '0x2105',
+      code: '0x',
+    })
+    miniAppMocks.getEthereumProvider.mockResolvedValue(provider)
+
+    await expect(verifyHostWalletSource(sourceAddress)).rejects.toMatchObject({
+      code: 'host-wallet-source-mismatch',
+      name: HostWalletSourceMismatchError.name,
+      sourceAddress,
+    })
+  })
+})
 
 describe('connectHostWallet', () => {
   afterEach(() => {

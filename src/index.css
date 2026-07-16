@@ -780,6 +780,85 @@ img { max-width: 100%; }
   font-size: 0.68rem;
 }
 
+.walletconnect-pairing {
+  display: grid;
+  width: min(100%, 360px);
+  justify-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid rgb(96 165 250 / 28%);
+  border-radius: 14px;
+  background: rgb(3 12 35 / 42%);
+}
+
+.walletconnect-pairing p {
+  max-width: 320px;
+  margin: 0;
+  color: var(--primary-200);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.walletconnect-pairing__qr {
+  display: grid;
+  width: min(100%, 220px);
+  aspect-ratio: 1;
+  place-items: center;
+  padding: 12px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.walletconnect-pairing__qr svg {
+  width: 100%;
+  height: 100%;
+}
+
+.walletconnect-pairing__uri {
+  display: grid;
+  width: 100%;
+  gap: 5px;
+  color: var(--primary-200);
+  font-size: 0.68rem;
+  font-weight: 750;
+}
+
+.walletconnect-pairing__uri textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 8px 9px;
+  border: 1px solid rgb(96 165 250 / 28%);
+  border-radius: 9px;
+  color: var(--primary-100);
+  background: rgb(3 12 35 / 54%);
+  font: 0.62rem/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.walletconnect-pairing__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.walletconnect-pairing__actions a { text-decoration: none; }
+
+.walletconnect-pairing p.walletconnect-pairing__copy-status {
+  min-height: 1em;
+  color: var(--primary-100);
+}
+
+.walletconnect-recovery {
+  display: grid;
+  width: min(100%, 380px);
+  justify-items: center;
+  gap: 10px;
+}
+
 .ens-inbox-switch__status,
 .ens-inbox-switch__error {
   margin-top: 13px !important;
@@ -797,6 +876,8 @@ img { max-width: 100%; }
   .ens-inbox-switch__card { padding: 18px; }
   .ens-inbox-switch .ens-offer__actions { display: grid; }
   .ens-inbox-switch .ens-offer__actions .button { width: 100%; }
+  .walletconnect-pairing__actions { width: 100%; }
+  .walletconnect-pairing__actions .button { width: 100%; }
 }
 
 .connection-banner {

@@ -308,7 +308,9 @@ describe('MessagingApp storage and installation states', () => {
     const setPreference = vi.fn().mockResolvedValue(undefined)
     const prepareInboxSwitch = vi.fn().mockResolvedValue({
       address: candidate.address,
+      chainId: '1',
       inboxId: 'deanpierce-inbox',
+      walletKind: 'EOA',
     })
     const reloadDocument = vi.fn()
     mocks.ens.mockReturnValue(readyEns({
@@ -341,12 +343,18 @@ describe('MessagingApp storage and installation states', () => {
     expect(screen.getAllByText(candidate.address)).toHaveLength(2)
 
     fireEvent.click(screen.getByRole('button', {
-      name: 'Leave and join deanpierce.eth',
+      name: 'Connect wallet and join deanpierce.eth',
     }))
 
     await screen.findByText(/restarting Converge Mini/i)
     expect(refresh).toHaveBeenCalledOnce()
-    expect(prepareInboxSwitch).toHaveBeenCalledWith(candidate.address)
+    expect(prepareInboxSwitch).toHaveBeenCalledWith(
+      candidate.address,
+      expect.objectContaining({
+        onPairingUri: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      }),
+    )
     expect(setPreference).not.toHaveBeenCalled()
     expect(JSON.parse(window.localStorage.getItem(
       `converge-miniapp:ens-inbox-target:${user.fid}`,
@@ -354,8 +362,11 @@ describe('MessagingApp storage and installation states', () => {
       address: candidate.address,
       inboxId: 'deanpierce-inbox',
       name: candidate.name,
+      chainId: '1',
+      signerSource: 'walletconnect',
       sourceAddress: '0x1111111111111111111111111111111111111111',
-      version: 2,
+      version: 3,
+      walletKind: 'EOA',
     })
     expect(reloadDocument).toHaveBeenCalledOnce()
     fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }))
@@ -374,7 +385,7 @@ describe('MessagingApp storage and installation states', () => {
       status: 'ready' as const,
     }
     const unavailable = Object.assign(new Error('not exposed'), {
-      code: 'host-wallet-target-unavailable',
+      code: 'walletconnect-target-unavailable',
     })
     const prepareInboxSwitch = vi.fn().mockRejectedValue(unavailable)
     const reloadDocument = vi.fn()
@@ -397,13 +408,12 @@ describe('MessagingApp storage and installation states', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'Review inbox switch' }))
     fireEvent.click(screen.getByRole('button', {
-      name: 'Leave and join deanpierce.eth',
+      name: 'Connect wallet and join deanpierce.eth',
     }))
 
-    expect(await screen.findByRole('heading', {
-      name: 'deanpierce.eth can’t sign in this Farcaster client',
-    })).toBeVisible()
-    expect(screen.getByText(/No XMTP signature was requested/i)).toBeVisible()
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /connected wallet is not exposing 0x2222/i,
+    )
     expect(reloadDocument).not.toHaveBeenCalled()
     expect(window.localStorage.getItem(
       `converge-miniapp:ens-inbox-target:${user.fid}`,
@@ -441,7 +451,7 @@ describe('MessagingApp storage and installation states', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Review inbox switch' }))
     fireEvent.click(screen.getByRole('button', {
-      name: 'Leave and join deanpierce.eth',
+      name: 'Connect wallet and join deanpierce.eth',
     }))
     fireEvent.click(screen.getByRole('button', { name: 'Keep this inbox' }))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -480,7 +490,9 @@ describe('MessagingApp storage and installation states', () => {
       ...readyMessaging(),
       prepareInboxSwitch: vi.fn().mockResolvedValue({
         address: candidate.address,
+        chainId: '1',
         inboxId: 'target-inbox',
+        walletKind: 'EOA',
       }),
     })
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
@@ -497,7 +509,7 @@ describe('MessagingApp storage and installation states', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'Review inbox switch' }))
     fireEvent.click(screen.getByRole('button', {
-      name: 'Leave and join deanpierce.eth',
+      name: 'Connect wallet and join deanpierce.eth',
     }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -554,6 +566,82 @@ describe('MessagingApp storage and installation states', () => {
       `converge-miniapp:ens-inbox-target:${user.fid}`,
     )).toBeNull()
     expect(reloadDocument).toHaveBeenCalledOnce()
+  })
+
+  it('offers an explicit external-wallet reconnect without opening another inbox', () => {
+    window.localStorage.setItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+      JSON.stringify({
+        address: '0x2222222222222222222222222222222222222222',
+        chainId: '1',
+        inboxId: 'target-inbox',
+        name: 'deanpierce.eth',
+        signerSource: 'walletconnect',
+        sourceAddress: '0x1111111111111111111111111111111111111111',
+        version: 3,
+        walletKind: 'EOA',
+      }),
+    )
+    const connectExternalWallet = vi.fn()
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      address: null,
+      connectExternalWallet,
+      connection: {
+        error: 'The saved external-wallet session is unavailable.',
+        phase: 'external-wallet-unavailable',
+      },
+    })
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    expect(screen.getByRole('heading', {
+      name: 'Reconnect the wallet for deanpierce.eth',
+    })).toBeVisible()
+    expect(screen.getByText(/will require 0x2222/i)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Reconnect external wallet',
+    }))
+    expect(connectExternalWallet).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+  })
+
+  it('shows QR, MetaMask, and raw-URI options during external-wallet recovery', () => {
+    window.localStorage.setItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+      JSON.stringify({
+        address: '0x2222222222222222222222222222222222222222',
+        chainId: '1',
+        inboxId: 'target-inbox',
+        name: 'deanpierce.eth',
+        signerSource: 'walletconnect',
+        sourceAddress: '0x1111111111111111111111111111111111111111',
+        version: 3,
+        walletKind: 'EOA',
+      }),
+    )
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      address: null,
+      connection: { error: null, phase: 'wallet' },
+      externalWalletPairingUri: 'wc:ephemeral-recovery',
+    })
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    expect(screen.getByRole('img', {
+      name: 'WalletConnect QR code for deanpierce.eth',
+    })).toBeVisible()
+    expect(screen.getByRole('link', { name: 'Open MetaMask' })).toBeVisible()
+    expect(screen.getByRole('textbox', {
+      name: 'WalletConnect URI for deanpierce.eth',
+    })).toHaveValue('wc:ephemeral-recovery')
+    expect(screen.getByRole('button', {
+      name: 'Copy WalletConnect URI',
+    })).toBeVisible()
+    expect(screen.getByRole('button', {
+      name: 'Cancel and use Farcaster inbox',
+    })).toBeVisible()
   })
 
   it('uses the target address until the remembered ENS name is freshly verified', () => {
@@ -743,7 +831,7 @@ describe('MessagingApp storage and installation states', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Review inbox switch' }))
     fireEvent.click(screen.getByRole('button', {
-      name: 'Leave and join deanpierce.eth',
+      name: 'Connect wallet and join deanpierce.eth',
     }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -842,11 +930,13 @@ function readyMessaging() {
     address: '0x1111111111111111111111111111111111111111',
     backToInbox: vi.fn(),
     connect: vi.fn(),
+    connectExternalWallet: vi.fn(),
     connection: { error: null, phase: 'ready' },
     conversations: [],
     createDm: vi.fn(),
     disconnect: vi.fn(),
     environment: 'dev',
+    externalWalletPairingUri: null,
     hasOlderMessages: false,
     inspectIdentityRelationship: vi.fn(),
     prepareInboxSwitch: vi.fn(),

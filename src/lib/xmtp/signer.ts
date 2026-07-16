@@ -11,7 +11,7 @@ import {
   type Address,
 } from 'viem'
 
-export type HostWalletEventMap = {
+export type Eip1193WalletEventMap = {
   accountsChanged: [accounts: readonly Address[]]
   chainChanged: [chainId: string]
   connect: [connection: { chainId: string }]
@@ -19,35 +19,77 @@ export type HostWalletEventMap = {
   message: [message: unknown]
 }
 
-export type HostWalletProvider = {
+export type Eip1193Provider = {
   request: (request: {
     method: string
     params?: readonly unknown[] | Record<string, unknown>
   }) => Promise<unknown>
-  on: <event extends keyof HostWalletEventMap>(
+  on: <event extends keyof Eip1193WalletEventMap>(
     event: event,
-    listener: (...args: HostWalletEventMap[event]) => void,
+    listener: (...args: Eip1193WalletEventMap[event]) => void,
   ) => void
-  removeListener: <event extends keyof HostWalletEventMap>(
+  removeListener: <event extends keyof Eip1193WalletEventMap>(
     event: event,
-    listener: (...args: HostWalletEventMap[event]) => void,
+    listener: (...args: Eip1193WalletEventMap[event]) => void,
   ) => void
 }
 
-export type HostWalletConnection = {
+export type WalletConnection = {
   address: Address
   chainId: bigint
   kind: 'EOA' | 'SCW'
-  provider: HostWalletProvider
+  provider: Eip1193Provider
   signer: Signer
+}
+
+// Keep the host-specific names available while call sites migrate to the
+// connector-agnostic wallet boundary.
+export type HostWalletEventMap = Eip1193WalletEventMap
+export type HostWalletProvider = Eip1193Provider
+export type HostWalletConnection = WalletConnection
+
+export type ConnectEip1193WalletOptions = {
+  targetAddress?: Address
+  expectedPreferredAddress?: Address
+  accountRequestMethod?: 'eth_requestAccounts' | 'eth_accounts'
+}
+
+export type HostWalletSource = {
+  address: Address
+  provider: Eip1193Provider
+}
+
+export class WalletTargetUnavailableError extends Error {
+  readonly code = 'wallet-target-unavailable'
+  readonly targetAddress: Address
+
+  constructor(targetAddress: Address) {
+    super('The connected wallet does not expose the requested Ethereum account.')
+    this.name = 'WalletTargetUnavailableError'
+    this.targetAddress = targetAddress
+  }
+}
+
+export class WalletPreferredAccountMismatchError extends Error {
+  readonly code = 'wallet-preferred-account-mismatch'
+  readonly expectedAddress: Address
+
+  constructor(expectedAddress: Address) {
+    super('The connected wallet preferred account does not match the expected account.')
+    this.name = 'WalletPreferredAccountMismatchError'
+    this.expectedAddress = expectedAddress
+  }
 }
 
 export class HostWalletTargetUnavailableError extends Error {
   readonly code = 'host-wallet-target-unavailable'
   readonly targetAddress: Address
 
-  constructor(targetAddress: Address) {
-    super('The Farcaster wallet does not expose the requested Ethereum account.')
+  constructor(targetAddress: Address, options?: ErrorOptions) {
+    super(
+      'The Farcaster wallet does not expose the requested Ethereum account.',
+      options,
+    )
     this.name = 'HostWalletTargetUnavailableError'
     this.targetAddress = targetAddress
   }
@@ -57,8 +99,11 @@ export class HostWalletSourceMismatchError extends Error {
   readonly code = 'host-wallet-source-mismatch'
   readonly sourceAddress: Address
 
-  constructor(sourceAddress: Address) {
-    super('The Farcaster wallet preferred account does not match the saved inbox source.')
+  constructor(sourceAddress: Address, options?: ErrorOptions) {
+    super(
+      'The Farcaster wallet preferred account does not match the saved inbox source.',
+      options,
+    )
     this.name = 'HostWalletSourceMismatchError'
     this.sourceAddress = sourceAddress
   }
@@ -83,7 +128,7 @@ function asHostWalletProvider(value: unknown): HostWalletProvider {
 
 function readAddress(accounts: unknown, targetAddress?: Address): Address {
   if (!Array.isArray(accounts)) {
-    throw new Error('The Farcaster wallet did not return an Ethereum account.')
+    throw new Error('The connected wallet did not return an Ethereum account.')
   }
 
   const selected = targetAddress
@@ -94,43 +139,54 @@ function readAddress(accounts: unknown, targetAddress?: Address): Address {
     : accounts[0]
 
   if (targetAddress && selected === undefined) {
-    throw new HostWalletTargetUnavailableError(targetAddress)
+    throw new WalletTargetUnavailableError(targetAddress)
   }
   if (typeof selected !== 'string') {
-    throw new Error('The Farcaster wallet did not return an Ethereum account.')
+    throw new Error('The connected wallet did not return an Ethereum account.')
   }
 
   try {
     return getAddress(selected)
   } catch {
-    throw new Error('The Farcaster wallet returned an invalid Ethereum account.')
+    throw new Error('The connected wallet returned an invalid Ethereum account.')
   }
 }
 
-function requirePreferredAddress(accounts: unknown, sourceAddress: Address): void {
+function requirePreferredAddress(accounts: unknown, expectedAddress: Address): Address {
   if (!Array.isArray(accounts) || typeof accounts[0] !== 'string') {
-    throw new Error('The Farcaster wallet did not return an Ethereum account.')
+    throw new Error('The connected wallet did not return an Ethereum account.')
   }
 
   let preferredAddress: Address
   try {
     preferredAddress = getAddress(accounts[0])
   } catch {
-    throw new Error('The Farcaster wallet returned an invalid Ethereum account.')
+    throw new Error('The connected wallet returned an invalid Ethereum account.')
   }
-  if (preferredAddress.toLowerCase() !== sourceAddress.toLowerCase()) {
-    throw new HostWalletSourceMismatchError(sourceAddress)
+  if (preferredAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
+    throw new WalletPreferredAccountMismatchError(expectedAddress)
   }
+
+  return preferredAddress
 }
 
-function readChainId(value: unknown): bigint {
-  if (typeof value !== 'string' || !/^0x[0-9a-f]+$/i.test(value)) {
-    throw new Error('The Farcaster wallet returned an invalid chain ID.')
+export function parseEip1193ChainId(value: unknown): bigint {
+  let chainId: bigint
+  if (typeof value === 'bigint') {
+    chainId = value
+  } else if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    chainId = BigInt(value)
+  } else if (
+    typeof value === 'string' &&
+    /^(?:0x[0-9a-f]+|[0-9]+)$/i.test(value)
+  ) {
+    chainId = BigInt(value)
+  } else {
+    throw new Error('The connected wallet returned an invalid chain ID.')
   }
 
-  const chainId = BigInt(value)
   if (chainId <= 0n) {
-    throw new Error('The Farcaster wallet returned an invalid chain ID.')
+    throw new Error('The connected wallet returned an invalid chain ID.')
   }
 
   return chainId
@@ -138,52 +194,50 @@ function readChainId(value: unknown): bigint {
 
 function hasContractCode(value: unknown): boolean {
   if (typeof value !== 'string' || !/^0x(?:[0-9a-f]{2})*$/i.test(value)) {
-    throw new Error('The Farcaster wallet returned invalid account bytecode.')
+    throw new Error('The connected wallet returned invalid account bytecode.')
   }
 
   return !/^0x(?:00)*$/i.test(value)
 }
 
+function normalizeAddress(
+  value: Address | undefined,
+  invalidMessage: string,
+): Address | undefined {
+  if (!value) return undefined
+
+  try {
+    return getAddress(value)
+  } catch {
+    throw new Error(invalidMessage)
+  }
+}
+
 /**
- * Connects the Farcaster host wallet and creates the matching XMTP v7 signer.
- * This deliberately has no generated-key fallback.
+ * Creates the matching XMTP v7 signer for an account exposed by any EIP-1193
+ * provider. Callers can select an exact account and can opt into the
+ * non-interactive `eth_accounts` method when restoring an existing session.
  */
-export async function connectHostWallet(
-  targetAddress?: Address,
-  expectedSourceAddress?: Address,
-): Promise<HostWalletConnection> {
-  let requestedAddress: Address | undefined
-  let sourceAddress: Address | undefined
-  if (targetAddress) {
-    try {
-      requestedAddress = getAddress(targetAddress)
-    } catch {
-      throw new Error('The requested Ethereum account is invalid.')
-    }
-  }
-  if (expectedSourceAddress) {
-    try {
-      sourceAddress = getAddress(expectedSourceAddress)
-    } catch {
-      throw new Error('The expected Farcaster source account is invalid.')
-    }
-  }
-
-  const { sdk } = await import('@farcaster/miniapp-sdk')
-  const hostProvider = await sdk.wallet.getEthereumProvider()
-
-  if (!hostProvider) {
-    throw new Error('The Farcaster host does not expose an Ethereum wallet.')
-  }
-
-  const provider = asHostWalletProvider(hostProvider)
-  const accounts = await provider.request({ method: 'eth_requestAccounts' })
-  if (sourceAddress) requirePreferredAddress(accounts, sourceAddress)
-  const address = readAddress(
-    accounts,
-    requestedAddress,
+export async function connectEip1193Wallet(
+  provider: Eip1193Provider,
+  options: ConnectEip1193WalletOptions = {},
+): Promise<WalletConnection> {
+  const targetAddress = normalizeAddress(
+    options.targetAddress,
+    'The requested Ethereum account is invalid.',
   )
-  const chainId = readChainId(
+  const expectedPreferredAddress = normalizeAddress(
+    options.expectedPreferredAddress,
+    'The expected preferred Ethereum account is invalid.',
+  )
+  const accountRequestMethod = options.accountRequestMethod ?? 'eth_requestAccounts'
+  const accounts = await provider.request({ method: accountRequestMethod })
+
+  if (expectedPreferredAddress) {
+    requirePreferredAddress(accounts, expectedPreferredAddress)
+  }
+  const address = readAddress(accounts, targetAddress)
+  const chainId = parseEip1193ChainId(
     await provider.request({ method: 'eth_chainId' }),
   )
   const contractCode = await provider.request({
@@ -223,5 +277,94 @@ export async function connectHostWallet(
     kind: 'EOA',
     provider,
     signer,
+  }
+}
+
+/** Returns the Farcaster EIP-1193 provider without selecting an XMTP signer. */
+export async function getHostWalletProvider(): Promise<HostWalletProvider> {
+  const { sdk } = await import('@farcaster/miniapp-sdk')
+  const hostProvider = await sdk.wallet.getEthereumProvider()
+
+  if (!hostProvider) {
+    throw new Error('The Farcaster host does not expose an Ethereum wallet.')
+  }
+
+  return asHostWalletProvider(hostProvider)
+}
+
+/**
+ * Verifies that the currently preferred Farcaster account is still the saved
+ * source inbox without requiring an external target to be exposed by it.
+ */
+export async function verifyHostWalletSource(
+  expectedSourceAddress: Address,
+): Promise<HostWalletSource> {
+  const sourceAddress = normalizeAddress(
+    expectedSourceAddress,
+    'The expected Farcaster source account is invalid.',
+  )
+  if (!sourceAddress) {
+    throw new Error('The expected Farcaster source account is invalid.')
+  }
+
+  const provider = await getHostWalletProvider()
+  const accounts = await provider.request({ method: 'eth_requestAccounts' })
+
+  try {
+    return {
+      address: requirePreferredAddress(accounts, sourceAddress),
+      provider,
+    }
+  } catch (error) {
+    if (error instanceof WalletPreferredAccountMismatchError) {
+      throw new HostWalletSourceMismatchError(sourceAddress, { cause: error })
+    }
+    if (error instanceof Error) {
+      throw new Error(
+        error.message.replace('connected wallet', 'Farcaster wallet'),
+        { cause: error },
+      )
+    }
+    throw error
+  }
+}
+
+/**
+ * Connects the Farcaster host wallet and creates the matching XMTP v7 signer.
+ * This deliberately has no generated-key fallback.
+ */
+export async function connectHostWallet(
+  targetAddress?: Address,
+  expectedSourceAddress?: Address,
+): Promise<HostWalletConnection> {
+  const requestedAddress = normalizeAddress(
+    targetAddress,
+    'The requested Ethereum account is invalid.',
+  )
+  const sourceAddress = normalizeAddress(
+    expectedSourceAddress,
+    'The expected Farcaster source account is invalid.',
+  )
+  const provider = await getHostWalletProvider()
+
+  try {
+    return await connectEip1193Wallet(provider, {
+      ...(requestedAddress ? { targetAddress: requestedAddress } : {}),
+      ...(sourceAddress ? { expectedPreferredAddress: sourceAddress } : {}),
+    })
+  } catch (error) {
+    if (error instanceof WalletTargetUnavailableError) {
+      throw new HostWalletTargetUnavailableError(error.targetAddress, { cause: error })
+    }
+    if (error instanceof WalletPreferredAccountMismatchError) {
+      throw new HostWalletSourceMismatchError(error.expectedAddress, { cause: error })
+    }
+    if (error instanceof Error) {
+      throw new Error(
+        error.message.replace('connected wallet', 'Farcaster wallet'),
+        { cause: error },
+      )
+    }
+    throw error
   }
 }

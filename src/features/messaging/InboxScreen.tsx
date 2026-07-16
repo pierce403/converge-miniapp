@@ -26,6 +26,7 @@ type InboxScreenProps = {
   ensIdentity: EnsIdentityState
   ensTargetNameVerified?: boolean | undefined
   environment: string
+  externalSigner?: boolean | undefined
   onJoinConvos: () => void
   onNewDm: () => void
   onOpen: (conversationId: string) => void
@@ -55,6 +56,7 @@ export function InboxScreen({
   ensIdentity,
   ensTargetNameVerified = false,
   environment,
+  externalSigner = false,
   onJoinConvos,
   onNewDm,
   onOpen,
@@ -114,7 +116,9 @@ export function InboxScreen({
           </summary>
           <section className="identity-menu__panel" aria-labelledby="identity-menu-title">
             <p className="eyebrow">Connected identity</p>
-            <h2 id="identity-menu-title">Farcaster wallet</h2>
+            <h2 id="identity-menu-title">
+              {externalSigner ? 'External ENS wallet' : 'Farcaster wallet'}
+            </h2>
             <code>{address}</code>
             <p>{environment}</p>
             <EnsMenuIdentity
@@ -128,12 +132,15 @@ export function InboxScreen({
               } : undefined}
               onUse={onUseEns}
               targetNameVerified={ensTargetNameVerified}
+              externalSigner={externalSigner}
             />
             {onUseFarcasterInbox ? (
               <div className="identity-menu__ens">
                 <strong>Saved ENS inbox</strong>
                 <span>
-                  Converge Mini will reopen this inbox on this device while its exact signer remains available.
+                  {externalSigner
+                    ? 'Converge Mini will reopen this inbox on this device while its exact external signer and Farcaster source account remain available.'
+                    : 'Converge Mini will reopen this inbox on this device while Farcaster continues to expose its exact signer.'}
                 </span>
                 <button type="button" onClick={onUseFarcasterInbox}>
                   Use Farcaster inbox
@@ -272,6 +279,7 @@ export function InboxScreen({
 
 type EnsMenuIdentityProps = {
   identity: EnsIdentityState
+  externalSigner: boolean
   offline: boolean
   onClearPreference: () => void
   onRefresh: () => void
@@ -282,6 +290,7 @@ type EnsMenuIdentityProps = {
 
 function EnsMenuIdentity({
   identity,
+  externalSigner,
   offline,
   onClearPreference,
   onRefresh,
@@ -328,7 +337,7 @@ function EnsMenuIdentity({
         <>
           <span>
             {identity.relationship === 'active-address'
-              ? 'This name resolves to the Farcaster wallet already opening XMTP.'
+              ? `This name resolves to the ${externalSigner ? 'external wallet' : 'Farcaster wallet'} already opening XMTP.`
               : 'This address is already associated with the active XMTP inbox.'}
           </span>
           {identity.preference === 'accepted' || targetNameVerified ? (

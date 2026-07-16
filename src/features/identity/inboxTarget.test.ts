@@ -4,6 +4,7 @@ import { getAddress, type Address } from 'viem'
 import {
   clearInboxTarget,
   readInboxTarget,
+  type PersistableInboxTarget,
   writeInboxTarget,
 } from './inboxTarget'
 
@@ -12,10 +13,13 @@ const key = `converge-miniapp:ens-inbox-target:${fid}`
 const address = getAddress('0x7ab874eeef0169ada0d225e9801a3ffffa26aac3')
 const target = {
   address,
+  chainId: '8453',
   inboxId: 'target-inbox-id',
   name: 'deanpierce.eth',
+  signerSource: 'walletconnect',
   sourceAddress: getAddress('0xde709f2102306220921060314715629080e2fb77'),
-}
+  walletKind: 'EOA',
+} satisfies PersistableInboxTarget
 
 describe('inbox target storage', () => {
   beforeEach(() => {
@@ -28,17 +32,69 @@ describe('inbox target storage', () => {
       address: address.toLowerCase() as Address,
       inboxId: target.inboxId,
       name: '  DEANPIERCE.eth  ',
+      signerSource: 'walletconnect',
       sourceAddress: target.sourceAddress.toLowerCase() as Address,
+      walletKind: 'EOA',
+      chainId: '0x2105',
     })).toBe(true)
 
     expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual({
       address,
+      chainId: target.chainId,
+      inboxId: target.inboxId,
+      name: target.name,
+      signerSource: target.signerSource,
+      sourceAddress: target.sourceAddress,
+      version: 3,
+      walletKind: target.walletKind,
+    })
+    expect(readInboxTarget(fid)).toEqual({ status: 'valid', target })
+  })
+
+  it('reads an exact legacy v2 record as a Farcaster signer with unknown metadata', () => {
+    const legacy = {
+      address: target.address,
       inboxId: target.inboxId,
       name: target.name,
       sourceAddress: target.sourceAddress,
       version: 2,
+    }
+    const serialized = JSON.stringify(legacy)
+    window.localStorage.setItem(key, serialized)
+
+    expect(readInboxTarget(fid)).toEqual({
+      status: 'valid',
+      target: {
+        address: target.address,
+        chainId: null,
+        inboxId: target.inboxId,
+        name: target.name,
+        signerSource: 'farcaster',
+        sourceAddress: target.sourceAddress,
+        walletKind: null,
+      },
     })
-    expect(readInboxTarget(fid)).toEqual({ status: 'valid', target })
+    expect(window.localStorage.getItem(key)).toBe(serialized)
+  })
+
+  it('never persists WalletConnect pairing material supplied by a caller', () => {
+    const withPairingMaterial = {
+      ...target,
+      topic: 'private-session-topic',
+      uri: 'wc:private-pairing-uri',
+    }
+
+    expect(writeInboxTarget(fid, withPairingMaterial)).toBe(true)
+    expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual({
+      address: target.address,
+      chainId: target.chainId,
+      inboxId: target.inboxId,
+      name: target.name,
+      signerSource: target.signerSource,
+      sourceAddress: target.sourceAddress,
+      version: 3,
+      walletKind: target.walletKind,
+    })
   })
 
   it('keeps selector hints isolated by positive host-context FID', () => {
@@ -57,24 +113,51 @@ describe('inbox target storage', () => {
     ['invalid JSON', '{'],
     ['wrong version', JSON.stringify({ ...target, version: 1 })],
     ['missing version', JSON.stringify(target)],
-    ['extra fields', JSON.stringify({ ...target, privateKey: 'nope', version: 2 })],
-    ['unnormalized name', JSON.stringify({ ...target, name: 'DEANPIERCE.eth', version: 2 })],
-    ['invalid address', JSON.stringify({ ...target, address: 'not-an-address', version: 2 })],
+    ['extra fields', JSON.stringify({ ...target, privateKey: 'nope', version: 3 })],
+    ['WalletConnect URI', JSON.stringify({ ...target, uri: 'wc:secret', version: 3 })],
+    ['WalletConnect topic', JSON.stringify({ ...target, topic: 'secret', version: 3 })],
+    ['unnormalized name', JSON.stringify({ ...target, name: 'DEANPIERCE.eth', version: 3 })],
+    ['invalid address', JSON.stringify({ ...target, address: 'not-an-address', version: 3 })],
     ['non-checksummed address', JSON.stringify({
       ...target,
       address: address.toLowerCase(),
-      version: 2,
+      version: 3,
     })],
-    ['empty inbox ID', JSON.stringify({ ...target, inboxId: '', version: 2 })],
+    ['empty inbox ID', JSON.stringify({ ...target, inboxId: '', version: 3 })],
     ['oversized inbox ID', JSON.stringify({
       ...target,
       inboxId: 'i'.repeat(513),
-      version: 2,
+      version: 3,
     })],
     ['same source and target', JSON.stringify({
       ...target,
       sourceAddress: target.address,
-      version: 2,
+      version: 3,
+    })],
+    ['invalid signer source', JSON.stringify({
+      ...target,
+      signerSource: 'injected',
+      version: 3,
+    })],
+    ['invalid wallet kind', JSON.stringify({
+      ...target,
+      walletKind: 'hardware',
+      version: 3,
+    })],
+    ['missing wallet kind', JSON.stringify({
+      address: target.address,
+      chainId: target.chainId,
+      inboxId: target.inboxId,
+      name: target.name,
+      signerSource: target.signerSource,
+      sourceAddress: target.sourceAddress,
+      version: 3,
+    })],
+    ['zero chain ID', JSON.stringify({ ...target, chainId: '0', version: 3 })],
+    ['noncanonical chain ID', JSON.stringify({
+      ...target,
+      chainId: '0x2105',
+      version: 3,
     })],
   ])('blocks on a stored record with %s', (_label, serialized) => {
     window.localStorage.setItem(key, serialized)
@@ -88,6 +171,7 @@ describe('inbox target storage', () => {
 
     expect(writeInboxTarget(fid, { ...target, inboxId: ' '.repeat(2) })).toBe(false)
     expect(writeInboxTarget(fid, { ...target, name: 'not-an-ens-name' })).toBe(false)
+    expect(writeInboxTarget(fid, { ...target, chainId: '0' })).toBe(false)
     expect(readInboxTarget(fid)).toEqual({ status: 'valid', target })
   })
 

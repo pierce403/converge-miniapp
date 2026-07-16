@@ -30,6 +30,7 @@ import { InboxScreen } from './InboxScreen'
 import { JoinConvosScreen } from './JoinConvosScreen'
 import { NewDmScreen } from './NewDmScreen'
 import { useXmtpMessaging, type ConnectionPhase } from './useXmtpMessaging'
+import { WalletConnectPairingOptions } from './WalletConnectPairingOptions'
 
 type MessagingAppProps = {
   canUseBack: boolean
@@ -197,6 +198,7 @@ export function MessagingApp({
   const confirmEnsSwitch = useCallback(async (
     candidate: EnsCandidate,
     signal: AbortSignal,
+    onPairingUri: (uri: string) => void,
   ) => {
     const sourceAddress = messaging.address
     if (!sourceAddress) {
@@ -224,24 +226,36 @@ export function MessagingApp({
 
     let preflight: Awaited<ReturnType<typeof messaging.prepareInboxSwitch>>
     try {
-      preflight = await messaging.prepareInboxSwitch(candidate.address)
+      preflight = await messaging.prepareInboxSwitch(candidate.address, {
+        onPairingUri,
+        signal,
+      })
     } catch (error) {
       if (
         error &&
         typeof error === 'object' &&
         'code' in error &&
-        error.code === 'host-wallet-target-unavailable'
+        typeof error.code === 'string' &&
+        error.code.startsWith('walletconnect-')
       ) throw error
       throw new EnsInboxSwitchFailure(
         'ens-switch-preflight-failed',
         'Converge Mini could not verify the exact ENS inbox and signer. Your current inbox is unchanged.',
       )
     }
-    if (signal.aborted) return
+    if (signal.aborted) {
+      await import('../../lib/xmtp/walletConnect')
+        .then(({ disconnectWalletConnect }) => disconnectWalletConnect())
+        .catch(() => undefined)
+      return
+    }
     if (preflight.address.toLowerCase() !== candidate.address.toLowerCase()) {
+      await import('../../lib/xmtp/walletConnect')
+        .then(({ disconnectWalletConnect }) => disconnectWalletConnect())
+        .catch(() => undefined)
       throw new EnsInboxSwitchFailure(
         'ens-switch-preflight-failed',
-        'Farcaster returned a different signing address. Your current inbox is unchanged.',
+        'The external wallet returned a different signing address. Your current inbox is unchanged.',
       )
     }
 
@@ -250,7 +264,13 @@ export function MessagingApp({
       inboxId: preflight.inboxId,
       name: candidate.name,
       sourceAddress,
+      signerSource: 'walletconnect',
+      walletKind: preflight.walletKind,
+      chainId: preflight.chainId,
     })) {
+      await import('../../lib/xmtp/walletConnect')
+        .then(({ disconnectWalletConnect }) => disconnectWalletConnect())
+        .catch(() => undefined)
       throw new EnsInboxSwitchFailure(
         'ens-switch-storage-failed',
         'This browser could not remember the verified inbox safely. Your current inbox is unchanged.',
@@ -272,8 +292,18 @@ export function MessagingApp({
       )
       return
     }
+    if (inboxTarget?.signerSource === 'walletconnect') {
+      void import('../../lib/xmtp/walletConnect')
+        .then(({ disconnectWalletConnect }) => disconnectWalletConnect())
+        .catch(() => {
+          // The selector is already cleared. A stale remote session is safe to
+          // leave for the wallet/provider to expire if cleanup is unavailable.
+        })
+        .finally(reloadDocument)
+      return
+    }
     reloadDocument()
-  }, [reloadDocument, selectionBlocked, user.fid])
+  }, [inboxTarget?.signerSource, reloadDocument, selectionBlocked, user.fid])
   const describeRecovery = useCallback((description: string) => (
     targetRecoveryError ? `${description} ${targetRecoveryError}` : description
   ), [targetRecoveryError])
@@ -322,14 +352,45 @@ export function MessagingApp({
     return (
       <StatePanel
         busy
-        description="Converge Mini is preparing the XMTP inbox for the account supplied by Farcaster. Approve only the XMTP signature request shown by your host; it is not a transaction."
+        description={inboxTarget?.signerSource === 'walletconnect'
+          ? 'Converge Mini is verifying the Farcaster source account and restoring the external wallet saved for this ENS inbox. No other inbox will be opened as a fallback.'
+          : 'Converge Mini is preparing the XMTP inbox for the account supplied by Farcaster. Approve only the XMTP signature request shown by your host; it is not a transaction.'}
         eyebrow="Private inbox"
         title={inboxTarget ? 'Opening saved ENS inbox' : 'Opening your inbox'}
       />
     )
   }
 
-  const progress = connectionCopy[messaging.connection.phase]
+  if (messaging.externalWalletPairingUri && inboxTarget) {
+    return (
+      <StatePanel
+        actions={(
+          <div className="walletconnect-recovery">
+            <WalletConnectPairingOptions
+              name={inboxTarget.name}
+              uri={messaging.externalWalletPairingUri}
+            />
+            <Button variant="ghost" onClick={useFarcasterInbox}>
+              Cancel and use Farcaster inbox
+            </Button>
+          </div>
+        )}
+        busy
+        description={`Approve only the wallet that exposes ${inboxTarget.address}. Converge Mini will not substitute another account.`}
+        eyebrow="External ENS signer"
+        title={`Connect the wallet for ${inboxTarget.name}`}
+      />
+    )
+  }
+
+  const progress = messaging.connection.phase === 'wallet' &&
+    inboxTarget?.signerSource === 'walletconnect'
+    ? {
+        description: 'Converge Mini is matching the saved ENS address to its external WalletConnect session while separately checking the current Farcaster account.',
+        eyebrow: 'External signer',
+        title: 'Restoring your ENS wallet',
+      }
+    : connectionCopy[messaging.connection.phase]
   if (progress) {
     return (
       <StatePanel
@@ -444,6 +505,49 @@ export function MessagingApp({
         eyebrow="XMTP network configuration"
         icon={<AlertTriangle aria-hidden="true" />}
         title="Messaging is not available yet"
+      />
+    )
+  }
+
+  if (
+    messaging.connection.phase === 'external-wallet-configuration' &&
+    inboxTarget
+  ) {
+    return (
+      <StatePanel
+        actions={(
+          <Button variant="ghost" onClick={useFarcasterInbox}>
+            Use Farcaster inbox
+          </Button>
+        )}
+        description={describeRecovery(`${messaging.connection.error ?? 'WalletConnect is not configured.'} Configure VITE_WALLETCONNECT_PROJECT_ID for the canonical domain before this saved ENS inbox can reconnect.`)}
+        eyebrow="External wallet configuration"
+        icon={<AlertTriangle aria-hidden="true" />}
+        title="WalletConnect is not configured yet"
+      />
+    )
+  }
+
+  if (
+    messaging.connection.phase === 'external-wallet-unavailable' &&
+    inboxTarget
+  ) {
+    return (
+      <StatePanel
+        actions={(
+          <>
+            <Button onClick={messaging.connectExternalWallet}>
+              Reconnect external wallet
+            </Button>
+            <Button variant="ghost" onClick={useFarcasterInbox}>
+              Use Farcaster inbox
+            </Button>
+          </>
+        )}
+        description={describeRecovery(`${messaging.connection.error ?? 'The saved external-wallet session is unavailable.'} Converge Mini will require ${inboxTarget.address} and will not open another account.`)}
+        eyebrow="External ENS signer"
+        icon={<AlertTriangle aria-hidden="true" />}
+        title={`Reconnect the wallet for ${inboxTarget.name}`}
       />
     )
   }
@@ -606,6 +710,7 @@ export function MessagingApp({
           ensIdentity={ensIdentity}
           ensTargetNameVerified={verifiedTargetName !== undefined}
           environment={`${messaging.environment} · ${messaging.walletKind ?? 'wallet'}`}
+          externalSigner={inboxTarget?.signerSource === 'walletconnect'}
           onClearEnsPreference={() => void clearEnsPreference()}
           onJoinConvos={() => {
             setConversationReturnFocusId(null)

@@ -89,6 +89,13 @@ describe('Farcaster publishing contract', () => {
       "connect-src 'self' https://auth.farcaster.xyz https://*.xmtp.network:*",
     )
     expect(headers).not.toContain('https://*.farcaster.xyz')
+    expect(headers).toContain('https://rpc.walletconnect.org')
+    expect(headers).toContain('https://verify.walletconnect.org')
+    expect(headers).toContain('wss://relay.walletconnect.org')
+    expect(headers).toContain(
+      "frame-src 'self' https://verify.walletconnect.com https://verify.walletconnect.org",
+    )
+    expect(headers).not.toContain('https://*.walletconnect.org')
   })
 
   it('ships opaque PNG publishing assets at the declared dimensions', async () => {

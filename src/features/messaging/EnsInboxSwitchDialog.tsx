@@ -2,19 +2,24 @@ import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '../../components/Button'
 import type { EnsCandidate } from '../identity/useEnsIdentity'
+import { WalletConnectPairingOptions } from './WalletConnectPairingOptions'
 
 type EnsInboxSwitchDialogProps = {
   candidate: EnsCandidate
   onCancel: () => void
-  onConfirm: (candidate: EnsCandidate, signal: AbortSignal) => Promise<void>
+  onConfirm: (
+    candidate: EnsCandidate,
+    signal: AbortSignal,
+    onPairingUri: (uri: string) => void,
+  ) => Promise<void>
   onRestarting: () => void
 }
 
 type DialogPhase = 'review' | 'checking' | 'error' | 'restarting'
 type SwitchErrorPresentation = {
+  cancelLabel?: string
   message: string
   retryable: boolean
-  signerUnavailable: boolean
 }
 
 export function EnsInboxSwitchDialog({
@@ -26,6 +31,7 @@ export function EnsInboxSwitchDialog({
   const dialogRef = useRef<HTMLDialogElement>(null)
   const operationRef = useRef<AbortController | null>(null)
   const [error, setError] = useState<SwitchErrorPresentation | null>(null)
+  const [pairingUri, setPairingUri] = useState<string | null>(null)
   const [phase, setPhase] = useState<DialogPhase>('review')
 
   useEffect(() => {
@@ -53,14 +59,20 @@ export function EnsInboxSwitchDialog({
     const operation = new AbortController()
     operationRef.current = operation
     setError(null)
+    setPairingUri(null)
     setPhase('checking')
     let restart = false
 
     try {
-      await onConfirm(candidate, operation.signal)
+      await onConfirm(candidate, operation.signal, (uri) => {
+        if (!operation.signal.aborted && operationRef.current === operation) {
+          setPairingUri(uri)
+        }
+      })
       restart = !operation.signal.aborted
     } catch (caught) {
       if (!operation.signal.aborted) {
+        setPairingUri(null)
         setError(readSwitchError(caught, candidate))
         setPhase('error')
       }
@@ -73,8 +85,6 @@ export function EnsInboxSwitchDialog({
       onRestarting()
     }
   }
-
-  const unavailable = error?.signerUnavailable ?? false
 
   return (
     <dialog
@@ -90,34 +100,32 @@ export function EnsInboxSwitchDialog({
       <section className="ens-offer__card ens-inbox-switch__card">
         <p className="eyebrow">Existing ENS inbox</p>
         <h2 id="ens-switch-title">
-          {unavailable
-            ? `${candidate.name} can’t sign in this Farcaster client`
+          {pairingUri
+            ? `Connect the wallet for ${candidate.name}`
             : `Leave this inbox and join ${candidate.name}?`}
         </h2>
         <div id="ens-switch-description" className="ens-inbox-switch__copy">
-          {unavailable ? (
-            <p>
-              The name resolves to the address below, but Farcaster is not exposing that exact address as a signing wallet. No XMTP signature was requested. Your current inbox and messages are unchanged.
-            </p>
-          ) : (
-            <>
-              <p>
-                You’re abandoning this inbox in Converge Mini and joining the existing XMTP inbox for <strong>{candidate.name}</strong>.
-              </p>
-              <p>
-                This inbox and its messages are not deleted. The inboxes stay separate: nothing moves or merges, and older history in the inbox you join is recovered only when XMTP can provide it.
-              </p>
-              <p>
-                The exact address below must be available to approve XMTP access. XMTP may request a signature; it is not a transaction and costs no gas.
-              </p>
-            </>
-          )}
+          <p>
+            You’re abandoning this inbox in Converge Mini and joining the existing XMTP inbox for <strong>{candidate.name}</strong>.
+          </p>
+          <p>
+            This inbox and its messages are not deleted. The inboxes stay separate: nothing moves or merges, and older history in the inbox you join is recovered only when XMTP can provide it.
+          </p>
+          <p>
+            Connect an external wallet that exposes the exact address below. WalletConnect will ask for the connection first; XMTP may then request a signature. Neither step is a transaction or costs gas.
+          </p>
           <code>{candidate.address}</code>
         </div>
 
+        {pairingUri ? (
+          <WalletConnectPairingOptions name={candidate.name} uri={pairingUri} />
+        ) : null}
+
         {phase === 'checking' ? (
           <p className="ens-inbox-switch__status" role="status" aria-live="polite">
-            Rechecking the ENS name, target inbox, and exact signing address…
+            {pairingUri
+              ? 'Waiting for the exact ENS address to approve WalletConnect…'
+              : 'Rechecking the ENS name and existing target inbox…'}
           </p>
         ) : null}
         {phase === 'restarting' ? (
@@ -134,13 +142,15 @@ export function EnsInboxSwitchDialog({
             <Button busy={false} onClick={() => void confirm()}>
               {phase === 'error'
                 ? 'Check again'
-                : `Leave and join ${candidate.name}`}
+                : `Connect wallet and join ${candidate.name}`}
             </Button>
           ) : null}
           {phase !== 'restarting' ? (
             <Button autoFocus disabled={false} variant="ghost" onClick={cancel}>
-              {phase === 'error' && error && !error.retryable
-                ? 'Review updated identity'
+              {phase === 'error' && error
+                ? error.cancelLabel ?? (
+                    error.retryable ? 'Keep this inbox' : 'Review updated identity'
+                  )
                 : 'Keep this inbox'}
             </Button>
           ) : null}
@@ -158,12 +168,34 @@ function readSwitchError(
     error &&
     typeof error === 'object' &&
     'code' in error &&
-    error.code === 'host-wallet-target-unavailable'
+    error.code === 'walletconnect-target-unavailable'
   ) {
     return {
-      message: `${candidate.name} can’t sign in this Farcaster client. Farcaster is not exposing ${candidate.address} as a signing wallet.`,
+      message: `The connected wallet is not exposing ${candidate.address}. Choose the wallet account that owns ${candidate.name}, then try again.`,
       retryable: true,
-      signerUnavailable: true,
+    }
+  }
+  if (
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    error.code === 'walletconnect-not-configured'
+  ) {
+    return {
+      cancelLabel: 'Keep this inbox',
+      message: 'External-wallet connections are not configured for this deployment yet. Your current inbox is unchanged.',
+      retryable: false,
+    }
+  }
+  if (
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    error.code === 'walletconnect-cancelled'
+  ) {
+    return {
+      message: 'The external-wallet connection was cancelled. Your current inbox is unchanged.',
+      retryable: true,
     }
   }
   if (
@@ -175,12 +207,10 @@ function readSwitchError(
     return {
       message: error.message,
       retryable: error.code !== 'ens-switch-candidate-changed',
-      signerUnavailable: false,
     }
   }
   return {
     message: 'Converge Mini could not verify that inbox. Your current inbox is unchanged.',
     retryable: true,
-    signerUnavailable: false,
   }
 }
