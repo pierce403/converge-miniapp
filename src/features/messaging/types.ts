@@ -17,25 +17,53 @@ export type MessageItem = {
   isOwn: boolean
   sentAt: Date
   sentAtNs: bigint
+  senderInboxId: string
   reactions?: MessageReaction[]
   replyTo?: string
   text: string
   unsupported: boolean
 }
 
-export type ConversationSummary = {
+type ConversationSummaryBase = {
   id: string
   isOwnLastMessage: boolean
-  peerAddress: string | null
-  peerInboxId: string
+  lastSenderInboxId?: string | null
   preview: string
   updatedAt: Date | null
 }
 
-export type ActiveConversation = {
+export type ConversationSummary = ConversationSummaryBase & (
+  | {
+    kind: 'dm'
+    peerAddress: string | null
+    peerInboxId: string
+  }
+  | {
+    creatorInboxId: string
+    emoji: string | null
+    kind: 'convos-group'
+    peerAddress: null
+    peerInboxId: null
+    title: string
+  }
+)
+
+export type ActiveConversation = (
+  | {
+    kind: 'dm'
+    peerAddress: string | null
+    peerInboxId: string
+  }
+  | {
+    creatorInboxId: string
+    emoji: string | null
+    kind: 'convos-group'
+    peerAddress: null
+    peerInboxId: null
+    title: string
+  }
+) & {
   id: string
-  peerAddress: string | null
-  peerInboxId: string
 }
 
 export type StreamHealth = 'live' | 'retrying' | 'failed' | 'offline'
@@ -43,8 +71,9 @@ export type StreamHealth = 'live' | 'retrying' | 'failed' | 'offline'
 export type ConvosAccessRequest = {
   conversationId: string | null
   error: string | null
+  groupId: string | null
   invite: ParsedConvosInvite
   messageId: string | null
   retryMode: 'fresh' | 'reset' | 'none'
-  status: 'sending' | 'waiting' | 'failed'
+  status: 'sending' | 'waiting' | 'handled' | 'joined' | 'failed'
 }

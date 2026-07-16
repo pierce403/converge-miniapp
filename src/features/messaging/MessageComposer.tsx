@@ -12,10 +12,16 @@ const MAX_MESSAGE_LENGTH = 2_000
 type MessageComposerProps = {
   disabled?: boolean
   onSend: (text: string) => Promise<void>
+  placeholder?: string
   sending: boolean
 }
 
-export function MessageComposer({ disabled = false, onSend, sending }: MessageComposerProps) {
+export function MessageComposer({
+  disabled = false,
+  onSend,
+  placeholder = 'Message privately…',
+  sending,
+}: MessageComposerProps) {
   const [text, setText] = useState('')
   const submittingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -59,7 +65,7 @@ export function MessageComposer({ disabled = false, onSend, sending }: MessageCo
         maxLength={MAX_MESSAGE_LENGTH}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={onKeyDown}
-        placeholder="Message privately…"
+        placeholder={placeholder}
         ref={textareaRef}
         rows={1}
         value={text}

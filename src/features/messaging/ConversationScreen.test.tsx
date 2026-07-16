@@ -11,6 +11,7 @@ function message(id: string): MessageItem {
     delivery: 'sent',
     id,
     isOwn: false,
+    senderInboxId: 'peer-inbox',
     sentAt: new Date('2026-07-14T12:00:00Z'),
     sentAtNs: 1_784_030_400_000_000_000n,
     text: id,
@@ -21,7 +22,7 @@ function message(id: string): MessageItem {
 function renderConversation(overrides: Partial<Parameters<typeof ConversationScreen>[0]> = {}) {
   return render(
     <ConversationScreen
-      conversation={{ id: 'conversation-1', peerAddress: null, peerInboxId: 'peer-inbox' }}
+      conversation={{ id: 'conversation-1', kind: 'dm', peerAddress: null, peerInboxId: 'peer-inbox' }}
       hasOlder={false}
       loading={false}
       loadingOlder={false}
@@ -43,6 +44,7 @@ describe('ConversationScreen', () => {
     renderConversation({
       conversation: {
         id: 'conversation-1',
+        kind: 'dm',
         peerAddress: '0x2222222222222222222222222222222222222222',
         peerInboxId: 'peer-inbox',
       },
@@ -64,7 +66,7 @@ describe('ConversationScreen', () => {
 
     rerender(
       <ConversationScreen
-        conversation={{ id: 'conversation-1', peerAddress: null, peerInboxId: 'peer-inbox' }}
+        conversation={{ id: 'conversation-1', kind: 'dm', peerAddress: null, peerInboxId: 'peer-inbox' }}
         hasOlder={false}
         loading={false}
         loadingOlder={false}
@@ -133,5 +135,36 @@ describe('ConversationScreen', () => {
     expect(screen.queryByText(
       'This is the beginning of your private conversation.',
     )).not.toBeInTheDocument()
+  })
+
+  it('presents a Convos group as a group and keeps the shared message controls', () => {
+    renderConversation({
+      conversation: {
+        creatorInboxId: 'creator-inbox',
+        emoji: '🌱',
+        id: 'group-1',
+        kind: 'convos-group',
+        peerAddress: null,
+        peerInboxId: null,
+        title: 'Garden chat',
+      },
+      messages: [{
+        ...message('Hello group'),
+        conversationId: 'group-1',
+        senderInboxId: 'abcdef1234567890',
+      }],
+    })
+
+    expect(screen.getByRole('heading', { name: 'Garden chat' })).toBeVisible()
+    expect(screen.getByText('Convos group · XMTP')).toBeVisible()
+    expect(screen.queryByText(/direct message/i)).not.toBeInTheDocument()
+    expect(screen.getByText('abcdef…7890')).toBeVisible()
+    expect(screen.getByLabelText(/abcdef…7890/)).toBeVisible()
+    expect(screen.getByLabelText('Message')).toBeEnabled()
+    expect(screen.getByLabelText('Message')).toHaveAttribute(
+      'placeholder',
+      'Message this group…',
+    )
+    expect(screen.getByRole('heading', { name: 'Garden chat' })).toHaveFocus()
   })
 })

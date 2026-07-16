@@ -137,6 +137,7 @@ describe('JoinConvosScreen', () => {
       request: {
         conversationId: 'transport-dm',
         error: null,
+        groupId: null,
         invite,
         messageId: 'request-message',
         retryMode: 'none',
@@ -149,11 +150,85 @@ describe('JoinConvosScreen', () => {
     expect(screen.queryByRole('button', { name: /import another/i })).not.toBeInTheDocument()
   })
 
+  it('keeps a handled marker in the waiting state instead of claiming membership', () => {
+    renderJoin({
+      request: {
+        conversationId: 'transport-dm',
+        error: null,
+        groupId: null,
+        invite,
+        messageId: 'request-message',
+        retryMode: 'none',
+        status: 'handled',
+      },
+    })
+
+    expect(screen.getByRole('heading', { name: 'Request handled' })).toBeVisible()
+    expect(screen.getByText(/inviter responded to your request/i)).toBeVisible()
+    expect(screen.getByText(/waiting for this device to receive the group/i)).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Open conversation' })).not.toBeInTheDocument()
+  })
+
+  it('moves focus only when the request meaningfully changes', () => {
+    const request = {
+      conversationId: 'transport-dm',
+      error: null,
+      groupId: null,
+      invite,
+      messageId: 'request-message',
+      retryMode: 'none' as const,
+      status: 'waiting' as const,
+    }
+    const props: Parameters<typeof JoinConvosScreen>[0] = {
+      onBack: vi.fn(),
+      onOpenConversation: vi.fn(),
+      onRequestAccess: vi.fn().mockResolvedValue(undefined),
+      onReset: vi.fn(),
+      onRetry: vi.fn().mockResolvedValue(undefined),
+      request,
+    }
+    const { rerender } = render(<JoinConvosScreen {...props} />)
+    const backButton = screen.getByRole('button', { name: 'Back to inbox' })
+    backButton.focus()
+
+    rerender(<JoinConvosScreen {...props} request={{ ...request }} />)
+    expect(backButton).toHaveFocus()
+
+    rerender(
+      <JoinConvosScreen
+        {...props}
+        request={{ ...request, status: 'handled' }}
+      />,
+    )
+    expect(screen.getByRole('heading', { name: 'Request handled' })).toHaveFocus()
+  })
+
+  it('opens only a verified joined group', () => {
+    const onOpenConversation = vi.fn()
+    renderJoin({
+      onOpenConversation,
+      request: {
+        conversationId: 'transport-dm',
+        error: null,
+        groupId: 'verified-group',
+        invite,
+        messageId: 'request-message',
+        retryMode: 'none',
+        status: 'joined',
+      },
+    })
+
+    expect(screen.getByRole('heading', { name: 'Conversation joined' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Open conversation' }))
+    expect(onOpenConversation).toHaveBeenCalledWith('verified-group')
+  })
+
   it('offers a fresh deliberate retry and blocks it offline', () => {
     const onRetry = vi.fn().mockResolvedValue(undefined)
     const request = {
       conversationId: 'transport-dm',
       error: 'XMTP could not confirm the access request.',
+      groupId: null,
       invite,
       messageId: 'request-message',
       retryMode: 'fresh' as const,
@@ -168,6 +243,7 @@ describe('JoinConvosScreen', () => {
       <JoinConvosScreen
         offline
         onBack={vi.fn()}
+        onOpenConversation={vi.fn()}
         onRequestAccess={vi.fn()}
         onReset={vi.fn()}
         onRetry={onRetry}
@@ -177,12 +253,26 @@ describe('JoinConvosScreen', () => {
     expect(screen.getByRole('button', { name: 'Send fresh request' })).toBeDisabled()
   })
 
+  it('checks an invite locally while offline but keeps the network request disabled', async () => {
+    renderJoin({ offline: true })
+
+    const input = screen.getByLabelText('Convos invite link or code')
+    expect(input).toHaveFocus()
+    fireEvent.change(input, { target: { value: 'signed-invite' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Check invite' }))
+
+    expect(await screen.findByRole('heading', { name: 'Garden chat' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Request access' })).toBeDisabled()
+    expect(screen.getByRole('status')).toHaveTextContent(/check an invite offline/i)
+  })
+
   it('lets a terminal expired invite be discarded without retrying it', () => {
     const onRetry = vi.fn().mockResolvedValue(undefined)
     const onReset = vi.fn()
     const baseRequest = {
       conversationId: 'transport-dm',
       error: 'XMTP marked this access request as permanently failed.',
+      groupId: null,
       invite,
       messageId: 'request-message',
       status: 'failed' as const,
@@ -200,6 +290,7 @@ describe('JoinConvosScreen', () => {
     rerender(
       <JoinConvosScreen
         onBack={vi.fn()}
+        onOpenConversation={vi.fn()}
         onRequestAccess={vi.fn()}
         onReset={onReset}
         onRetry={onRetry}
@@ -219,6 +310,7 @@ describe('JoinConvosScreen', () => {
 function renderJoin(overrides: Partial<Parameters<typeof JoinConvosScreen>[0]> = {}) {
   const props: Parameters<typeof JoinConvosScreen>[0] = {
     onBack: vi.fn(),
+    onOpenConversation: vi.fn(),
     onRequestAccess: vi.fn().mockResolvedValue(undefined),
     onReset: vi.fn(),
     onRetry: vi.fn().mockResolvedValue(undefined),

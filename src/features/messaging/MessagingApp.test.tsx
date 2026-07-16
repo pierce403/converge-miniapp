@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { MessagingApp } from './MessagingApp'
@@ -198,6 +198,47 @@ describe('MessagingApp storage and installation states', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Join Convos' }))
 
     expect(setView).toHaveBeenCalledWith('join-convos')
+  })
+
+  it('restores focus to the originating inbox row after leaving a conversation', async () => {
+    const backToInbox = vi.fn()
+    const conversation = {
+      creatorInboxId: 'creator-inbox',
+      emoji: '🌱',
+      id: 'group-1',
+      kind: 'convos-group' as const,
+      peerAddress: null,
+      peerInboxId: null,
+      title: 'Garden chat',
+    }
+    const summary = {
+      ...conversation,
+      isOwnLastMessage: false,
+      preview: 'Welcome',
+      updatedAt: new Date('2026-07-15T20:00:00Z'),
+    }
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      activeConversation: conversation,
+      backToInbox,
+      conversations: [summary],
+      view: 'conversation',
+    })
+    const view = render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to inbox' }))
+    expect(backToInbox).toHaveBeenCalledOnce()
+
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      conversations: [summary],
+      view: 'inbox',
+    })
+    view.rerender(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Garden chat/i })).toHaveFocus()
+    })
   })
 
   it('renders a retained Convos waiting state without claiming membership', () => {

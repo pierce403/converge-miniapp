@@ -10,6 +10,7 @@ describe('messaging models', () => {
       delivery: 'sending',
       id: 'message-1',
       isOwn: true,
+      senderInboxId: 'own-inbox',
       sentAt: new Date('2026-07-14T12:00:00Z'),
       sentAtNs: 1_784_030_400_000_000_000n,
       text: 'hello',
@@ -27,6 +28,7 @@ describe('messaging models', () => {
     const summary: ConversationSummary = {
       id: 'conversation-1',
       isOwnLastMessage: false,
+      kind: 'dm',
       peerAddress: null,
       peerInboxId: 'peer-inbox',
       preview: 'No messages yet',

@@ -7,7 +7,7 @@ import {
   RefreshCw,
   WifiOff,
 } from 'lucide-react'
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 
 import { Avatar } from '../../components/Avatar'
 import { Button } from '../../components/Button'
@@ -44,6 +44,7 @@ type InboxScreenProps = {
   }
   recoveryError?: string | null | undefined
   refreshing: boolean
+  returnFocusConversationId?: string | null | undefined
   streamHealth: StreamHealth
 }
 
@@ -68,10 +69,13 @@ export function InboxScreen({
   profile,
   recoveryError,
   refreshing,
+  returnFocusConversationId,
   streamHealth,
 }: InboxScreenProps) {
   const identityMenuRef = useRef<HTMLDetailsElement>(null)
   const identitySummaryRef = useRef<HTMLElement>(null)
+  const inboxTitleRef = useRef<HTMLHeadingElement>(null)
+  const returnFocusConversationRef = useRef<HTMLButtonElement>(null)
   const ensConnected = ensIdentity.preference === 'accepted' && (
     ensIdentity.relationship === 'active-address' ||
     ensIdentity.relationship === 'same-inbox'
@@ -81,6 +85,14 @@ export function InboxScreen({
     : profile.displayName ?? profile.username ?? shortIdentity(address))
   const offline = streamHealth === 'offline'
 
+  useEffect(() => {
+    if (!returnFocusConversationId) return
+    const frame = window.requestAnimationFrame(() => {
+      (returnFocusConversationRef.current ?? inboxTitleRef.current)?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [returnFocusConversationId])
+
   return (
     <section className="messaging-screen inbox-screen" aria-labelledby="inbox-title">
       <header className="screen-header">
@@ -88,7 +100,7 @@ export function InboxScreen({
           <Avatar name={name} src={profile.pfpUrl} />
           <div>
             <p className="eyebrow">Private inbox</p>
-            <h1 id="inbox-title">{name}</h1>
+            <h1 id="inbox-title" ref={inboxTitleRef} tabIndex={-1}>{name}</h1>
             <span>{shortIdentity(address)} · {environment}</span>
           </div>
         </div>
@@ -174,7 +186,7 @@ export function InboxScreen({
           >
             <RefreshCw className={refreshing ? 'is-spinning' : ''} aria-hidden="true" />
           </button>
-          <Button disabled={offline} onClick={onJoinConvos} variant="secondary">
+          <Button data-join-convos="true" onClick={onJoinConvos} variant="secondary">
             <Link2 aria-hidden="true" />
             Join Convos
           </Button>
@@ -188,34 +200,52 @@ export function InboxScreen({
       {conversations.length ? (
         <ul className="conversation-list">
           {conversations.map((conversation) => {
-            const identity = conversation.peerAddress ?? conversation.peerInboxId
-            const presentation = participantPresentation(
-              identity,
-              participantIdentityFor(conversation.peerAddress),
-            )
+            const isGroup = conversation.kind === 'convos-group'
+            const presentation = isGroup
+              ? {
+                  fnameHint: null,
+                  label: conversation.title,
+                  title: `${conversation.title} · Convos group`,
+                }
+              : participantPresentation(
+                conversation.peerAddress ?? conversation.peerInboxId,
+                participantIdentityFor(conversation.peerAddress),
+              )
+            const label = presentation.label
             return (
               <li key={conversation.id}>
                 <button
                   className="conversation-row"
                   onClick={() => onOpen(conversation.id)}
+                  ref={conversation.id === returnFocusConversationId
+                    ? returnFocusConversationRef
+                    : undefined}
                   title={presentation.title}
                   type="button"
                 >
-                  <Avatar name={presentation.label.replace(/^@/u, '')} />
+                  <Avatar name={isGroup ? conversation.emoji ?? label : label.replace(/^@/u, '')} />
                   <span className="conversation-row__body">
                     <span className="conversation-row__topline">
-                      <strong>{presentation.label}</strong>
+                      <strong>{label}</strong>
                       <time dateTime={conversation.updatedAt?.toISOString()}>
                         {conversationTime(conversation.updatedAt)}
                       </time>
                     </span>
-                    {presentation.fnameHint ? (
+                    {isGroup ? (
+                      <span className="conversation-row__identity-hint">
+                        Convos group
+                      </span>
+                    ) : presentation.fnameHint ? (
                       <span className="conversation-row__identity-hint">
                         {presentation.fnameHint}
                       </span>
                     ) : null}
                     <span className="conversation-row__preview">
-                      {conversation.isOwnLastMessage ? 'You: ' : ''}{conversation.preview}
+                      {conversation.isOwnLastMessage
+                        ? 'You: '
+                        : isGroup && conversation.lastSenderInboxId
+                          ? `${shortIdentity(conversation.lastSenderInboxId)}: `
+                          : ''}{conversation.preview}
                     </span>
                   </span>
                 </button>

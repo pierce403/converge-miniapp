@@ -6,6 +6,10 @@ import {
   decodeConvosInviteSlug,
   normalizeConvosInviteSlug,
 } from './slug'
+import {
+  hasConvosControlCharacters,
+  sanitizeConvosPreviewText,
+} from './presentation'
 
 export { ConvosInviteError } from './error'
 
@@ -39,6 +43,7 @@ export type ParsedConvosInvite = {
 }
 
 export type ParseConvosInviteOptions = {
+  allowExpired?: boolean
   nowSeconds?: number
 }
 
@@ -170,45 +175,6 @@ function decodeUtf8(bytes: Uint8Array) {
   }
 }
 
-function isUnsafeFormatCharacter(codePoint: number, preserveEmojiJoiner: boolean) {
-  if (preserveEmojiJoiner && codePoint === 0x200d) return false
-  return (
-    codePoint === 0x061c ||
-    (codePoint >= 0x200b && codePoint <= 0x200f) ||
-    (codePoint >= 0x202a && codePoint <= 0x202e) ||
-    (codePoint >= 0x2060 && codePoint <= 0x206f) ||
-    codePoint === 0xfeff
-  )
-}
-
-function sanitizePreviewText(
-  value: string,
-  maximumCharacters: number,
-  preserveEmojiJoiner = false,
-) {
-  const cleaned = Array.from(value, (character) =>
-    isControlCharacter(character.codePointAt(0)!) ||
-    isUnsafeFormatCharacter(character.codePointAt(0)!, preserveEmojiJoiner)
-      ? ' '
-      : character,
-  )
-    .join('')
-    .replace(/\s+/gu, ' ')
-    .trim()
-  if (!cleaned) return undefined
-  return Array.from(cleaned).slice(0, maximumCharacters).join('')
-}
-
-function isControlCharacter(codePoint: number) {
-  return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)
-}
-
-function hasControlCharacters(value: string) {
-  return Array.from(value).some((character) =>
-    isControlCharacter(character.codePointAt(0)!),
-  )
-}
-
 function unixSeconds(value: bigint) {
   if (
     value < BigInt(-MAX_DATE_UNIX_SECONDS) ||
@@ -284,7 +250,7 @@ function parseInvitePayload(payload: Uint8Array) {
         break
       case 4:
         requireWire(wire, 2)
-        name = sanitizePreviewText(
+        name = sanitizeConvosPreviewText(
           decodeUtf8(reader.readBytes(MAX_NAME_BYTES)),
           80,
         )
@@ -316,7 +282,7 @@ function parseInvitePayload(payload: Uint8Array) {
       }
       case 10:
         requireWire(wire, 2)
-        emoji = sanitizePreviewText(
+        emoji = sanitizeConvosPreviewText(
           decodeUtf8(reader.readBytes(MAX_EMOJI_BYTES)),
           8,
           true,
@@ -335,7 +301,7 @@ function parseInvitePayload(payload: Uint8Array) {
     creatorInbox.length < MIN_CREATOR_INBOX_BYTES ||
     !tag ||
     !tag.trim() ||
-    hasControlCharacters(tag)
+    hasConvosControlCharacters(tag)
   ) {
     throw new ConvosInviteError('invalid_payload')
   }
@@ -554,10 +520,15 @@ export function parseConvosInvite(
   if (!Number.isSafeInteger(nowSeconds)) {
     throw new ConvosInviteError('invalid_input')
   }
-  if (parsed.expiresAtUnix !== undefined && parsed.expiresAtUnix <= nowSeconds) {
+  if (
+    !options.allowExpired &&
+    parsed.expiresAtUnix !== undefined &&
+    parsed.expiresAtUnix <= nowSeconds
+  ) {
     throw new ConvosInviteError('invite_expired')
   }
   if (
+    !options.allowExpired &&
     parsed.conversationExpiresAtUnix !== undefined &&
     parsed.conversationExpiresAtUnix <= nowSeconds
   ) {

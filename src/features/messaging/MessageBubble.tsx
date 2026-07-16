@@ -1,16 +1,26 @@
 import { AlertCircle, Clock3, RotateCcw } from 'lucide-react'
 
 import { MAX_MESSAGE_REACTIONS, type MessageItem } from './types'
-import { messageTime } from './format'
+import { messageTime, shortIdentity } from './format'
 
 type MessageBubbleProps = {
   message: MessageItem
   onRetry: (messageId: string) => void
   retryDisabled?: boolean
+  showSender?: boolean
 }
 
-export function MessageBubble({ message, onRetry, retryDisabled = false }: MessageBubbleProps) {
-  const sender = message.isOwn ? 'You' : 'Recipient'
+export function MessageBubble({
+  message,
+  onRetry,
+  retryDisabled = false,
+  showSender = false,
+}: MessageBubbleProps) {
+  const sender = message.isOwn
+    ? 'You'
+    : showSender
+      ? shortIdentity(message.senderInboxId)
+      : 'Recipient'
   const reactions = message.reactions?.slice(0, MAX_MESSAGE_REACTIONS)
 
   return (
@@ -18,6 +28,9 @@ export function MessageBubble({ message, onRetry, retryDisabled = false }: Messa
       aria-label={`${sender}, ${messageTime(message.sentAt)}`}
       className={`message-bubble ${message.isOwn ? 'message-bubble--own' : 'message-bubble--peer'}`}
     >
+      {showSender && !message.isOwn ? (
+        <strong className="message-bubble__sender">{sender}</strong>
+      ) : null}
       {message.replyTo ? (
         <blockquote className="message-bubble__reply">{message.replyTo}</blockquote>
       ) : null}

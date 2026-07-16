@@ -134,6 +134,7 @@ export function MessagingApp({
     storageWarningWasDismissed,
   )
   const [targetRecoveryError, setTargetRecoveryError] = useState<string | null>(null)
+  const [conversationReturnFocusId, setConversationReturnFocusId] = useState<string | null>(null)
   const switchReturnFocusRef = useRef<HTMLElement | null>(null)
   const switchCommittedRef = useRef(false)
   const inboxTargetState = useMemo(() => readInboxTarget(user.fid), [user.fid])
@@ -168,6 +169,17 @@ export function MessagingApp({
     resetRecipientResolution()
     messagingBackToInbox()
   }, [messagingBackToInbox, resetRecipientResolution])
+  const backFromConvos = useCallback(() => {
+    setConversationReturnFocusId(null)
+    backToInbox()
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>('[data-join-convos]')?.focus()
+    })
+  }, [backToInbox])
+  const backFromConversation = useCallback(() => {
+    setConversationReturnFocusId(messaging.activeConversation?.id ?? null)
+    messagingBackToInbox()
+  }, [messaging.activeConversation?.id, messagingBackToInbox])
   const closeEnsSwitch = useCallback(() => {
     if (switchCommittedRef.current) return
     setEnsSwitchCandidate(null)
@@ -595,8 +607,12 @@ export function MessagingApp({
           ensTargetNameVerified={verifiedTargetName !== undefined}
           environment={`${messaging.environment} · ${messaging.walletKind ?? 'wallet'}`}
           onClearEnsPreference={() => void clearEnsPreference()}
-          onJoinConvos={() => messaging.setView('join-convos')}
+          onJoinConvos={() => {
+            setConversationReturnFocusId(null)
+            messaging.setView('join-convos')
+          }}
           onNewDm={() => {
+            setConversationReturnFocusId(null)
             resetRecipientResolution()
             messaging.setView('new-dm')
           }}
@@ -611,6 +627,7 @@ export function MessagingApp({
           profile={user}
           recoveryError={targetRecoveryError}
           refreshing={messaging.refreshing}
+          returnFocusConversationId={conversationReturnFocusId}
           streamHealth={messaging.streamHealth}
         />
       ) : null}
@@ -632,7 +649,8 @@ export function MessagingApp({
       {messaging.view === 'join-convos' ? (
         <JoinConvosScreen
           offline={offline}
-          onBack={backToInbox}
+          onBack={backFromConvos}
+          onOpenConversation={(conversationId) => void messaging.openConversation(conversationId)}
           onRequestAccess={messaging.requestConvosAccess}
           onReset={messaging.resetConvosAccessRequest}
           onRetry={messaging.retryConvosAccess}
@@ -647,7 +665,7 @@ export function MessagingApp({
           loading={messaging.loadingConversation}
           loadingOlder={messaging.loadingOlder}
           messages={messaging.messages}
-          onBack={messaging.backToInbox}
+          onBack={backFromConversation}
           onLoadOlder={messaging.loadOlderMessages}
           onRetry={messaging.retryMessage}
           onRetryLiveUpdates={messaging.retryLiveUpdates}

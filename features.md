@@ -320,8 +320,8 @@ Success condition: the optional label flow never moves identity state; the expli
 | Operations | Redacted logs, health, and error visibility | P0 | Committed | Failures are diagnosable without leaking message content, tokens, or full wallet identifiers. |
 | Notifications | Add Mini App and store notification permission | P1 | Blocked on verifier credential | Implement the unadvertised server lifecycle first. Do not expose the permission prompt or manifest `webhookUrl` until production can verify app keys against current Farcaster network state. |
 | Notifications | Notify on incoming XMTP message | P1 | Spike | Privacy-safe bridge works while client is closed without user decryption keys. |
-| Convos | Import a signed Convos invite | P1 | In progress | Exact production invite URLs and raw slugs are validated locally, a typed XMTP join request is sent only after an explicit tap, and the UI remains pending until the matching group actually arrives. |
-| Convos | Read and send in an imported group | P1 | In progress | Allowed groups share the cached-first timeline and live-stream reliability of DMs without weakening consent or exposing invite/control traffic as ordinary chat. |
+| Convos | Import a signed Convos invite | P1 | Implemented locally | Exact production invite URLs and raw slugs are validated locally, a typed XMTP join request is sent only after an explicit tap, and only an active exact-tag group added by the declared creator to the current inbox completes the import. |
+| Convos | Read and send in an imported group | P1 | Implemented locally | Verified allowed groups share the cached-first timeline, pagination, send/retry path, and live-stream reliability of DMs without weakening consent or exposing invite/control traffic as ordinary chat. |
 | Convos | Re-share and open an imported invite | P1 | In progress | A still-valid reusable signed invite can produce a local QR/share link and explicit Convos/Converge handoff links without placing the bearer slug in backend requests, logs, or Web Storage. |
 | Sharing | Share app with Farcaster compose action | P1 | Later | User can share a generic app card without leaking private conversation details. |
 | Settings | Expanded privacy/identity/about sheet | P1 | Later | Add trusted profile/FID, inbox/installation details, version, notifications, and broader future account-data controls beyond the implemented compact menu. |
@@ -1511,6 +1511,28 @@ Exit evidence:
 
 - `npm run check` passes 35 test files and 386 tests;
 - the production-shaped local Worker serves both the SPA and versioned `/api/health`; and
+- all five mobile Playwright checks pass.
+
+### Task 11c: verified Convos group import and messaging — implemented locally 2026-07-15
+
+Implemented and locally verified:
+
+- bounded current Convos app-data decoding accepts uncompressed, raw-DEFLATE, and zlib-wrapped protobuf metadata while rejecting malformed base64url, duplicate/missing tags, wrong wire types, invalid UTF-8, declared-size mismatches, and suspicious compression ratios;
+- restart recovery scans a bounded local XMTP window for an exact self-authored `convos.org/join_request:1.0`, revalidates the signed invite without resending it, and requires its DM peer to be the declared creator;
+- a candidate unknown group is promoted only when its exact app-data tag matches that recovered request, `addedByInboxId` is the declared creator, the group is active, and the current inbox is a member; denied, malformed, unrelated, inactive, wrong-creator, and missing-member groups remain hidden, while an already allowed valid Convos group remains usable after request-history or invite-expiry loss;
+- exact handled/error controls affect pending state only when the declared creator sent them in the same transport DM no earlier than the request; a handled marker remains a waiting state, terminal expiry still wins, raw error reasons never enter user-facing copy, and dismissing a retry suppresses its older request lineage for the current session without blocking a later deliberate attempt;
+- imported groups have bounded Convos name/emoji presentation and share the existing cached/offline timeline, global inbox ordering and 50-row cap, pagination, stable message upsert, optimistic send, same-ID retry, and live message stream with DMs;
+- the group-arrival stream owns the same retry/close lifecycle as message streaming, reconciles before exposing a candidate, never emits unknown non-control traffic into the chat UI, and reports live health only while both the message and group streams are healthy;
+- imported group messages identify their sender, background request refreshes do not steal focus, and Back returns focus to the originating inbox row; and
+- the bearer slug stays inside local XMTP message storage and short-lived in-memory parsing only, never Web Storage, same-origin routes, backend requests, logs, analytics, URLs, or group presentation.
+
+Task 11c does not create invites or add QR/handoff controls. Those remain a separate Task 11d release slice after this commit reaches production.
+
+Exit evidence:
+
+- `npm run check` passes 39 test files and 442 tests, including 68 focused XMTP session behavior cases;
+- `git diff --check` passes;
+- the production-shaped local SPA and versioned `/api/health` both return 200; and
 - all five mobile Playwright checks pass.
 
 ## Later feature backlog

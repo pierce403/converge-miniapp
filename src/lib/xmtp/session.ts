@@ -4,6 +4,7 @@ import {
   ContentType,
   DeliveryStatus,
   Dm,
+  Group,
   GroupMessageKind,
   IdentifierKind,
   ListConversationsOrderBy,
@@ -40,6 +41,15 @@ import {
   type ConvosJoinRequest,
 } from '../convos/joinRequestCodec'
 import type { ParsedConvosInvite } from '../convos/invite'
+import { parseConvosGroupAppData } from '../convos/appData'
+import { sanitizeConvosPreviewText } from '../convos/presentation'
+import {
+  convosInviteJoinErrorCodec,
+  convosInviteJoinHandledCodec,
+  convosJoinErrorMessage,
+  type ConvosInviteJoinError,
+  type ConvosInviteJoinHandled,
+} from '../convos/controlCodec'
 
 import {
   MAX_MESSAGE_REACTIONS,
@@ -55,6 +65,9 @@ import {
  * pagination can continue through older history.
  */
 const INBOX_PREVIEW_SCAN_SIZE = 200n
+const CONVOS_TRANSPORT_DM_LIMIT = 100n
+const CONVOS_TRANSPORT_MESSAGE_LIMIT = 20n
+const CONVOS_REQUEST_LIMIT = 100
 
 type LatestDisplayableMessage = {
   hideConversation: boolean
@@ -84,6 +97,8 @@ const GATEWAY_REQUIRED_ENVS: readonly XmtpEnv[] = [
 ]
 
 type AppContentTypes =
+  | ConvosInviteJoinError
+  | ConvosInviteJoinHandled
   | ConvosJoinRequest
   | BuiltInContentTypes
   | EnrichedReply<
@@ -98,10 +113,30 @@ type AppContentTypes =
  */
 const APP_CODECS = [
   convosJoinRequestCodec as unknown as ContentCodec,
+  convosInviteJoinHandledCodec as unknown as ContentCodec,
+  convosInviteJoinErrorCodec as unknown as ContentCodec,
 ]
 type AppClient = Client<AppContentTypes>
 type AppDm = Dm<AppContentTypes>
+type AppGroup = Group<AppContentTypes>
+type AppConversation = AppDm | AppGroup
 type IncomingMessage = DecodedMessage<AppContentTypes>
+
+type RecoveredConvosRequest = {
+  conversationId: string
+  invite: ParsedConvosInvite
+  messageId: string
+  sentAtNs: bigint
+  controls: IncomingMessage[]
+}
+
+type TrustedConvosGroup = {
+  creatorInboxId: string
+  emoji: string | null
+  group: AppGroup
+  invite: ParsedConvosInvite | null
+  title: string
+}
 
 export type SendResult = {
   error: string | null
@@ -111,6 +146,16 @@ export type SendResult = {
 export type ConvosAccessRequestResult = {
   conversationId: string
   messageId: string
+}
+
+export type ConvosAccessSnapshot = {
+  conversationId: string
+  error: string | null
+  groupId: string | null
+  invite: ParsedConvosInvite
+  messageId: string
+  retryMode: 'fresh' | 'reset' | 'none'
+  status: 'waiting' | 'handled' | 'joined' | 'failed'
 }
 
 export type ConversationLoad = {
@@ -159,9 +204,18 @@ export class XmtpMessagingSession {
   readonly client: AppClient
   readonly isNewInstallation: boolean
   #messageStream: AsyncStreamProxy<IncomingMessage> | null = null
+  #groupStream: AsyncStreamProxy<AppGroup> | null = null
   #messageStreamHealth: Extract<StreamHealth, 'live' | 'retrying'> = 'retrying'
+  #groupStreamHealth: Extract<StreamHealth, 'live' | 'retrying'> = 'retrying'
   #messageStreamStart: Promise<void> | null = null
   #reactionRefreshVersions = new Map<string, number>()
+  #dismissedConvosRequestIds = new Set<string>()
+  #dismissedConvosRequestCutoffNs: bigint | null = null
+  #trustedConvosGroups = new Map<string, TrustedConvosGroup>()
+  #recoveredConvosRequests: RecoveredConvosRequest[] | null = null
+  #convosAccessSnapshot: ConvosAccessSnapshot | null = null
+  #convosAccessSnapshotSentAtNs: bigint | null = null
+  #convosReconcile: Promise<void> | null = null
   #streamGeneration = 0
 
   private constructor(
@@ -224,6 +278,44 @@ export class XmtpMessagingSession {
     return this.client.env ?? configuredEnvironment()
   }
 
+  get convosAccessSnapshot(): ConvosAccessSnapshot | null {
+    return this.#convosAccessSnapshot
+  }
+
+  dismissConvosAccessRequest(messageId: string): void {
+    if (!messageId) return
+    const dismissedAtNs = this.#convosAccessSnapshot?.messageId === messageId
+      ? this.#convosAccessSnapshotSentAtNs
+      : this.#recoveredConvosRequests?.find(
+        (request) => request.messageId === messageId,
+      )?.sentAtNs ?? null
+    this.#dismissedConvosRequestIds.add(messageId)
+    if (
+      dismissedAtNs !== null &&
+      (
+        this.#dismissedConvosRequestCutoffNs === null ||
+        dismissedAtNs > this.#dismissedConvosRequestCutoffNs
+      )
+    ) {
+      this.#dismissedConvosRequestCutoffNs = dismissedAtNs
+    }
+    if (this.#convosAccessSnapshot?.messageId === messageId) {
+      this.#convosAccessSnapshot = null
+      this.#convosAccessSnapshotSentAtNs = null
+    }
+    if (this.#recoveredConvosRequests) {
+      this.#recoveredConvosRequests = this.#recoveredConvosRequests.filter(
+        (request) => (
+          !this.#dismissedConvosRequestIds.has(request.messageId) &&
+          (
+            this.#dismissedConvosRequestCutoffNs === null ||
+            request.sentAtNs > this.#dismissedConvosRequestCutoffNs
+          )
+        ),
+      )
+    }
+  }
+
   async inspectIdentityRelationship(
     address: `0x${string}`,
   ): Promise<XmtpIdentityRelationship> {
@@ -259,12 +351,15 @@ export class XmtpMessagingSession {
     onCached?: (conversations: ConversationSummary[]) => void,
   ): Promise<ConversationSummary[]> {
     if (onCached) onCached(await this.readInbox())
+    await this.client.conversations.sync()
+    await this.#reconcileConvosGroups(true, true)
     await this.client.conversations.syncAll(VISIBLE_CONSENT_STATES)
 
     return this.readInbox()
   }
 
   async readInbox(): Promise<ConversationSummary[]> {
+    await this.#reconcileConvosGroups(false, false)
     const conversations = await this.client.conversations.listDms({
       consentStates: VISIBLE_CONSENT_STATES,
       includeDuplicateDms: false,
@@ -296,6 +391,8 @@ export class XmtpMessagingSession {
         return {
           id: conversation.id,
           isOwnLastMessage: lastMessage?.senderInboxId === this.inboxId,
+          kind: 'dm' as const,
+          lastSenderInboxId: lastMessage?.senderInboxId ?? null,
           peerAddress: addresses.get(peerInboxId) ?? null,
           peerInboxId,
           preview: previewFor(lastMessage) ?? (
@@ -307,9 +404,41 @@ export class XmtpMessagingSession {
       }),
     )
 
-    return summaries
-      .filter((summary): summary is ConversationSummary => summary !== null)
+    const groupSummaries = await Promise.all(
+      [...this.#trustedConvosGroups.values()].map(async ({
+        creatorInboxId,
+        emoji,
+        group,
+        title,
+      }) => {
+        const latest = await this.latestDisplayableMessage(group)
+        const lastMessage = latest.message
+        return {
+          creatorInboxId,
+          emoji,
+          id: group.id,
+          isOwnLastMessage: lastMessage?.senderInboxId === this.inboxId,
+          kind: 'convos-group' as const,
+          lastSenderInboxId: lastMessage?.senderInboxId ?? null,
+          peerAddress: null,
+          peerInboxId: null,
+          preview: previewFor(lastMessage) ?? (
+            latest.hiddenActivityAt ? 'Recent non-message activity' : 'No messages yet'
+          ),
+          title,
+          updatedAt: lastMessage?.sentAt ?? latest.hiddenActivityAt ??
+            group.createdAt ?? null,
+        }
+      }),
+    )
+
+    const dmSummaries = summaries.filter(
+      (summary): summary is NonNullable<typeof summary> => summary !== null,
+    )
+    const combined: ConversationSummary[] = [...dmSummaries, ...groupSummaries]
+    return combined
       .sort(compareConversationActivity)
+      .slice(0, Number(INBOX_LIMIT))
   }
 
   async loadConversation(
@@ -320,7 +449,7 @@ export class XmtpMessagingSession {
     const cached = await this.readConversation(conversationId, messageLimit)
     onCached?.(cached)
 
-    const conversation = await this.getDm(conversationId)
+    const conversation = await this.getConversation(conversationId)
     await conversation.sync()
     return this.readConversation(conversationId, messageLimit)
   }
@@ -330,15 +459,29 @@ export class XmtpMessagingSession {
     conversationId: string,
     messageLimit = Number(MESSAGE_PAGE_SIZE),
   ): Promise<ConversationLoad> {
-    const conversation = await this.getDm(conversationId)
-    const peerInboxId = await conversation.peerInboxId()
-    const [state] = await this.client.preferences.getInboxStates([peerInboxId])
-    const peerAddress = displayAddress(state)
-
-    const activeConversation = {
-      id: conversation.id,
-      peerAddress,
-      peerInboxId,
+    const conversation = await this.getConversation(conversationId)
+    let activeConversation: ActiveConversation
+    if (conversation instanceof Dm) {
+      const peerInboxId = await conversation.peerInboxId()
+      const [state] = await this.client.preferences.getInboxStates([peerInboxId])
+      activeConversation = {
+        id: conversation.id,
+        kind: 'dm',
+        peerAddress: displayAddress(state),
+        peerInboxId,
+      }
+    } else {
+      const trusted = this.#trustedConvosGroups.get(conversation.id)
+      if (!trusted) throw new Error('This Convos group has not been verified for this inbox.')
+      activeConversation = {
+        creatorInboxId: trusted.creatorInboxId,
+        emoji: trusted.emoji,
+        id: conversation.id,
+        kind: 'convos-group',
+        peerAddress: null,
+        peerInboxId: null,
+        title: trusted.title,
+      }
     }
     const cached = await this.messageWindow(conversation, messageLimit)
     return {
@@ -352,7 +495,7 @@ export class XmtpMessagingSession {
     scannedMessageCount: number,
   ): Promise<Pick<ConversationLoad, 'hasOlder' | 'messages' | 'scannedMessageCount'>> {
     return this.messageWindow(
-      await this.getDm(conversationId),
+      await this.getConversation(conversationId),
       normalizeMessageLimit(scannedMessageCount) + Number(MESSAGE_PAGE_SIZE),
     )
   }
@@ -370,6 +513,7 @@ export class XmtpMessagingSession {
 
     return {
       id: conversation.id,
+      kind: 'dm',
       peerAddress: address,
       peerInboxId: await conversation.peerInboxId(),
     }
@@ -399,6 +543,7 @@ export class XmtpMessagingSession {
     const messageId = await conversation.send(encoded, {
       shouldPush: true,
     })
+    this.#recoveredConvosRequests = null
     // A resolved non-optimistic send is the published boundary. Do not turn a
     // lagging local read-back into a duplicate request; retain the stable ID
     // returned by the SDK and let the normal sync path observe it.
@@ -410,7 +555,7 @@ export class XmtpMessagingSession {
     text: string,
     onOptimistic?: (message: MessageItem) => void,
   ): Promise<SendResult> {
-    const conversation = await this.getDm(conversationId)
+    const conversation = await this.getConversation(conversationId)
     const messageId = await conversation.sendText(text, true)
     const optimistic = await this.client.conversations.getMessageById(messageId)
 
@@ -450,7 +595,7 @@ export class XmtpMessagingSession {
   }
 
   async retryMessage(conversationId: string, messageId: string): Promise<SendResult> {
-    const conversation = await this.getDm(conversationId)
+    const conversation = await this.getConversation(conversationId)
     const existing = await this.client.conversations.getMessageById(messageId)
 
     if (!existing) throw new Error('The local XMTP draft is no longer available.')
@@ -501,19 +646,37 @@ export class XmtpMessagingSession {
   async startMessageStream(
     onMessage: (message: MessageItem) => void,
     onHealth: (health: StreamHealth) => void,
+    onInboxChanged: () => void = () => undefined,
   ): Promise<void> {
-    if (this.#messageStream && !this.#messageStream.isDone) {
-      onHealth(this.#messageStreamHealth)
+    if (
+      this.#messageStream && !this.#messageStream.isDone &&
+      this.#groupStream && !this.#groupStream.isDone
+    ) {
+      onHealth(this.#combinedStreamHealth())
       return
     }
     if (this.#messageStream?.isDone) this.#messageStream = null
+    if (this.#groupStream?.isDone) this.#groupStream = null
+    if (this.#messageStream && !this.#messageStream.isDone) {
+      await this.#messageStream.end()
+      this.#messageStream = null
+    }
+    if (this.#groupStream && !this.#groupStream.isDone) {
+      await this.#groupStream.end()
+      this.#groupStream = null
+    }
     if (this.#messageStreamStart) {
       await this.#messageStreamStart
-      return this.startMessageStream(onMessage, onHealth)
+      return this.startMessageStream(onMessage, onHealth, onInboxChanged)
     }
 
     const generation = ++this.#streamGeneration
-    const start = this.#openMessageStream(generation, onMessage, onHealth)
+    const start = this.#openMessageStream(
+      generation,
+      onMessage,
+      onHealth,
+      onInboxChanged,
+    )
     this.#messageStreamStart = start
     try {
       await start
@@ -526,74 +689,124 @@ export class XmtpMessagingSession {
     generation: number,
     onMessage: (message: MessageItem) => void,
     onHealth: (health: StreamHealth) => void,
+    onInboxChanged: () => void,
   ): Promise<void> {
-    let startupDegraded = false
-    const stream = await this.client.conversations.streamAllDmMessages({
-      consentStates: VISIBLE_CONSENT_STATES,
-      onError: () => {
-        if (generation !== this.#streamGeneration) return
-        startupDegraded = true
-        this.#messageStreamHealth = 'retrying'
-        onHealth('retrying')
-      },
-      onFail: () => {
-        if (generation !== this.#streamGeneration) return
-        // browser-sdk@7 reports an underlying stream failure here and then
-        // retries through the same proxy when retryOnFail is enabled. Retain
-        // ownership so a manual refresh cannot create an orphaned duplicate.
-        startupDegraded = true
-        this.#messageStreamHealth = 'retrying'
-        onHealth('retrying')
-      },
-      onRestart: () => {
-        if (generation === this.#streamGeneration) {
-          this.#messageStreamHealth = 'live'
-          onHealth('live')
-        }
-      },
-      onRetry: () => {
-        if (generation === this.#streamGeneration) {
-          this.#messageStreamHealth = 'retrying'
-          onHealth('retrying')
-        }
-      },
+    type StreamKind = 'messages' | 'groups'
+    const startupDegraded = new Set<StreamKind>()
+    this.#messageStreamHealth = 'retrying'
+    this.#groupStreamHealth = 'retrying'
+    const setStreamHealth = (
+      kind: StreamKind,
+      health: Extract<StreamHealth, 'live' | 'retrying'>,
+    ) => {
+      if (generation !== this.#streamGeneration) return
+      if (kind === 'messages') this.#messageStreamHealth = health
+      else this.#groupStreamHealth = health
+      onHealth(this.#combinedStreamHealth())
+    }
+    const streamOptions = (kind: StreamKind) => {
+      const onDegraded = () => {
+        startupDegraded.add(kind)
+        setStreamHealth(kind, 'retrying')
+      }
+      return {
+        onError: onDegraded,
+        onFail: onDegraded,
+        onRestart: () => {
+          startupDegraded.delete(kind)
+          setStreamHealth(kind, 'live')
+        },
+        onRetry: onDegraded,
+        retryAttempts: 6,
+        retryDelay: 10_000,
+        retryOnFail: true,
+      }
+    }
+    const stream = await this.client.conversations.streamAllMessages({
+      consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+      ...streamOptions('messages'),
       onValue: (message) => {
         if (generation !== this.#streamGeneration) return
 
-        if (isReaction(message)) {
-          if (!message.content) return
-          const reference = message.content.reference
-          const refreshVersion = (this.#reactionRefreshVersions.get(reference) ?? 0) + 1
-          this.#reactionRefreshVersions.set(reference, refreshVersion)
-          // Browser SDK v7's onValue callback is synchronous and does not
-          // observe returned promises. Keep this callback synchronous and
-          // explicitly contain best-effort parent refresh failures (including
-          // the expected race with client shutdown).
-          void this.#emitReactionParent(
-            reference,
-            refreshVersion,
-            generation,
-            onMessage,
-          ).catch(() => undefined)
+        if (isConvosControlMessage(message)) {
+          this.#recoveredConvosRequests = null
+          onInboxChanged()
           return
         }
 
-        const item = toMessageItem(message, this.inboxId)
-        if (item) onMessage(item)
+        void this.#emitAllowedStreamMessage(
+          message,
+          generation,
+          onMessage,
+        ).catch(() => undefined)
       },
-      retryAttempts: 6,
-      retryDelay: 10_000,
-      retryOnFail: true,
     })
+    let groupStream: AsyncStreamProxy<AppGroup>
+    try {
+      groupStream = await this.client.conversations.streamGroups({
+        ...streamOptions('groups'),
+        onValue: () => {
+          if (generation !== this.#streamGeneration) return
+          void this.#reconcileConvosGroups(false, true).then(() => {
+            if (generation === this.#streamGeneration) onInboxChanged()
+          }).catch(() => undefined)
+        },
+      }) as AsyncStreamProxy<AppGroup>
+    } catch (error) {
+      if (!stream.isDone) await stream.end().catch(() => undefined)
+      throw error
+    }
     if (generation !== this.#streamGeneration) {
       if (!stream.isDone) await stream.end()
+      if (!groupStream.isDone) await groupStream.end()
       return
     }
     this.#messageStream = stream
-    if (!startupDegraded) {
-      this.#messageStreamHealth = 'live'
-      onHealth('live')
+    this.#groupStream = groupStream
+    if (!startupDegraded.has('messages')) this.#messageStreamHealth = 'live'
+    if (!startupDegraded.has('groups')) this.#groupStreamHealth = 'live'
+    onHealth(this.#combinedStreamHealth())
+  }
+
+  #combinedStreamHealth(): Extract<StreamHealth, 'live' | 'retrying'> {
+    return this.#messageStreamHealth === 'live' && this.#groupStreamHealth === 'live'
+      ? 'live'
+      : 'retrying'
+  }
+
+  async #emitAllowedStreamMessage(
+    message: IncomingMessage,
+    generation: number,
+    onMessage: (message: MessageItem) => void,
+  ) {
+    const conversation = await this.client.conversations.getConversationById(
+      message.conversationId,
+    )
+    if (!conversation || await conversation.consentState() !== ConsentState.Allowed) return
+    if (conversation instanceof Group) {
+      if (!this.#trustedConvosGroups.has(conversation.id)) {
+        await this.#reconcileConvosGroups(false, false)
+      }
+      if (!this.#trustedConvosGroups.has(conversation.id)) return
     }
+    if (generation !== this.#streamGeneration) return
+
+    if (isReaction(message)) {
+      if (!message.content) return
+      const reference = message.content.reference
+      const refreshVersion = (this.#reactionRefreshVersions.get(reference) ?? 0) + 1
+      this.#reactionRefreshVersions.set(reference, refreshVersion)
+      await this.#emitReactionParent(
+        reference,
+        refreshVersion,
+        generation,
+        onMessage,
+      )
+      return
+    }
+
+    const item = toMessageItem(message, this.inboxId)
+    if (item) onMessage(item)
   }
 
   async #emitReactionParent(
@@ -622,8 +835,11 @@ export class XmtpMessagingSession {
     this.#streamGeneration += 1
     this.#reactionRefreshVersions.clear()
     const stream = this.#messageStream
+    const groupStream = this.#groupStream
     this.#messageStream = null
+    this.#groupStream = null
     this.#messageStreamHealth = 'retrying'
+    this.#groupStreamHealth = 'retrying'
     const starting = this.#messageStreamStart
     this.#messageStreamStart = null
     // A start can be waiting indefinitely for the SDK's pre-stream sync. Do
@@ -633,6 +849,9 @@ export class XmtpMessagingSession {
     if (starting) void starting.catch(() => undefined)
     try {
       if (stream && !stream.isDone) void stream.end().catch(() => undefined)
+      if (groupStream && !groupStream.isDone) {
+        void groupStream.end().catch(() => undefined)
+      }
     } finally {
       // Worker termination, not successful stream cleanup, is the boundary
       // that makes it safe for the caller to release the origin-wide lease.
@@ -640,16 +859,213 @@ export class XmtpMessagingSession {
     }
   }
 
-  private async getDm(conversationId: string): Promise<AppDm> {
-    const conversation = await this.client.conversations.getConversationById(conversationId)
-    if (!(conversation instanceof Dm)) {
-      throw new Error('The selected XMTP conversation is not a direct message.')
+  async #reconcileConvosGroups(
+    syncGroups: boolean,
+    promoteUnknown: boolean,
+  ): Promise<void> {
+    const previous = this.#convosReconcile ?? Promise.resolve()
+    const current = previous
+      .catch(() => undefined)
+      .then(() => this.#performConvosReconciliation(syncGroups, promoteUnknown))
+    this.#convosReconcile = current
+    try {
+      await current
+    } finally {
+      if (this.#convosReconcile === current) this.#convosReconcile = null
     }
-    return conversation
+  }
+
+  async #performConvosReconciliation(
+    syncGroups: boolean,
+    promoteUnknown: boolean,
+  ) {
+    const requests = await this.#recoverConvosRequests(syncGroups)
+    const groups = await this.client.conversations.listGroups({
+      consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+      limit: CONVOS_TRANSPORT_DM_LIMIT,
+      orderBy: ListConversationsOrderBy.LastActivity,
+    }) as AppGroup[]
+    const trusted = new Map<string, TrustedConvosGroup>()
+
+    for (const group of groups) {
+      if (syncGroups) {
+        try {
+          await group.sync()
+        } catch {
+          continue
+        }
+      }
+
+      let consent: ConsentState
+      try {
+        consent = await group.consentState()
+      } catch {
+        continue
+      }
+      if (consent !== ConsentState.Allowed && consent !== ConsentState.Unknown) continue
+
+      const appData = parseConvosGroupAppData(group.appData ?? '')
+      if (!appData) continue
+
+      let active: boolean
+      let memberInboxIds: string[]
+      try {
+        active = await group.isActive()
+        memberInboxIds = (await group.members()).map((member) => member.inboxId.toLowerCase())
+      } catch {
+        continue
+      }
+      if (!active || !memberInboxIds.includes(this.inboxId.toLowerCase())) continue
+
+      const addedByInboxId = group.addedByInboxId?.toLowerCase() ?? ''
+      if (!addedByInboxId) continue
+      const matchingRequest = requests.find((request) => (
+        request.invite.tag === appData.tag &&
+        request.invite.creatorInboxId.toLowerCase() === addedByInboxId
+      )) ?? null
+
+      if (consent === ConsentState.Unknown) {
+        if (!matchingRequest || !promoteUnknown) continue
+        try {
+          await group.updateConsentState(ConsentState.Allowed)
+          consent = await group.consentState()
+        } catch {
+          continue
+        }
+        if (consent !== ConsentState.Allowed) continue
+      }
+
+      trusted.set(group.id, {
+        creatorInboxId: addedByInboxId,
+        emoji: boundedGroupEmoji(appData.emoji),
+        group,
+        invite: matchingRequest?.invite ?? null,
+        title: boundedGroupTitle(group.name),
+      })
+    }
+
+    this.#trustedConvosGroups = trusted
+    const snapshotRequest = requests[0] ?? null
+    this.#convosAccessSnapshot = recoveredConvosSnapshot(
+      snapshotRequest,
+      trusted,
+    )
+    this.#convosAccessSnapshotSentAtNs = snapshotRequest?.sentAtNs ?? null
+  }
+
+  async #recoverConvosRequests(syncTransportDms: boolean): Promise<RecoveredConvosRequest[]> {
+    if (!syncTransportDms && this.#recoveredConvosRequests !== null) {
+      return this.#recoveredConvosRequests
+    }
+    const dms = await this.client.conversations.listDms({
+      consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+      includeDuplicateDms: false,
+      limit: CONVOS_TRANSPORT_DM_LIMIT,
+      orderBy: ListConversationsOrderBy.LastActivity,
+    }) as AppDm[]
+    const candidates: Array<{
+      controls: IncomingMessage[]
+      dm: AppDm
+      message: IncomingMessage
+      peerInboxId: string
+    }> = []
+
+    for (const dm of dms) {
+      let peerInboxId: string
+      let messages: IncomingMessage[]
+      try {
+        if (syncTransportDms) await dm.sync()
+        peerInboxId = (await dm.peerInboxId()).toLowerCase()
+        messages = await dm.messages({
+          direction: SortDirection.Descending,
+          excludeContentTypes: NON_TIMELINE_CONTENT_TYPES,
+          kind: GroupMessageKind.Application,
+          limit: CONVOS_TRANSPORT_MESSAGE_LIMIT,
+        }) as IncomingMessage[]
+      } catch {
+        continue
+      }
+
+      const controls = messages.filter(isConvosStatusControl)
+      for (const message of messages) {
+        if (
+          candidates.length >= CONVOS_REQUEST_LIMIT ||
+          this.#dismissedConvosRequestIds.has(message.id) ||
+          (
+            this.#dismissedConvosRequestCutoffNs !== null &&
+            message.sentAtNs <= this.#dismissedConvosRequestCutoffNs
+          ) ||
+          message.senderInboxId.toLowerCase() !== this.inboxId.toLowerCase() ||
+          !isConvosJoinRequest(message) ||
+          !isConvosJoinRequestContent(message.content)
+        ) continue
+
+        candidates.push({ controls, dm, message, peerInboxId })
+      }
+    }
+
+    if (!candidates.length) {
+      this.#recoveredConvosRequests = []
+      return this.#recoveredConvosRequests
+    }
+    const recovered: RecoveredConvosRequest[] = []
+    let parseConvosInvite: typeof import('../convos/invite')['parseConvosInvite']
+    try {
+      ({ parseConvosInvite } = await import('../convos/invite'))
+    } catch {
+      // A first offline visit may not have the parser chunk cached yet. Keep
+      // the ordinary local inbox readable and retry recovery on an online sync.
+      this.#recoveredConvosRequests = []
+      return this.#recoveredConvosRequests
+    }
+    for (const { controls, dm, message, peerInboxId } of candidates) {
+      if (!isConvosJoinRequestContent(message.content)) continue
+      let invite: ParsedConvosInvite
+      try {
+        invite = parseConvosInvite(message.content.inviteSlug, { allowExpired: true })
+      } catch {
+        continue
+      }
+      if (invite.creatorInboxId.toLowerCase() !== peerInboxId) continue
+      recovered.push({
+        conversationId: dm.id,
+        controls,
+        invite,
+        messageId: message.id,
+        sentAtNs: message.sentAtNs,
+      })
+    }
+
+    this.#recoveredConvosRequests = recovered
+      .sort((left, right) => left.sentAtNs > right.sentAtNs
+        ? -1
+        : left.sentAtNs < right.sentAtNs ? 1 : left.messageId.localeCompare(right.messageId))
+      .slice(0, CONVOS_REQUEST_LIMIT)
+    return this.#recoveredConvosRequests
+  }
+
+  private async getConversation(conversationId: string): Promise<AppConversation> {
+    const conversation = await this.client.conversations.getConversationById(conversationId)
+    if (conversation instanceof Dm) {
+      if (await conversation.consentState() !== ConsentState.Allowed) {
+        throw new Error('The selected XMTP direct message is not allowed.')
+      }
+      return conversation as AppDm
+    }
+    if (conversation instanceof Group) {
+      if (!this.#trustedConvosGroups.has(conversation.id)) {
+        await this.#reconcileConvosGroups(false, false)
+      }
+      if (!this.#trustedConvosGroups.has(conversation.id)) {
+        throw new Error('This Convos group has not been verified for this inbox.')
+      }
+      return conversation as AppGroup
+    }
+    throw new Error('The selected XMTP conversation is unavailable.')
   }
 
   private async latestDisplayableMessage(
-    conversation: AppDm,
+    conversation: AppConversation,
   ): Promise<LatestDisplayableMessage> {
     const [latestCandidate] = await conversation.messages({
       direction: SortDirection.Descending,
@@ -684,7 +1100,7 @@ export class XmtpMessagingSession {
   }
 
   private async messageWindow(
-    conversation: AppDm,
+    conversation: AppConversation,
     requestedLimit: number,
   ): Promise<Pick<ConversationLoad, 'hasOlder' | 'messages' | 'scannedMessageCount'>> {
     const messageLimit = BigInt(normalizeMessageLimit(requestedLimit))
@@ -801,6 +1217,112 @@ function compareConversationActivity(
   return right.updatedAt.getTime() - left.updatedAt.getTime()
 }
 
+function recoveredConvosSnapshot(
+  request: RecoveredConvosRequest | null,
+  trustedGroups: Map<string, TrustedConvosGroup>,
+): ConvosAccessSnapshot | null {
+  if (!request) return null
+  const joined = [...trustedGroups.entries()].find(([, trusted]) => (
+    trusted.invite?.slug === request.invite.slug
+  ))
+  if (joined) {
+    return {
+      conversationId: request.conversationId,
+      error: null,
+      groupId: joined[0],
+      invite: request.invite,
+      messageId: request.messageId,
+      retryMode: 'none',
+      status: 'joined',
+    }
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  if (
+    request.invite.conversationExpiresAtUnix !== undefined &&
+    request.invite.conversationExpiresAtUnix <= nowSeconds
+  ) {
+    return {
+      conversationId: request.conversationId,
+      error: 'That Convos conversation has expired.',
+      groupId: null,
+      invite: request.invite,
+      messageId: request.messageId,
+      retryMode: 'reset',
+      status: 'failed',
+    }
+  }
+  if (
+    request.invite.expiresAtUnix !== undefined &&
+    request.invite.expiresAtUnix <= nowSeconds
+  ) {
+    return {
+      conversationId: request.conversationId,
+      error: 'That Convos invite has expired.',
+      groupId: null,
+      invite: request.invite,
+      messageId: request.messageId,
+      retryMode: 'reset',
+      status: 'failed',
+    }
+  }
+
+  const creatorInboxId = request.invite.creatorInboxId.toLowerCase()
+  const control = request.controls
+    .filter((message) => (
+      message.sentAtNs >= request.sentAtNs &&
+      message.senderInboxId.toLowerCase() === creatorInboxId &&
+      isConvosStatusControl(message) &&
+      isMatchingConvosControl(message.content, request.invite.tag)
+    ))
+    .sort((left, right) => left.sentAtNs > right.sentAtNs
+      ? -1
+      : left.sentAtNs < right.sentAtNs ? 1 : left.id.localeCompare(right.id))[0]
+
+  if (control && isConvosInviteJoinErrorContent(control.content)) {
+    return {
+      conversationId: request.conversationId,
+      error: convosJoinErrorMessage(control.content),
+      groupId: null,
+      invite: request.invite,
+      messageId: request.messageId,
+      retryMode: control.content.errorType === 'generic_failure' ? 'fresh' : 'reset',
+      status: 'failed',
+    }
+  }
+  if (control && isConvosInviteJoinHandledContent(control.content)) {
+    return {
+      conversationId: request.conversationId,
+      error: null,
+      groupId: null,
+      invite: request.invite,
+      messageId: request.messageId,
+      retryMode: 'none',
+      status: 'handled',
+    }
+  }
+
+  return {
+    conversationId: request.conversationId,
+    error: null,
+    groupId: null,
+    invite: request.invite,
+    messageId: request.messageId,
+    retryMode: 'none',
+    status: 'waiting',
+  }
+}
+
+function boundedGroupTitle(value: string | undefined) {
+  return value
+    ? sanitizeConvosPreviewText(value, 80) ?? 'Convos conversation'
+    : 'Convos conversation'
+}
+
+function boundedGroupEmoji(value: string | null) {
+  return value ? sanitizeConvosPreviewText(value, 8, true) ?? null : null
+}
+
 function ethereumIdentifier(address: `0x${string}`): Identifier {
   return {
     identifier: address.toLowerCase(),
@@ -832,6 +1354,7 @@ function toMessageItem(
     ...(display.replyTo ? { replyTo: display.replyTo } : {}),
     sentAt: message.sentAt,
     sentAtNs: message.sentAtNs,
+    senderInboxId: message.senderInboxId,
     text: display.text,
     unsupported: display.unsupported,
   }
@@ -935,6 +1458,53 @@ function displayContentFor(message: DecodedMessage): DisplayContent | null {
 
 function isConvosJoinRequest(message: DecodedMessage) {
   return isConvosContentType(message, 'join_request')
+}
+
+function isConvosJoinRequestContent(value: unknown): value is ConvosJoinRequest {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    'inviteSlug' in value &&
+    typeof value.inviteSlug === 'string',
+  )
+}
+
+function isConvosInviteJoinHandledContent(
+  value: unknown,
+): value is ConvosInviteJoinHandled {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    'inviteTag' in value &&
+    'handledMessageId' in value &&
+    typeof value.inviteTag === 'string' &&
+    typeof value.handledMessageId === 'string',
+  )
+}
+
+function isConvosInviteJoinErrorContent(
+  value: unknown,
+): value is ConvosInviteJoinError {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    'inviteTag' in value &&
+    'errorType' in value &&
+    typeof value.inviteTag === 'string' &&
+    typeof value.errorType === 'string',
+  )
+}
+
+function isMatchingConvosControl(value: unknown, tag: string) {
+  return (
+    isConvosInviteJoinHandledContent(value) ||
+    isConvosInviteJoinErrorContent(value)
+  ) && value.inviteTag === tag
+}
+
+function isConvosStatusControl(message: DecodedMessage) {
+  return isConvosContentType(message, 'invite_join_error') ||
+    isConvosContentType(message, 'invite_join_handled')
 }
 
 function isConvosControlMessage(message: DecodedMessage) {

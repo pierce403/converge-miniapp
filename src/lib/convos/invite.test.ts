@@ -400,6 +400,26 @@ describe('parseConvosInvite', () => {
     )
   })
 
+  it('permits an expired signed invite only for local XMTP request recovery', () => {
+    const slug = makeSlug({
+      expiresAtUnix: defaultNow - 2,
+      conversationExpiresAtUnix: defaultNow - 1,
+    })
+
+    expectInviteError(
+      () => parseConvosInvite(slug, { nowSeconds: defaultNow }),
+      'invite_expired',
+    )
+    expect(parseConvosInvite(slug, {
+      allowExpired: true,
+      nowSeconds: defaultNow,
+    })).toMatchObject({
+      conversationExpiresAtUnix: defaultNow - 1,
+      expiresAtUnix: defaultNow - 2,
+      tag: 'convos-test-tag',
+    })
+  })
+
   it('rejects malformed signatures and recovery IDs outside 0 through 3', () => {
     const payload = makePayload()
     const zeroSignature = new Uint8Array(65)

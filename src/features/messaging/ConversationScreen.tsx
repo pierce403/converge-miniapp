@@ -44,13 +44,28 @@ export function ConversationScreen({
   streamHealth,
 }: ConversationScreenProps) {
   const scrollerRef = useRef<HTMLDivElement>(null)
+  const titleRef = useRef<HTMLHeadingElement>(null)
   const stickToBottomRef = useRef(true)
   const previousMessageIdsRef = useRef<string[]>([])
   const loadingEarlierRef = useRef(false)
   const [hasNewMessages, setHasNewMessages] = useState(false)
-  const identity = conversation.peerAddress ?? conversation.peerInboxId
-  const presentation = participantPresentation(identity, participantIdentity)
+  const isGroup = conversation.kind === 'convos-group'
+  const presentation = isGroup
+    ? {
+        label: conversation.title,
+        secondary: 'Convos group',
+        title: `${conversation.title} · Convos group`,
+      }
+    : participantPresentation(
+      conversation.peerAddress ?? conversation.peerInboxId,
+      participantIdentity,
+    )
+  const title = presentation.label
   const offline = streamHealth === 'offline'
+
+  useEffect(() => {
+    titleRef.current?.focus()
+  }, [conversation.id])
 
   useLayoutEffect(() => {
     const scroller = scrollerRef.current
@@ -120,10 +135,10 @@ export function ConversationScreen({
         <button className="icon-button" type="button" onClick={onBack} aria-label="Back to inbox">
           <ArrowLeft aria-hidden="true" />
         </button>
-        <Avatar name={presentation.label.replace(/^@/u, '')} />
-        <div title={presentation.title}>
-          <h1 id="conversation-title">{presentation.label}</h1>
-          <span>{presentation.secondary} · XMTP direct message</span>
+        <Avatar name={isGroup ? conversation.emoji ?? title : title.replace(/^@/u, '')} />
+        <div title={isGroup ? title : presentation.title}>
+          <h1 id="conversation-title" ref={titleRef} tabIndex={-1}>{title}</h1>
+          <span>{isGroup ? 'Convos group · XMTP' : `${presentation.secondary} · XMTP direct message`}</span>
         </div>
       </header>
 
@@ -180,7 +195,9 @@ export function ConversationScreen({
           <div className="conversation-start">
             <strong>{offline
               ? 'No messages are saved on this device.'
-              : 'This is the beginning of your private conversation.'}</strong>
+              : isGroup
+                ? 'This is the beginning of this group conversation.'
+                : 'This is the beginning of your private conversation.'}</strong>
             <span>{offline
               ? 'Reconnect to check for conversation history.'
               : 'Messages are end-to-end encrypted by XMTP.'}</span>
@@ -192,6 +209,7 @@ export function ConversationScreen({
             message={message}
             onRetry={onRetry}
             retryDisabled={offline}
+            showSender={isGroup}
           />
         ))}
       </div>
@@ -202,7 +220,12 @@ export function ConversationScreen({
         </button>
       ) : null}
 
-      <MessageComposer disabled={loading || offline} onSend={onSend} sending={sending} />
+      <MessageComposer
+        disabled={loading || offline}
+        onSend={onSend}
+        placeholder={isGroup ? 'Message this group…' : 'Message privately…'}
+        sending={sending}
+      />
     </section>
   )
 }

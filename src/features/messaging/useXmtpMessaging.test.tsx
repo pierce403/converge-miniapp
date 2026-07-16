@@ -9,7 +9,10 @@ import type {
 } from './types'
 import type { ParsedConvosInvite } from '../../lib/convos/invite'
 import { ConvosInviteError } from '../../lib/convos/error'
-import { XmtpClientInitializationError } from '../../lib/xmtp/session'
+import {
+  XmtpClientInitializationError,
+  type ConvosAccessSnapshot,
+} from '../../lib/xmtp/session'
 import { useXmtpMessaging } from './useXmtpMessaging'
 
 const mocks = vi.hoisted(() => ({
@@ -58,6 +61,7 @@ const provider = {
 const cachedConversation: ConversationSummary = {
   id: 'conversation-1',
   isOwnLastMessage: false,
+  kind: 'dm',
   peerAddress: '0x2222222222222222222222222222222222222222',
   peerInboxId: 'peer-inbox-1',
   preview: 'Saved locally',
@@ -65,8 +69,30 @@ const cachedConversation: ConversationSummary = {
 }
 const activeConversation: ActiveConversation = {
   id: cachedConversation.id,
+  kind: 'dm',
   peerAddress: cachedConversation.peerAddress,
   peerInboxId: cachedConversation.peerInboxId,
+}
+const groupSummary: ConversationSummary = {
+  creatorInboxId: 'creator-inbox',
+  emoji: '🌱',
+  id: 'verified-group',
+  isOwnLastMessage: false,
+  kind: 'convos-group',
+  peerAddress: null,
+  peerInboxId: null,
+  preview: 'Welcome to the garden',
+  title: 'Garden chat',
+  updatedAt: new Date('2026-07-14T12:01:00Z'),
+}
+const activeGroup: ActiveConversation = {
+  creatorInboxId: groupSummary.creatorInboxId,
+  emoji: groupSummary.emoji,
+  id: groupSummary.id,
+  kind: 'convos-group',
+  peerAddress: null,
+  peerInboxId: null,
+  title: groupSummary.title,
 }
 
 type Deferred<T> = {
@@ -99,6 +125,7 @@ function message(id: string, text: string, sentAt: string): MessageItem {
     delivery: 'sent',
     id,
     isOwn: false,
+    senderInboxId: 'peer-inbox-1',
     sentAt: date,
     sentAtNs: BigInt(date.getTime()) * 1_000_000n,
     text,
@@ -111,7 +138,9 @@ function createSession(overrides: Record<string, unknown> = {}) {
     address,
     canMessageAddress: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
+    convosAccessSnapshot: null,
     createDm: vi.fn(),
+    dismissConvosAccessRequest: vi.fn(),
     environment: 'dev',
     findInboxId: vi.fn().mockResolvedValue('target-inbox'),
     inboxId: 'own-inbox',
@@ -921,6 +950,7 @@ describe('useXmtpMessaging', () => {
     const secondSummary: ConversationSummary = {
       ...cachedConversation,
       id: 'conversation-2',
+      kind: 'dm',
       peerInboxId: 'peer-inbox-2',
     }
     const firstPage = deferred<{ hasOlder: boolean; messages: MessageItem[] }>()
@@ -1173,6 +1203,159 @@ describe('useXmtpMessaging', () => {
     expect(result.current.convosAccessRequest?.status).toBe('waiting')
     await act(async () => result.current.disconnect())
     expect(result.current.convosAccessRequest).toBeNull()
+  })
+
+  it('restores an authenticated Convos request status from local XMTP history', async () => {
+    const invite = convosInvite()
+    const session = createSession({
+      convosAccessSnapshot: {
+        conversationId: 'creator-transport-dm',
+        error: null,
+        groupId: null,
+        invite,
+        messageId: 'join-request-message',
+        retryMode: 'none',
+        status: 'handled',
+      },
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+
+    expect(result.current.convosAccessRequest).toEqual({
+      conversationId: 'creator-transport-dm',
+      error: null,
+      groupId: null,
+      invite,
+      messageId: 'join-request-message',
+      retryMode: 'none',
+      status: 'handled',
+    })
+  })
+
+  it('dismisses a recovered failed request in the session so refresh cannot resurrect it', async () => {
+    let snapshot: ConvosAccessSnapshot | null = {
+      conversationId: 'creator-transport-dm',
+      error: 'That Convos invite has expired.',
+      groupId: null,
+      invite: convosInvite(),
+      messageId: 'expired-request-message',
+      retryMode: 'reset',
+      status: 'failed',
+    }
+    const dismissConvosAccessRequest = vi.fn(() => {
+      snapshot = null
+    })
+    const session = createSession({ dismissConvosAccessRequest })
+    Object.defineProperty(session, 'convosAccessSnapshot', {
+      configurable: true,
+      get: () => snapshot,
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    expect(result.current.convosAccessRequest?.status).toBe('failed')
+
+    act(() => result.current.resetConvosAccessRequest())
+    expect(dismissConvosAccessRequest).toHaveBeenCalledWith('expired-request-message')
+    expect(result.current.convosAccessRequest).toBeNull()
+
+    await act(async () => result.current.refresh())
+    expect(result.current.convosAccessRequest).toBeNull()
+  })
+
+  it('applies a matching joined snapshot that arrived while request publication was pending', async () => {
+    const publishing = deferred<{ conversationId: string; messageId: string }>()
+    let snapshot: ConvosAccessSnapshot | null = null
+    const session = createSession({
+      requestConvosAccess: vi.fn().mockReturnValue(publishing.promise),
+    })
+    Object.defineProperty(session, 'convosAccessSnapshot', {
+      configurable: true,
+      get: () => snapshot,
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    let requesting!: Promise<void>
+    act(() => {
+      requesting = result.current.requestConvosAccess(convosInvite())
+    })
+    snapshot = {
+      conversationId: 'creator-transport-dm',
+      error: null,
+      groupId: 'verified-group',
+      invite: convosInvite(),
+      messageId: 'join-request-message',
+      retryMode: 'none',
+      status: 'joined',
+    }
+    await act(async () => {
+      publishing.resolve({
+        conversationId: 'creator-transport-dm',
+        messageId: 'join-request-message',
+      })
+      await requesting
+    })
+
+    expect(result.current.convosAccessRequest).toMatchObject({
+      groupId: 'verified-group',
+      status: 'joined',
+    })
+  })
+
+  it('reconciles a newly delivered verified group and opens its shared timeline', async () => {
+    let onInboxChanged: (() => void) | undefined
+    let snapshot: Record<string, unknown> | null = null
+    const groupLoad = {
+      conversation: activeGroup,
+      hasOlder: false,
+      messages: [
+        {
+          ...message('group-message', 'Welcome to the garden', '2026-07-14T12:01:00Z'),
+          conversationId: activeGroup.id,
+        },
+      ],
+      scannedMessageCount: 1,
+    }
+    const session = createSession({
+      loadConversation: vi.fn().mockResolvedValue(groupLoad),
+      readInbox: vi.fn().mockResolvedValue([groupSummary]),
+      startMessageStream: vi.fn(async (
+        _onMessage: unknown,
+        _onHealth: unknown,
+        nextOnInboxChanged: () => void,
+      ) => {
+        onInboxChanged = nextOnInboxChanged
+      }),
+    })
+    Object.defineProperty(session, 'convosAccessSnapshot', {
+      configurable: true,
+      get: () => snapshot,
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    snapshot = {
+      conversationId: 'creator-transport-dm',
+      error: null,
+      groupId: activeGroup.id,
+      invite: convosInvite(),
+      messageId: 'join-request-message',
+      retryMode: 'none',
+      status: 'joined',
+    }
+    act(() => onInboxChanged?.())
+
+    await waitFor(() => expect(result.current.convosAccessRequest?.status).toBe('joined'))
+    expect(result.current.conversations).toEqual([groupSummary])
+
+    await act(async () => result.current.openConversation(activeGroup.id))
+    expect(result.current.activeConversation).toEqual(activeGroup)
+    expect(result.current.messages).toEqual(groupLoad.messages)
   })
 
   it('does not expose raw XMTP errors in recipient validation', async () => {

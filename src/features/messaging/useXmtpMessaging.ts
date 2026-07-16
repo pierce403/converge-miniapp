@@ -4,6 +4,7 @@ import type { HostWalletConnection } from '../../lib/xmtp/signer'
 import type { InboxTarget } from '../identity/inboxTarget'
 import type { XmtpLease } from '../../lib/xmtp/lease'
 import type {
+  ConvosAccessSnapshot,
   XmtpIdentityRelationship,
   XmtpMessagingSession,
 } from '../../lib/xmtp/session'
@@ -130,6 +131,16 @@ export function useXmtpMessaging({
     convosAccessRequestRef.current = next
     setConvosAccessRequest(next)
   }, [])
+
+  const applyConvosAccessSnapshot = useCallback((snapshot: ConvosAccessSnapshot | null) => {
+    if (!snapshot || requestingConvosRef.current) return
+    const current = convosAccessRequestRef.current
+    if (
+      current?.messageId &&
+      current.messageId !== snapshot.messageId
+    ) return
+    updateConvosAccessRequest({ ...snapshot })
+  }, [updateConvosAccessRequest])
 
   const updateNotice = useCallback((next: string | null) => {
     noticeRevisionRef.current += 1
@@ -262,6 +273,7 @@ export function useXmtpMessaging({
         sessionRef.current === session
       ) {
         setConversations(next)
+        applyConvosAccessSnapshot(session.convosAccessSnapshot)
         if (offline) setStreamHealth('offline')
         updateNotice(null)
       }
@@ -280,7 +292,7 @@ export function useXmtpMessaging({
         if (mountedRef.current) setRefreshing(false)
       }
     }
-  }, [updateNotice])
+  }, [applyConvosAccessSnapshot, updateNotice])
 
   const scheduleInboxRefresh = useCallback(() => {
     if (inboxRefreshTimerRef.current !== null) return
@@ -296,12 +308,15 @@ export function useXmtpMessaging({
           operationGenerationRef.current === generation &&
           inboxRequestRef.current === request &&
           sessionRef.current === session
-        ) setConversations(next)
+        ) {
+          setConversations(next)
+          applyConvosAccessSnapshot(session.convosAccessSnapshot)
+        }
       }).catch(() => {
         // The next explicit foreground/manual sync will surface the failure.
       })
     }, 300)
-  }, [])
+  }, [applyConvosAccessSnapshot])
 
   const startMessageStream = useCallback(async (session: XmtpMessagingSession) => {
     if (browserIsKnownOffline()) {
@@ -319,6 +334,7 @@ export function useXmtpMessaging({
           setStreamHealth(browserIsKnownOffline() ? 'offline' : health)
         }
       },
+      scheduleInboxRefresh,
     ))
     if (
       outcome.status === 'offline' &&
@@ -605,6 +621,7 @@ export function useXmtpMessaging({
           ) return
           cachedInboxRead = true
           setConversations(cached)
+          applyConvosAccessSnapshot(session.convosAccessSnapshot)
           if (cached.length) {
             setRefreshing(true)
             setConnection({ error: null, phase: 'ready' })
@@ -633,6 +650,7 @@ export function useXmtpMessaging({
           inboxRequestRef.current !== inboxRequest
         ) return
         setConversations(nextConversations)
+        applyConvosAccessSnapshot(session.convosAccessSnapshot)
       } catch (error) {
         if (!mountedRef.current || sessionRef.current !== session) return
         if (!cachedInboxRead) throw error
@@ -713,7 +731,7 @@ export function useXmtpMessaging({
     } finally {
       if (connectionAttemptRef.current === attempt) connectingRef.current = false
     }
-  }, [inboxTarget, releaseResources, startMessageStream, updateConvosAccessRequest, updateNotice])
+  }, [applyConvosAccessSnapshot, inboxTarget, releaseResources, startMessageStream, updateConvosAccessRequest, updateNotice])
 
   const prepareInboxSwitch = useCallback(async (
     candidateAddress: `0x${string}`,
@@ -804,13 +822,7 @@ export function useXmtpMessaging({
     loadingOlderRequestRef.current = null
     loadedMessageWindowRef.current = 0
     const summary = conversations.find((item) => item.id === conversationId)
-    const initial = seed ?? (summary
-      ? {
-          id: summary.id,
-          peerAddress: summary.peerAddress,
-          peerInboxId: summary.peerInboxId,
-        }
-      : null)
+    const initial = seed ?? (summary ? activeFromSummary(summary) : null)
 
     if (initial) {
       activeRef.current = initial
@@ -1010,6 +1022,7 @@ export function useXmtpMessaging({
     updateConvosAccessRequest({
       conversationId: null,
       error: null,
+      groupId: null,
       invite,
       messageId: null,
       retryMode: 'none',
@@ -1025,6 +1038,7 @@ export function useXmtpMessaging({
       updateConvosAccessRequest({
         conversationId: result.conversationId,
         error: null,
+        groupId: null,
         invite,
         messageId: result.messageId,
         retryMode: 'none',
@@ -1043,6 +1057,7 @@ export function useXmtpMessaging({
             'XMTP could not send the Convos access request.',
             'send',
           ),
+          groupId: null,
           invite,
           messageId: null,
           retryMode: 'fresh',
@@ -1052,9 +1067,12 @@ export function useXmtpMessaging({
     } finally {
       if (operationGenerationRef.current === generation) {
         requestingConvosRef.current = false
+        if (convosAccessRequestRef.current?.status === 'waiting') {
+          applyConvosAccessSnapshot(session.convosAccessSnapshot)
+        }
       }
     }
-  }, [updateConvosAccessRequest])
+  }, [applyConvosAccessSnapshot, updateConvosAccessRequest])
 
   const retryConvosAccess = useCallback(async () => {
     const session = sessionRef.current
@@ -1120,9 +1138,12 @@ export function useXmtpMessaging({
     } finally {
       if (operationGenerationRef.current === generation) {
         requestingConvosRef.current = false
+        if (convosAccessRequestRef.current?.status === 'waiting') {
+          applyConvosAccessSnapshot(session.convosAccessSnapshot)
+        }
       }
     }
-  }, [updateConvosAccessRequest])
+  }, [applyConvosAccessSnapshot, updateConvosAccessRequest])
 
   const resetConvosAccessRequest = useCallback(() => {
     const pending = convosAccessRequestRef.current
@@ -1130,6 +1151,9 @@ export function useXmtpMessaging({
       requestingConvosRef.current ||
       pending?.status !== 'failed'
     ) return
+    if (pending.messageId) {
+      sessionRef.current?.dismissConvosAccessRequest(pending.messageId)
+    }
     updateConvosAccessRequest(null)
   }, [updateConvosAccessRequest])
 
@@ -1607,6 +1631,28 @@ function preservePeerAddress(
   next: ActiveConversation,
   current: ActiveConversation | null,
 ): ActiveConversation {
+  if (next.kind === 'convos-group') return next
+  if (current?.kind !== 'dm') return next
   if (next.peerAddress || current?.id !== next.id || !current.peerAddress) return next
   return { ...next, peerAddress: current.peerAddress }
+}
+
+function activeFromSummary(summary: ConversationSummary): ActiveConversation {
+  if (summary.kind === 'convos-group') {
+    return {
+      creatorInboxId: summary.creatorInboxId,
+      emoji: summary.emoji,
+      id: summary.id,
+      kind: 'convos-group',
+      peerAddress: null,
+      peerInboxId: null,
+      title: summary.title,
+    }
+  }
+  return {
+    id: summary.id,
+    kind: 'dm',
+    peerAddress: summary.peerAddress,
+    peerInboxId: summary.peerInboxId,
+  }
 }

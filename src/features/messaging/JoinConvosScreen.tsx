@@ -1,13 +1,20 @@
 import {
   ArrowLeft,
   CheckCircle2,
+  Clock3,
   KeyRound,
   Link2,
   Send,
   WifiOff,
   XCircle,
 } from 'lucide-react'
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type RefObject,
+} from 'react'
 
 import { Button } from '../../components/Button'
 import { ConvosInviteError } from '../../lib/convos/error'
@@ -19,6 +26,7 @@ const MAX_INVITE_INPUT_CHARACTERS = 1_411_024
 type JoinConvosScreenProps = {
   offline?: boolean
   onBack: () => void
+  onOpenConversation: (conversationId: string) => void
   onRequestAccess: (invite: ParsedConvosInvite) => Promise<void>
   onReset: () => void
   onRetry: () => Promise<void>
@@ -28,6 +36,7 @@ type JoinConvosScreenProps = {
 export function JoinConvosScreen({
   offline = false,
   onBack,
+  onOpenConversation,
   onRequestAccess,
   onReset,
   onRetry,
@@ -38,18 +47,36 @@ export function JoinConvosScreen({
   const [error, setError] = useState<string | null>(null)
   const [parsing, setParsing] = useState(false)
   const mountedRef = useRef(true)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const previewHeadingRef = useRef<HTMLHeadingElement>(null)
+  const statusHeadingRef = useRef<HTMLHeadingElement>(null)
   const parsingRef = useRef(false)
   const parseRequestRef = useRef(0)
   const requestingRef = useRef(false)
+  const requestFocusKey = request
+    ? JSON.stringify([request.messageId, request.status, request.groupId])
+    : null
 
   useEffect(() => () => {
     mountedRef.current = false
     parseRequestRef.current += 1
   }, [])
 
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    if (preview && !request) previewHeadingRef.current?.focus()
+  }, [preview, request])
+
+  useEffect(() => {
+    if (requestFocusKey) statusHeadingRef.current?.focus()
+  }, [requestFocusKey])
+
   const parse = async (event: FormEvent) => {
     event.preventDefault()
-    if (offline || parsingRef.current || requestingRef.current) return
+    if (parsingRef.current || requestingRef.current) return
     const submittedInput = input
     const requestId = ++parseRequestRef.current
     parsingRef.current = true
@@ -94,6 +121,7 @@ export function JoinConvosScreen({
     setPreview(null)
     setInput('')
     setError(null)
+    window.requestAnimationFrame(() => inputRef.current?.focus())
   }
 
   const visibleInvite = request?.invite ?? preview
@@ -121,7 +149,7 @@ export function JoinConvosScreen({
       {offline ? (
         <div className="connection-banner connection-banner--offline" role="status">
           <WifiOff aria-hidden="true" />
-          <span>Reconnect before checking an invite or requesting access.</span>
+          <span>You can check an invite offline. Reconnect before requesting access.</span>
         </div>
       ) : null}
 
@@ -138,7 +166,7 @@ export function JoinConvosScreen({
                 autoCapitalize="none"
                 autoComplete="off"
                 autoCorrect="off"
-                disabled={offline || parsing}
+                disabled={parsing}
                 maxLength={MAX_INVITE_INPUT_CHARACTERS}
                 onChange={(event) => {
                   parseRequestRef.current += 1
@@ -146,6 +174,7 @@ export function JoinConvosScreen({
                   if (error) setError(null)
                 }}
                 placeholder="Paste a Convos invite"
+                ref={inputRef}
                 rows={4}
                 spellCheck={false}
                 value={input}
@@ -161,7 +190,7 @@ export function JoinConvosScreen({
             ) : null}
             <Button
               busy={parsing}
-              disabled={offline || !input.trim()}
+              disabled={!input.trim()}
               type="submit"
             >
               <KeyRound aria-hidden="true" />
@@ -169,7 +198,7 @@ export function JoinConvosScreen({
             </Button>
           </form>
         ) : (
-          <InvitePreview invite={visibleInvite} />
+          <InvitePreview headingRef={previewHeadingRef} invite={visibleInvite} />
         )}
 
         {preview && !request ? (
@@ -188,7 +217,12 @@ export function JoinConvosScreen({
         {request ? (
           <RequestStatus
             offline={offline}
-            onReset={onReset}
+            headingRef={statusHeadingRef}
+            onOpenConversation={onOpenConversation}
+            onReset={() => {
+              onReset()
+              startAnother()
+            }}
             onRetry={onRetry}
             request={request}
           />
@@ -198,7 +232,13 @@ export function JoinConvosScreen({
   )
 }
 
-function InvitePreview({ invite }: { invite: ParsedConvosInvite }) {
+function InvitePreview({
+  headingRef,
+  invite,
+}: {
+  headingRef: RefObject<HTMLHeadingElement | null>
+  invite: ParsedConvosInvite
+}) {
   const title = invite.name || 'Convos conversation'
   return (
     <section className="convos-invite-preview" aria-labelledby="convos-preview-title">
@@ -206,7 +246,7 @@ function InvitePreview({ invite }: { invite: ParsedConvosInvite }) {
         <span aria-hidden="true">{invite.emoji || '💬'}</span>
         <div>
           <p className="eyebrow">Invite preview</p>
-          <h2 id="convos-preview-title">{title}</h2>
+          <h2 id="convos-preview-title" ref={headingRef} tabIndex={-1}>{title}</h2>
         </div>
       </div>
       <p>
@@ -217,17 +257,24 @@ function InvitePreview({ invite }: { invite: ParsedConvosInvite }) {
 }
 
 function RequestStatus({
+  headingRef,
   offline,
+  onOpenConversation,
   onReset,
   onRetry,
   request,
 }: {
+  headingRef: RefObject<HTMLHeadingElement | null>
   offline: boolean
+  onOpenConversation: (conversationId: string) => void
   onReset: () => void
   onRetry: () => Promise<void>
   request: ConvosAccessRequest
 }) {
   const waiting = request.status === 'waiting'
+  const handled = request.status === 'handled'
+  const joined = request.status === 'joined'
+  const joinedGroupId = joined ? request.groupId : null
   const sending = request.status === 'sending'
   return (
     <section
@@ -235,13 +282,21 @@ function RequestStatus({
       aria-live="polite"
       aria-atomic="true"
     >
-      {request.status === 'failed'
-        ? <XCircle aria-hidden="true" />
-        : <CheckCircle2 aria-hidden="true" />}
+      {request.status === 'failed' ? (
+        <XCircle aria-hidden="true" />
+      ) : joined ? (
+        <CheckCircle2 aria-hidden="true" />
+      ) : (
+        <Clock3 aria-hidden="true" />
+      )}
       <div>
-        <h2>
+        <h2 ref={headingRef} tabIndex={-1}>
           {sending
             ? 'Sending access request…'
+            : joined
+              ? 'Conversation joined'
+              : handled
+                ? 'Request handled'
             : waiting
               ? 'Request sent'
               : 'Request needs attention'}
@@ -249,6 +304,10 @@ function RequestStatus({
         <p>
           {sending
             ? 'Keep this view open while XMTP publishes the request.'
+            : joined
+              ? 'This inbox received and verified the Convos group.'
+              : handled
+                ? 'The inviter responded to your request. Waiting for this device to receive the group…'
             : waiting
               ? "Request sent. Waiting for the inviter's device…"
               : request.error ?? 'XMTP could not confirm the request.'}
@@ -259,12 +318,19 @@ function RequestStatus({
           Send fresh request
         </Button>
       ) : null}
+      {joinedGroupId ? (
+        <Button onClick={() => onOpenConversation(joinedGroupId)}>
+          Open conversation
+        </Button>
+      ) : null}
       {request.status === 'failed' ? (
         <Button variant="ghost" onClick={onReset}>
           Use a different invite
         </Button>
       ) : null}
-      {waiting ? <small>You can leave this screen; the request remains in this inbox.</small> : null}
+      {waiting || handled ? (
+        <small>You can leave this screen; the request remains in this inbox.</small>
+      ) : null}
     </section>
   )
 }
