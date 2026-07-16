@@ -44,7 +44,7 @@ const errorMessages: Record<RecipientResolutionErrorCode, string> = {
   'invalid-response': 'ENS lookup returned an invalid response. Try again.',
   network: 'Could not reach ENS lookup. Check your connection and try again.',
   'rate-limited': 'Too many ENS lookups. Wait a moment and try again.',
-  unauthorized: 'Farcaster authorization expired. Try again.',
+  unauthorized: 'Farcaster authorization could not be verified. Try again.',
   unavailable: 'ENS lookup is temporarily unavailable. Try again.',
   unresolved: 'That ENS name does not resolve to an Ethereum address.',
 }

@@ -94,7 +94,7 @@ describe('useRecipientResolution', () => {
 
   it.each([
     [400, 'invalid-query', 'Enter a complete ENS name, like alice.eth.'],
-    [401, 'unauthorized', 'Farcaster authorization expired. Try again.'],
+    [401, 'unauthorized', 'Farcaster authorization could not be verified. Try again.'],
     [429, 'rate-limited', 'Too many ENS lookups. Wait a moment and try again.'],
     [503, 'unavailable', 'ENS lookup is temporarily unavailable. Try again.'],
   ] as const)('maps HTTP %s to a user-facing error', async (status, code, message) => {

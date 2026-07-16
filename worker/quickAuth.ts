@@ -21,12 +21,12 @@ export async function verifyQuickAuthToken(
   const { payload } = typeof key === 'function'
     ? await jwtVerify(token, key, options)
     : await jwtVerify(token, key, options)
-  const subject = payload.sub
-  if (typeof subject !== 'string' || !/^[1-9]\d*$/.test(subject)) {
-    throw new Error('Quick Auth token has no valid FID subject.')
-  }
-
-  const fid = Number(subject)
+  const subject: unknown = payload.sub
+  const fid = typeof subject === 'number'
+    ? subject
+    : typeof subject === 'string' && /^[1-9]\d*$/.test(subject)
+      ? Number(subject)
+      : Number.NaN
   if (!Number.isSafeInteger(fid) || fid <= 0) {
     throw new Error('Quick Auth token has no valid FID subject.')
   }
