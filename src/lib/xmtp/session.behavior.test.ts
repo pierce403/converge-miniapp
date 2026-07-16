@@ -488,6 +488,20 @@ describe('XmtpMessagingSession behavior', () => {
     expect(resumedClient.sendSyncRequest).not.toHaveBeenCalled()
   })
 
+  it('closes before registration when an explicit inbox target changed', async () => {
+    const fakeClient = client(dm())
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    await expect(XmtpMessagingSession.create(
+      signer,
+      address,
+      'expected-inbox',
+    )).rejects.toMatchObject({ name: 'XmtpInboxTargetMismatchError' })
+
+    expect(fakeClient.register).not.toHaveBeenCalled()
+    expect(fakeClient.close).toHaveBeenCalledOnce()
+  })
+
   it('classifies ENS addresses without mutating either XMTP inbox', async () => {
     const fakeClient = client(dm())
     sdkMocks.create.mockResolvedValue(fakeClient)
@@ -507,6 +521,18 @@ describe('XmtpMessagingSession behavior', () => {
     await expect(session.inspectIdentityRelationship(candidate)).resolves.toBe('same-inbox')
     await expect(session.inspectIdentityRelationship(candidate)).resolves.toBe('different-inbox')
     await expect(session.inspectIdentityRelationship(candidate)).resolves.toBe('no-inbox')
+  })
+
+  it('returns the exact existing inbox ID for a session-switch preflight', async () => {
+    const fakeClient = client(dm())
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+    const candidate = '0x1111111111111111111111111111111111111111'
+    fakeClient.fetchInboxIdByIdentifier.mockResolvedValueOnce('target-inbox')
+
+    await expect(session.findInboxId(candidate)).resolves.toBe('target-inbox')
+    await expect(session.findInboxId(address)).resolves.toBe('own-inbox')
+    expect(fakeClient.fetchInboxIdByIdentifier).toHaveBeenCalledOnce()
   })
 
   it('checks recipient reachability without creating a DM and rechecks on creation', async () => {

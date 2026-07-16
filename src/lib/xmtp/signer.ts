@@ -42,6 +42,28 @@ export type HostWalletConnection = {
   signer: Signer
 }
 
+export class HostWalletTargetUnavailableError extends Error {
+  readonly code = 'host-wallet-target-unavailable'
+  readonly targetAddress: Address
+
+  constructor(targetAddress: Address) {
+    super('The Farcaster wallet does not expose the requested Ethereum account.')
+    this.name = 'HostWalletTargetUnavailableError'
+    this.targetAddress = targetAddress
+  }
+}
+
+export class HostWalletSourceMismatchError extends Error {
+  readonly code = 'host-wallet-source-mismatch'
+  readonly sourceAddress: Address
+
+  constructor(sourceAddress: Address) {
+    super('The Farcaster wallet preferred account does not match the saved inbox source.')
+    this.name = 'HostWalletSourceMismatchError'
+    this.sourceAddress = sourceAddress
+  }
+}
+
 function asHostWalletProvider(value: unknown): HostWalletProvider {
   if (
     typeof value !== 'object' ||
@@ -59,12 +81,46 @@ function asHostWalletProvider(value: unknown): HostWalletProvider {
   return value as HostWalletProvider
 }
 
-function readAddress(accounts: unknown): Address {
+function readAddress(accounts: unknown, targetAddress?: Address): Address {
+  if (!Array.isArray(accounts)) {
+    throw new Error('The Farcaster wallet did not return an Ethereum account.')
+  }
+
+  const selected = targetAddress
+    ? accounts.find((account) => (
+        typeof account === 'string' &&
+        account.toLowerCase() === targetAddress.toLowerCase()
+      ))
+    : accounts[0]
+
+  if (targetAddress && selected === undefined) {
+    throw new HostWalletTargetUnavailableError(targetAddress)
+  }
+  if (typeof selected !== 'string') {
+    throw new Error('The Farcaster wallet did not return an Ethereum account.')
+  }
+
+  try {
+    return getAddress(selected)
+  } catch {
+    throw new Error('The Farcaster wallet returned an invalid Ethereum account.')
+  }
+}
+
+function requirePreferredAddress(accounts: unknown, sourceAddress: Address): void {
   if (!Array.isArray(accounts) || typeof accounts[0] !== 'string') {
     throw new Error('The Farcaster wallet did not return an Ethereum account.')
   }
 
-  return getAddress(accounts[0])
+  let preferredAddress: Address
+  try {
+    preferredAddress = getAddress(accounts[0])
+  } catch {
+    throw new Error('The Farcaster wallet returned an invalid Ethereum account.')
+  }
+  if (preferredAddress.toLowerCase() !== sourceAddress.toLowerCase()) {
+    throw new HostWalletSourceMismatchError(sourceAddress)
+  }
 }
 
 function readChainId(value: unknown): bigint {
@@ -92,7 +148,27 @@ function hasContractCode(value: unknown): boolean {
  * Connects the Farcaster host wallet and creates the matching XMTP v7 signer.
  * This deliberately has no generated-key fallback.
  */
-export async function connectHostWallet(): Promise<HostWalletConnection> {
+export async function connectHostWallet(
+  targetAddress?: Address,
+  expectedSourceAddress?: Address,
+): Promise<HostWalletConnection> {
+  let requestedAddress: Address | undefined
+  let sourceAddress: Address | undefined
+  if (targetAddress) {
+    try {
+      requestedAddress = getAddress(targetAddress)
+    } catch {
+      throw new Error('The requested Ethereum account is invalid.')
+    }
+  }
+  if (expectedSourceAddress) {
+    try {
+      sourceAddress = getAddress(expectedSourceAddress)
+    } catch {
+      throw new Error('The expected Farcaster source account is invalid.')
+    }
+  }
+
   const { sdk } = await import('@farcaster/miniapp-sdk')
   const hostProvider = await sdk.wallet.getEthereumProvider()
 
@@ -101,8 +177,11 @@ export async function connectHostWallet(): Promise<HostWalletConnection> {
   }
 
   const provider = asHostWalletProvider(hostProvider)
+  const accounts = await provider.request({ method: 'eth_requestAccounts' })
+  if (sourceAddress) requirePreferredAddress(accounts, sourceAddress)
   const address = readAddress(
-    await provider.request({ method: 'eth_requestAccounts' }),
+    accounts,
+    requestedAddress,
   )
   const chainId = readChainId(
     await provider.request({ method: 'eth_chainId' }),

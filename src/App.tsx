@@ -36,6 +36,7 @@ export default function App() {
         <MessagingApp
           canUseBack={host.capabilities.includes('back')}
           canUseWallet={host.capabilities.includes('wallet.getEthereumProvider')}
+          key={host.context.user.fid}
           user={host.context.user}
         />
       ) : null}

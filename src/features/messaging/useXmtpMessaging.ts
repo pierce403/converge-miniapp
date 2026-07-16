@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { HostWalletConnection } from '../../lib/xmtp/signer'
+import type { InboxTarget } from '../identity/inboxTarget'
 import type { XmtpLease } from '../../lib/xmtp/lease'
 import type {
   XmtpIdentityRelationship,
@@ -35,6 +36,9 @@ export type ConnectionPhase =
   | 'inbox-update-limit'
   | 'configuration-error'
   | 'restart-required'
+  | 'target-mismatch'
+  | 'target-source-mismatch'
+  | 'target-unavailable'
   | 'error'
 
 export type MessagingView = 'inbox' | 'new-dm' | 'conversation'
@@ -57,9 +61,18 @@ const initialConnection: ConnectionState = {
 
 type UseXmtpMessagingOptions = {
   autoConnect?: boolean
+  inboxTarget?: InboxTarget | null
 }
 
-export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOptions = {}) {
+export type InboxSwitchPreflight = {
+  address: `0x${string}`
+  inboxId: string
+}
+
+export function useXmtpMessaging({
+  autoConnect = false,
+  inboxTarget = null,
+}: UseXmtpMessagingOptions = {}) {
   const mountedRef = useRef(true)
   const connectionAttemptRef = useRef(0)
   const cleanupPromiseRef = useRef<Promise<void> | null>(null)
@@ -74,6 +87,7 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
   const sessionRef = useRef<XmtpMessagingSession | null>(null)
   const pendingSessionFactoryRef = useRef<PendingSessionFactory | null>(null)
   const leaseRef = useRef<XmtpLease | null>(null)
+  const poisonedLeaseRef = useRef<XmtpLease | null>(null)
   const walletRef = useRef<HostWalletConnection | null>(null)
   const validateWalletRef = useRef<(() => Promise<boolean>) | null>(null)
   const removeWalletListenerRef = useRef<(() => void) | null>(null)
@@ -170,9 +184,22 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
         try {
           const pendingSession = await pendingFactory.promise
           if (pendingSession !== session) await pendingSession.close()
-        } catch {
-          // A failed factory either self-closed after registration or requires
-          // the document restart state handled by the connect attempt.
+        } catch (error) {
+          if (isUnsafeInitializationFailure(error)) {
+            // Client.create() can leave an inaccessible Worker alive when it
+            // rejects. Keep the OPFS lease until a document reload terminates
+            // that Worker; never permit a second client in this document.
+            if (lease) poisonedLeaseRef.current = lease
+            if (mountedRef.current) {
+              setConnection({
+                error: 'XMTP setup stopped while the wallet connection changed.',
+                phase: 'restart-required',
+              })
+            }
+            return
+          }
+          // Registration and post-create validation failures close the exposed
+          // client before rejecting, so they do not poison this document.
         }
       }
 
@@ -287,6 +314,13 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
 
   const connect = useCallback(async () => {
     if (connectingRef.current || sessionRef.current) return
+    if (poisonedLeaseRef.current) {
+      setConnection({
+        error: 'XMTP setup stopped before the client could be closed safely.',
+        phase: 'restart-required',
+      })
+      return
+    }
     const attempt = ++connectionAttemptRef.current
     const isCurrent = () => mountedRef.current && connectionAttemptRef.current === attempt
 
@@ -337,7 +371,9 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
 
       setConnection({ error: null, phase: 'wallet' })
       failureStage = 'wallet'
-      const wallet = await connectHostWallet()
+      const wallet = inboxTarget
+        ? await connectHostWallet(inboxTarget.address, inboxTarget.sourceAddress)
+        : await connectHostWallet()
       if (!isCurrent()) {
         await lease.release()
         return
@@ -352,7 +388,12 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
         if (walletInvalidated || walletRef.current !== wallet) return
         walletInvalidated = true
         activeRef.current = null
-        setConnection({ error: message, phase: 'error' })
+        setConnection({
+          error: pendingSessionFactoryRef.current
+            ? 'The wallet connection changed while XMTP was opening. Reload before reconnecting so local message storage stays safe.'
+            : message,
+          phase: pendingSessionFactoryRef.current ? 'restart-required' : 'error',
+        })
         setAddress(null)
         setWalletKind(null)
         setEnvironment('')
@@ -366,9 +407,13 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
         updateNotice(null)
         void releaseResources()
       }
+      const expectedSourceAddress = inboxTarget?.sourceAddress
       const onAccountsChanged = (accounts: readonly string[]) => {
-        const next = accounts[0]?.toLowerCase()
-        if (!next || next !== wallet.address.toLowerCase()) {
+        if (!walletAccountIsAvailable(
+          accounts,
+          wallet.address,
+          expectedSourceAddress,
+        )) {
           invalidateWallet(
             'Your Farcaster wallet account changed. Reconnect to open the matching XMTP inbox.',
           )
@@ -409,10 +454,11 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
           return true
         }
 
-        const account = Array.isArray(accounts) && typeof accounts[0] === 'string'
-          ? accounts[0].toLowerCase()
-          : null
-        if (account !== wallet.address.toLowerCase()) {
+        if (!walletAccountIsAvailable(
+          accounts,
+          wallet.address,
+          expectedSourceAddress,
+        )) {
           invalidateWallet(
             'Your Farcaster wallet account changed while the app was away. Reconnect to open the matching XMTP inbox.',
           )
@@ -444,7 +490,11 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
       setConnection({ error: null, phase: 'xmtp' })
       failureStage = 'initialize'
       let session: XmtpMessagingSession
-      const sessionPromise = XmtpMessagingSession.create(wallet.signer, wallet.address)
+      const sessionPromise = XmtpMessagingSession.create(
+        wallet.signer,
+        wallet.address,
+        inboxTarget?.inboxId,
+      )
       const pendingFactory: PendingSessionFactory = {
         cancelled: false,
         cleanup: null,
@@ -555,6 +605,9 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
     } catch (error) {
       const shouldReport = isCurrent()
       if (clientCreationFailed) {
+        const unsafeLease = leaseRef.current
+        leaseRef.current = null
+        if (unsafeLease) poisonedLeaseRef.current = unsafeLease
         removeWalletListenerRef.current?.()
         removeWalletListenerRef.current = null
         walletRef.current = null
@@ -573,6 +626,14 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
 
       await releaseResources()
       if (shouldReport && mountedRef.current) {
+        const targetFailure = inboxTarget ? inboxTargetFailure(error) : null
+        if (targetFailure) {
+          setConnection({
+            error: inboxTargetFailureMessage(targetFailure),
+            phase: targetFailure,
+          })
+          return
+        }
         const failure = classifyXmtpFailure(error, failureStage)
         setConnection({
           error: failure.kind === 'unknown'
@@ -584,7 +645,44 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
     } finally {
       if (connectionAttemptRef.current === attempt) connectingRef.current = false
     }
-  }, [releaseResources, startMessageStream, updateNotice])
+  }, [inboxTarget, releaseResources, startMessageStream, updateNotice])
+
+  const prepareInboxSwitch = useCallback(async (
+    candidateAddress: `0x${string}`,
+  ): Promise<InboxSwitchPreflight> => {
+    const session = sessionRef.current
+    if (!session || connection.phase !== 'ready') {
+      throw new Error('Open the current XMTP inbox before switching.')
+    }
+    if (candidateAddress.toLowerCase() === session.address.toLowerCase()) {
+      throw new Error('That address already opens the current inbox.')
+    }
+
+    const generation = operationGenerationRef.current
+    const targetInboxId = await session.findInboxId(candidateAddress)
+    if (
+      sessionRef.current !== session ||
+      operationGenerationRef.current !== generation
+    ) throw new Error('The current inbox changed during the safety check.')
+    if (!targetInboxId) {
+      throw new Error('That ENS address does not have an existing XMTP inbox to join.')
+    }
+    if (targetInboxId === session.inboxId) {
+      throw new Error('That ENS address is already part of the current XMTP inbox.')
+    }
+
+    const { connectHostWallet } = await import('../../lib/xmtp/signer')
+    const targetWallet = await connectHostWallet(candidateAddress, session.address)
+    if (
+      sessionRef.current !== session ||
+      operationGenerationRef.current !== generation
+    ) throw new Error('The current inbox changed during the wallet check.')
+    if (targetWallet.address.toLowerCase() !== candidateAddress.toLowerCase()) {
+      throw new Error('The Farcaster wallet returned a different Ethereum account.')
+    }
+
+    return { address: targetWallet.address, inboxId: targetInboxId }
+  }, [connection.phase])
 
   const inspectIdentityRelationship = useCallback(async (
     candidateAddress: `0x${string}`,
@@ -1045,6 +1143,7 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
     loadingOlder,
     hasOlderMessages,
     inspectIdentityRelationship,
+    prepareInboxSwitch,
     loadOlderMessages,
     messages,
     notice,
@@ -1062,6 +1161,59 @@ export function useXmtpMessaging({ autoConnect = false }: UseXmtpMessagingOption
     view,
     walletKind,
   }
+}
+
+function walletAccountIsAvailable(
+  accounts: unknown,
+  address: `0x${string}`,
+  expectedSourceAddress?: `0x${string}`,
+): boolean {
+  if (!Array.isArray(accounts)) return false
+  if (expectedSourceAddress && (
+    typeof accounts[0] !== 'string' ||
+    accounts[0].toLowerCase() !== expectedSourceAddress.toLowerCase()
+  )) return false
+  const candidates = expectedSourceAddress ? accounts : accounts.slice(0, 1)
+  return candidates.some((account: unknown) => (
+    typeof account === 'string' && account.toLowerCase() === address.toLowerCase()
+  ))
+}
+
+function inboxTargetFailure(
+  error: unknown,
+): 'target-mismatch' | 'target-source-mismatch' | 'target-unavailable' | null {
+  if (!error || typeof error !== 'object') return null
+  if ('code' in error && error.code === 'host-wallet-target-unavailable') {
+    return 'target-unavailable'
+  }
+  if ('name' in error && error.name === 'XmtpInboxTargetMismatchError') {
+    return 'target-mismatch'
+  }
+  if ('code' in error && error.code === 'host-wallet-source-mismatch') {
+    return 'target-source-mismatch'
+  }
+  return null
+}
+
+function isUnsafeInitializationFailure(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === 'object' &&
+    'name' in error &&
+    error.name === 'XmtpClientInitializationError',
+  )
+}
+
+function inboxTargetFailureMessage(
+  failure: 'target-mismatch' | 'target-source-mismatch' | 'target-unavailable',
+): string {
+  if (failure === 'target-unavailable') {
+    return 'Farcaster does not expose the exact saved ENS address as a signing wallet.'
+  }
+  if (failure === 'target-source-mismatch') {
+    return 'The saved inbox selection does not match the preferred Farcaster account.'
+  }
+  return 'XMTP opened a different inbox than the verified target.'
 }
 
 function readableMessagingError(

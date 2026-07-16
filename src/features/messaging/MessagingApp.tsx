@@ -9,13 +9,23 @@ import { Button } from '../../components/Button'
 import { StatePanel } from '../../components/StatePanel'
 import { useMiniAppBack } from '../../app/useMiniAppBack'
 import {
+  allowAutomaticEnsDiscovery,
   useEnsIdentity,
   type EnsCandidate,
+  type EnsIdentityState,
   type EnsPreference,
 } from '../identity/useEnsIdentity'
+import {
+  clearInboxTarget,
+  readInboxTarget,
+  writeInboxTarget,
+  type InboxTarget,
+} from '../identity/inboxTarget'
 import { useParticipantIdentities } from '../identity/useParticipantIdentities'
 import { useRecipientResolution } from '../identity/useRecipientResolution'
 import { ConversationScreen } from './ConversationScreen'
+import { EnsInboxSwitchDialog } from './EnsInboxSwitchDialog'
+import { shortIdentity } from './format'
 import { InboxScreen } from './InboxScreen'
 import { NewDmScreen } from './NewDmScreen'
 import { useXmtpMessaging, type ConnectionPhase } from './useXmtpMessaging'
@@ -23,11 +33,24 @@ import { useXmtpMessaging, type ConnectionPhase } from './useXmtpMessaging'
 type MessagingAppProps = {
   canUseBack: boolean
   canUseWallet: boolean
+  reloadDocument?: () => void
   user: {
     displayName?: string
     fid: number
     pfpUrl?: string
     username?: string
+  }
+}
+
+const reloadCurrentDocument = () => window.location.reload()
+
+class EnsInboxSwitchFailure extends Error {
+  readonly code: string
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'EnsInboxSwitchFailure'
+    this.code = code
   }
 }
 
@@ -40,6 +63,24 @@ function storageWarningWasDismissed(): boolean {
   } catch {
     return false
   }
+}
+
+function freshTargetName(
+  target: InboxTarget | null,
+  identity: EnsIdentityState,
+  activeAddress: `0x${string}`,
+): string | undefined {
+  if (
+    !target ||
+    target.address.toLowerCase() !== activeAddress.toLowerCase() ||
+    identity.status !== 'ready' ||
+    !identity.candidate ||
+    identity.candidate.name !== target.name ||
+    identity.candidate.address.toLowerCase() !== target.address.toLowerCase() ||
+    (identity.relationship !== 'active-address' &&
+      identity.relationship !== 'same-inbox')
+  ) return undefined
+  return target.name
 }
 
 const connectionCopy: Partial<Record<ConnectionPhase, {
@@ -79,12 +120,33 @@ const connectionCopy: Partial<Record<ConnectionPhase, {
   },
 }
 
-export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppProps) {
+export function MessagingApp({
+  canUseBack,
+  canUseWallet,
+  reloadDocument = reloadCurrentDocument,
+  user,
+}: MessagingAppProps) {
   const [ensPromptSuppressed, setEnsPromptSuppressed] = useState(false)
+  const [ensSwitchCandidate, setEnsSwitchCandidate] = useState<EnsCandidate | null>(null)
+  const [ignoreInboxSelection, setIgnoreInboxSelection] = useState(false)
   const [storageWarningDismissed, setStorageWarningDismissed] = useState(
     storageWarningWasDismissed,
   )
-  const messaging = useXmtpMessaging({ autoConnect: canUseWallet })
+  const [targetRecoveryError, setTargetRecoveryError] = useState<string | null>(null)
+  const switchReturnFocusRef = useRef<HTMLElement | null>(null)
+  const switchCommittedRef = useRef(false)
+  const inboxTargetState = useMemo(() => readInboxTarget(user.fid), [user.fid])
+  const selectionBlocked = !ignoreInboxSelection && (
+    inboxTargetState.status === 'invalid' ||
+    inboxTargetState.status === 'unavailable'
+  )
+  const inboxTarget = !ignoreInboxSelection && inboxTargetState.status === 'valid'
+    ? inboxTargetState.target
+    : null
+  const messaging = useXmtpMessaging({
+    autoConnect: canUseWallet && !selectionBlocked,
+    inboxTarget,
+  })
   const recipientResolution = useRecipientResolution()
   const ensIdentity = useEnsIdentity({
     enabled: messaging.connection.phase === 'ready' && messaging.address !== null,
@@ -105,11 +167,132 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
     resetRecipientResolution()
     messagingBackToInbox()
   }, [messagingBackToInbox, resetRecipientResolution])
+  const closeEnsSwitch = useCallback(() => {
+    if (switchCommittedRef.current) return
+    setEnsSwitchCandidate(null)
+    window.requestAnimationFrame(() => switchReturnFocusRef.current?.focus())
+  }, [])
+  const reviewEnsSwitch = useCallback((returnFocus: HTMLElement | null) => {
+    if (
+      !ensIdentity.candidate ||
+      ensIdentity.relationship !== 'different-inbox'
+    ) return
+    switchReturnFocusRef.current = returnFocus
+    switchCommittedRef.current = false
+    setEnsSwitchCandidate({ ...ensIdentity.candidate })
+  }, [ensIdentity.candidate, ensIdentity.relationship])
+  const confirmEnsSwitch = useCallback(async (
+    candidate: EnsCandidate,
+    signal: AbortSignal,
+  ) => {
+    const sourceAddress = messaging.address
+    if (!sourceAddress) {
+      throw new EnsInboxSwitchFailure(
+        'ens-switch-preflight-failed',
+        'Converge Mini could not verify the current Farcaster inbox. Your current inbox is unchanged.',
+      )
+    }
+
+    const fresh = await ensIdentity.refresh()
+    if (signal.aborted) return
+    if (
+      !fresh ||
+      fresh.status !== 'ready' ||
+      fresh.relationship !== 'different-inbox' ||
+      !fresh.candidate ||
+      fresh.candidate.name !== candidate.name ||
+      fresh.candidate.address.toLowerCase() !== candidate.address.toLowerCase()
+    ) {
+      throw new EnsInboxSwitchFailure(
+        'ens-switch-candidate-changed',
+        'That ENS name or XMTP inbox changed during the safety check. Your current inbox is unchanged; review the updated identity before trying again.',
+      )
+    }
+
+    let preflight: Awaited<ReturnType<typeof messaging.prepareInboxSwitch>>
+    try {
+      preflight = await messaging.prepareInboxSwitch(candidate.address)
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'host-wallet-target-unavailable'
+      ) throw error
+      throw new EnsInboxSwitchFailure(
+        'ens-switch-preflight-failed',
+        'Converge Mini could not verify the exact ENS inbox and signer. Your current inbox is unchanged.',
+      )
+    }
+    if (signal.aborted) return
+    if (preflight.address.toLowerCase() !== candidate.address.toLowerCase()) {
+      throw new EnsInboxSwitchFailure(
+        'ens-switch-preflight-failed',
+        'Farcaster returned a different signing address. Your current inbox is unchanged.',
+      )
+    }
+
+    if (!writeInboxTarget(user.fid, {
+      address: preflight.address,
+      inboxId: preflight.inboxId,
+      name: candidate.name,
+      sourceAddress,
+    })) {
+      throw new EnsInboxSwitchFailure(
+        'ens-switch-storage-failed',
+        'This browser could not remember the verified inbox safely. Your current inbox is unchanged.',
+      )
+    }
+    allowAutomaticEnsDiscovery(user.fid)
+  }, [ensIdentity, messaging, user.fid])
+  const useFarcasterInbox = useCallback(() => {
+    setTargetRecoveryError(null)
+    if (!clearInboxTarget(user.fid)) {
+      if (selectionBlocked) {
+        // The user explicitly chose the host-preferred inbox. If Web Storage
+        // cannot be mutated, honor that choice for this mounted session only.
+        setIgnoreInboxSelection(true)
+        return
+      }
+      setTargetRecoveryError(
+        'The saved inbox could not be cleared from this browser. No inbox was changed.',
+      )
+      return
+    }
+    reloadDocument()
+  }, [reloadDocument, selectionBlocked, user.fid])
+  const describeRecovery = useCallback((description: string) => (
+    targetRecoveryError ? `${description} ${targetRecoveryError}` : description
+  ), [targetRecoveryError])
+  const handleHostBack = ensSwitchCandidate ? closeEnsSwitch : backToInbox
   useMiniAppBack(
     canUseBack,
-    messaging.connection.phase === 'ready' && messaging.view !== 'inbox',
-    backToInbox,
+    messaging.connection.phase === 'ready' && (
+      ensSwitchCandidate !== null || messaging.view !== 'inbox'
+    ),
+    handleHostBack,
   )
+
+  if (selectionBlocked) {
+    return (
+      <StatePanel
+        actions={(
+          <>
+            <Button onClick={reloadDocument}>Check storage again</Button>
+            <Button variant="ghost" onClick={useFarcasterInbox}>
+              Use Farcaster inbox
+            </Button>
+          </>
+        )}
+        description={inboxTargetState.status === 'invalid'
+          ? 'A saved inbox selection is damaged or from an unsupported version. Converge Mini will not guess which inbox to open. Clear it only if you want the account Farcaster currently provides.'
+          : 'Converge Mini cannot read the saved inbox selection in this browser. It will not guess which inbox to open. You can retry or explicitly use the account Farcaster currently provides for this session.'}
+        eyebrow="Inbox selection recovery"
+        icon={<AlertTriangle aria-hidden="true" />}
+        title="Choose how to recover safely"
+      />
+    )
+  }
 
   if (messaging.connection.phase === 'idle') {
     if (!canUseWallet) {
@@ -128,7 +311,7 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
         busy
         description="Converge Mini is preparing the XMTP inbox for the account supplied by Farcaster. Approve only the XMTP signature request shown by your host; it is not a transaction."
         eyebrow="Private inbox"
-        title="Opening your inbox"
+        title={inboxTarget ? 'Opening saved ENS inbox' : 'Opening your inbox'}
       />
     )
   }
@@ -160,8 +343,17 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
   if (messaging.connection.phase === 'restart-required') {
     return (
       <StatePanel
-        actions={<Button onClick={() => window.location.reload()}>Reload Mini App</Button>}
-        description={`${messaging.connection.error ?? 'XMTP setup stopped.'} Reload this Mini App before trying again so the local message database stays safe.`}
+        actions={(
+          <>
+            <Button onClick={reloadDocument}>Reload Mini App</Button>
+            {inboxTarget ? (
+              <Button variant="ghost" onClick={useFarcasterInbox}>
+                Use Farcaster inbox
+              </Button>
+            ) : null}
+          </>
+        )}
+        description={describeRecovery(`${messaging.connection.error ?? 'XMTP setup stopped.'} Reload this Mini App before trying again so the local message database stays safe.`)}
         eyebrow="Safe restart needed"
         icon={<AlertTriangle aria-hidden="true" />}
         title="Reload before reconnecting"
@@ -185,10 +377,15 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
       <StatePanel
         actions={(
           <>
-            <Button onClick={() => window.location.reload()}>Reload Mini App</Button>
+            <Button onClick={reloadDocument}>Reload Mini App</Button>
+            {inboxTarget ? (
+              <Button variant="ghost" onClick={useFarcasterInbox}>
+                Use Farcaster inbox
+              </Button>
+            ) : null}
           </>
         )}
-        description={messaging.connection.error ?? 'The local XMTP database could not open safely.'}
+        description={describeRecovery(messaging.connection.error ?? 'The local XMTP database could not open safely.')}
         eyebrow="Local message storage"
         icon={<AlertTriangle aria-hidden="true" />}
         title="Browser storage needs attention"
@@ -199,7 +396,10 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
   if (messaging.connection.phase === 'installation-limit') {
     return (
       <StatePanel
-        description={messaging.connection.error ?? 'Revoke an old installation in another XMTP client before returning.'}
+        actions={inboxTarget ? (
+          <Button variant="ghost" onClick={useFarcasterInbox}>Use Farcaster inbox</Button>
+        ) : undefined}
+        description={describeRecovery(messaging.connection.error ?? 'Revoke an old installation in another XMTP client before returning.')}
         eyebrow="XMTP installation limit"
         icon={<AlertTriangle aria-hidden="true" />}
         title="This inbox has no installation slot"
@@ -210,7 +410,10 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
   if (messaging.connection.phase === 'inbox-update-limit') {
     return (
       <StatePanel
-        description={messaging.connection.error ?? 'This inbox cannot accept more identity updates.'}
+        actions={inboxTarget ? (
+          <Button variant="ghost" onClick={useFarcasterInbox}>Use Farcaster inbox</Button>
+        ) : undefined}
+        description={describeRecovery(messaging.connection.error ?? 'This inbox cannot accept more identity updates.')}
         eyebrow="Permanent XMTP inbox limit"
         icon={<AlertTriangle aria-hidden="true" />}
         title="This inbox cannot add another installation"
@@ -221,10 +424,56 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
   if (messaging.connection.phase === 'configuration-error') {
     return (
       <StatePanel
-        description={messaging.connection.error ?? 'Converge Mini is not configured for this XMTP network yet.'}
+        actions={inboxTarget ? (
+          <Button variant="ghost" onClick={useFarcasterInbox}>Use Farcaster inbox</Button>
+        ) : undefined}
+        description={describeRecovery(messaging.connection.error ?? 'Converge Mini is not configured for this XMTP network yet.')}
         eyebrow="XMTP network configuration"
         icon={<AlertTriangle aria-hidden="true" />}
         title="Messaging is not available yet"
+      />
+    )
+  }
+
+  if (messaging.connection.phase === 'target-unavailable' && inboxTarget) {
+    return (
+      <StatePanel
+        actions={(
+          <>
+            <Button onClick={messaging.connect}>Check again</Button>
+            <Button variant="ghost" onClick={useFarcasterInbox}>
+              Use Farcaster inbox
+            </Button>
+          </>
+        )}
+        description={describeRecovery(`The saved ENS target is ${inboxTarget.address}, but Farcaster is not exposing that exact address as a signing wallet. No XMTP signature was requested and no other inbox opened.`)}
+        eyebrow="Exact signer unavailable"
+        icon={<AlertTriangle aria-hidden="true" />}
+        title="The saved ENS address can’t sign in this Farcaster client"
+      />
+    )
+  }
+
+  if (messaging.connection.phase === 'target-mismatch' && inboxTarget) {
+    return (
+      <StatePanel
+        actions={<Button variant="ghost" onClick={useFarcasterInbox}>Use Farcaster inbox</Button>}
+        description={describeRecovery('XMTP no longer opens the inbox verified for the saved ENS address. Converge Mini closed the unexpected client without rendering its messages.')}
+        eyebrow="Saved inbox changed"
+        icon={<AlertTriangle aria-hidden="true" />}
+        title="The saved ENS inbox did not open safely"
+      />
+    )
+  }
+
+  if (messaging.connection.phase === 'target-source-mismatch' && inboxTarget) {
+    return (
+      <StatePanel
+        actions={<Button variant="ghost" onClick={useFarcasterInbox}>Use current Farcaster inbox</Button>}
+        description={describeRecovery('The saved ENS inbox selection was made from a different preferred Farcaster account. Converge Mini did not request an XMTP signature or open either saved inbox.')}
+        eyebrow="Farcaster account changed"
+        icon={<AlertTriangle aria-hidden="true" />}
+        title="Saved inbox selection does not match"
       />
     )
   }
@@ -233,9 +482,16 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
     return (
       <StatePanel
         actions={(
-          <Button onClick={messaging.connect}>Try again</Button>
+          <>
+            <Button onClick={messaging.connect}>Try again</Button>
+            {inboxTarget ? (
+              <Button variant="ghost" onClick={useFarcasterInbox}>
+                Use Farcaster inbox
+              </Button>
+            ) : null}
+          </>
         )}
-        description={messaging.connection.error ?? 'Close this view and try opening the inbox again.'}
+        description={describeRecovery(messaging.connection.error ?? 'Close this view and try opening the inbox again.')}
         eyebrow="Connection stopped"
         icon={<AlertTriangle aria-hidden="true" />}
         title="The inbox did not open"
@@ -273,7 +529,12 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
       // storage is unavailable.
     }
   }
-  const canOfferEns = ensIdentity.candidate &&
+  const verifiedTargetName = freshTargetName(
+    inboxTarget,
+    ensIdentity,
+    messaging.address,
+  )
+  const canOfferEns = !inboxTarget && ensIdentity.candidate &&
     ensIdentity.preference === null &&
     !ensPromptSuppressed &&
     (ensIdentity.relationship === 'active-address' ||
@@ -281,6 +542,17 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
 
   return (
     <div className={`messaging-app ${messaging.notice ? 'messaging-app--notice' : ''}`}>
+      {ensSwitchCandidate ? (
+        <EnsInboxSwitchDialog
+          candidate={ensSwitchCandidate}
+          onCancel={closeEnsSwitch}
+          onConfirm={confirmEnsSwitch}
+          onRestarting={() => {
+            switchCommittedRef.current = true
+            reloadDocument()
+          }}
+        />
+      ) : null}
       {canOfferEns && ensIdentity.candidate && messaging.view === 'inbox' ? (
         <EnsIdentityOffer
           candidate={ensIdentity.candidate}
@@ -312,9 +584,13 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
 
       {messaging.view === 'inbox' ? (
         <InboxScreen
+          activeInboxName={verifiedTargetName ?? (
+            inboxTarget ? shortIdentity(messaging.address) : undefined
+          )}
           address={messaging.address}
           conversations={messaging.conversations}
           ensIdentity={ensIdentity}
+          ensTargetNameVerified={verifiedTargetName !== undefined}
           environment={`${messaging.environment} · ${messaging.walletKind ?? 'wallet'}`}
           onClearEnsPreference={() => void clearEnsPreference()}
           onNewDm={() => {
@@ -324,10 +600,13 @@ export function MessagingApp({ canUseBack, canUseWallet, user }: MessagingAppPro
           onOpen={messaging.openConversation}
           onRefresh={messaging.refresh}
           onRefreshEns={ensIdentity.refresh}
+          onReviewEnsSwitch={inboxTarget ? undefined : reviewEnsSwitch}
           onRetryLiveUpdates={messaging.retryLiveUpdates}
+          onUseFarcasterInbox={inboxTarget ? useFarcasterInbox : undefined}
           onUseEns={() => void setEnsPreference('accepted')}
           participantIdentityFor={participantIdentities.identityFor}
           profile={user}
+          recoveryError={targetRecoveryError}
           refreshing={messaging.refreshing}
           streamHealth={messaging.streamHealth}
         />

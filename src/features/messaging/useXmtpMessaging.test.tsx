@@ -7,6 +7,7 @@ import type {
   ConversationSummary,
   MessageItem,
 } from './types'
+import { XmtpClientInitializationError } from '../../lib/xmtp/session'
 import { useXmtpMessaging } from './useXmtpMessaging'
 
 const mocks = vi.hoisted(() => ({
@@ -99,6 +100,8 @@ function createSession(overrides: Record<string, unknown> = {}) {
     close: vi.fn().mockResolvedValue(undefined),
     createDm: vi.fn(),
     environment: 'dev',
+    findInboxId: vi.fn().mockResolvedValue('target-inbox'),
+    inboxId: 'own-inbox',
     isNewInstallation: false,
     loadConversation: vi.fn(),
     loadInbox: vi.fn().mockResolvedValue([cachedConversation]),
@@ -150,6 +153,263 @@ describe('useXmtpMessaging', () => {
 
     expect(mocks.connectHostWallet).toHaveBeenCalledOnce()
     expect(mocks.createSession).toHaveBeenCalledOnce()
+  })
+
+  it('opens only a remembered exact-address inbox and verifies its inbox ID', async () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222' as const
+    const target = {
+      address: targetAddress,
+      inboxId: 'target-inbox',
+      name: 'deanpierce.eth',
+      sourceAddress: address,
+    }
+    const session = createSession({
+      address: targetAddress,
+      inboxId: target.inboxId,
+    })
+    mocks.connectHostWallet.mockResolvedValueOnce({
+      address: targetAddress,
+      chainId: 10n,
+      kind: 'EOA',
+      provider,
+      signer: { target: true },
+    })
+    mocks.createSession.mockResolvedValue(session)
+
+    const { result } = renderHook(() => useXmtpMessaging({
+      autoConnect: true,
+      inboxTarget: target,
+    }))
+
+    await waitFor(() => expect(result.current.connection.phase).toBe('ready'))
+    expect(mocks.connectHostWallet).toHaveBeenCalledOnce()
+    expect(mocks.connectHostWallet).toHaveBeenCalledWith(targetAddress, address)
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      { target: true },
+      targetAddress,
+      target.inboxId,
+    )
+    expect(result.current.address).toBe(targetAddress)
+  })
+
+  it('stops a remembered target if the preferred source changes while target stays exposed', async () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222' as const
+    const target = {
+      address: targetAddress,
+      inboxId: 'target-inbox',
+      name: 'deanpierce.eth',
+      sourceAddress: address,
+    }
+    const session = createSession({ address: targetAddress, inboxId: target.inboxId })
+    const lease = { release: vi.fn().mockResolvedValue(undefined) }
+    mocks.acquireXmtpLease.mockResolvedValue(lease)
+    mocks.connectHostWallet.mockResolvedValueOnce({
+      address: targetAddress,
+      chainId: 10n,
+      kind: 'EOA',
+      provider,
+      signer: { target: true },
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
+
+    await act(async () => result.current.connect())
+    const accountsChanged = provider.on.mock.calls.find(
+      ([event]) => event === 'accountsChanged',
+    )?.[1] as ((accounts: readonly string[]) => void) | undefined
+    act(() => accountsChanged?.([
+      '0x3333333333333333333333333333333333333333',
+      targetAddress,
+    ]))
+
+    await waitFor(() => expect(result.current.connection.phase).toBe('error'))
+    expect(session.close).toHaveBeenCalledOnce()
+    expect(lease.release).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a ready source session untouched when switch preflight lacks the exact signer', async () => {
+    const session = createSession()
+    const lease = { release: vi.fn().mockResolvedValue(undefined) }
+    mocks.acquireXmtpLease.mockResolvedValue(lease)
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    expect(result.current.connection.phase).toBe('ready')
+
+    const unavailable = Object.assign(new Error('not exposed'), {
+      code: 'host-wallet-target-unavailable',
+    })
+    mocks.connectHostWallet.mockRejectedValueOnce(unavailable)
+
+    await expect(result.current.prepareInboxSwitch(
+      '0x2222222222222222222222222222222222222222',
+    )).rejects.toBe(unavailable)
+
+    expect(session.findInboxId).toHaveBeenCalledWith(
+      '0x2222222222222222222222222222222222222222',
+    )
+    expect(mocks.connectHostWallet).toHaveBeenLastCalledWith(
+      '0x2222222222222222222222222222222222222222',
+      address,
+    )
+    expect(session.close).not.toHaveBeenCalled()
+    expect(lease.release).not.toHaveBeenCalled()
+    expect(result.current.connection.phase).toBe('ready')
+    expect(result.current.conversations).toEqual([cachedConversation])
+  })
+
+  it('does not silently fall back when a remembered target signer is unavailable', async () => {
+    const target = {
+      address: '0x2222222222222222222222222222222222222222' as const,
+      inboxId: 'target-inbox',
+      name: 'deanpierce.eth',
+      sourceAddress: address,
+    }
+    mocks.connectHostWallet.mockRejectedValueOnce(Object.assign(
+      new Error('The Farcaster wallet does not expose the requested Ethereum account.'),
+      { code: 'host-wallet-target-unavailable' },
+    ))
+    const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
+
+    await act(async () => result.current.connect())
+
+    expect(result.current.connection.phase).toBe('target-unavailable')
+    expect(mocks.connectHostWallet).toHaveBeenCalledOnce()
+    expect(mocks.connectHostWallet).toHaveBeenCalledWith(
+      target.address,
+      target.sourceAddress,
+    )
+    expect(mocks.createSession).not.toHaveBeenCalled()
+  })
+
+  it('does not apply a saved target to a different preferred Farcaster account', async () => {
+    const target = {
+      address: '0x2222222222222222222222222222222222222222' as const,
+      inboxId: 'target-inbox',
+      name: 'deanpierce.eth',
+      sourceAddress: '0x3333333333333333333333333333333333333333' as const,
+    }
+    mocks.connectHostWallet.mockRejectedValueOnce(Object.assign(
+      new Error('private provider account details'),
+      { code: 'host-wallet-source-mismatch' },
+    ))
+    const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
+
+    await act(async () => result.current.connect())
+
+    expect(result.current.connection.phase).toBe('target-source-mismatch')
+    expect(mocks.connectHostWallet).toHaveBeenCalledOnce()
+    expect(mocks.connectHostWallet).toHaveBeenCalledWith(
+      target.address,
+      target.sourceAddress,
+    )
+    expect(mocks.createSession).not.toHaveBeenCalled()
+  })
+
+  it('maps a changed saved inbox ID to target recovery without rendering it', async () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222' as const
+    const target = {
+      address: targetAddress,
+      inboxId: 'target-inbox',
+      name: 'deanpierce.eth',
+      sourceAddress: address,
+    }
+    mocks.connectHostWallet.mockResolvedValueOnce({
+      address: targetAddress,
+      chainId: 10n,
+      kind: 'EOA',
+      provider,
+      signer: { target: true },
+    })
+    const mismatch = new Error('private inbox IDs must not be shown')
+    mismatch.name = 'XmtpInboxTargetMismatchError'
+    mocks.createSession.mockRejectedValue(mismatch)
+    const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
+
+    await act(async () => result.current.connect())
+
+    expect(result.current.connection).toEqual({
+      error: 'XMTP opened a different inbox than the verified target.',
+      phase: 'target-mismatch',
+    })
+    expect(result.current.conversations).toEqual([])
+  })
+
+  it('retains the OPFS lease when wallet invalidation races unsafe initialization', async () => {
+    const lease = { release: vi.fn().mockResolvedValue(undefined) }
+    const creating = deferred<ReturnType<typeof createSession>>()
+    mocks.acquireXmtpLease.mockResolvedValue(lease)
+    mocks.createSession.mockReturnValue(creating.promise)
+    const { result, unmount } = renderHook(() => useXmtpMessaging())
+
+    let connection!: Promise<void>
+    await act(async () => {
+      connection = result.current.connect()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(result.current.connection.phase).toBe('xmtp'))
+    const accountsChanged = provider.on.mock.calls.find(
+      ([event]) => event === 'accountsChanged',
+    )?.[1] as ((accounts: readonly string[]) => void) | undefined
+    expect(accountsChanged).toBeTypeOf('function')
+
+    act(() => accountsChanged?.([]))
+    expect(result.current.connection.phase).toBe('restart-required')
+
+    const unsafe = new Error('worker init failed')
+    unsafe.name = 'XmtpClientInitializationError'
+    await act(async () => {
+      creating.reject(unsafe)
+      await connection
+    })
+
+    expect(result.current.connection.phase).toBe('restart-required')
+    expect(lease.release).not.toHaveBeenCalled()
+    unmount()
+    await act(async () => Promise.resolve())
+    expect(lease.release).not.toHaveBeenCalled()
+  })
+
+  it('never releases a poisoned lease after direct client initialization failure', async () => {
+    const lease = { release: vi.fn().mockResolvedValue(undefined) }
+    mocks.acquireXmtpLease.mockResolvedValue(lease)
+    mocks.createSession.mockRejectedValue(
+      new XmtpClientInitializationError(new Error('worker init failed')),
+    )
+    const { result, unmount } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+    expect(result.current.connection.phase).toBe('restart-required')
+    expect(lease.release).not.toHaveBeenCalled()
+
+    unmount()
+    await act(async () => Promise.resolve())
+    expect(lease.release).not.toHaveBeenCalled()
+  })
+
+  it('retains the OPFS lease when unsafe initialization rejects after a React unmount', async () => {
+    const lease = { release: vi.fn().mockResolvedValue(undefined) }
+    const creating = deferred<ReturnType<typeof createSession>>()
+    mocks.acquireXmtpLease.mockResolvedValue(lease)
+    mocks.createSession.mockReturnValue(creating.promise)
+    const { result, unmount } = renderHook(() => useXmtpMessaging())
+
+    let connection!: Promise<void>
+    await act(async () => {
+      connection = result.current.connect()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(result.current.connection.phase).toBe('xmtp'))
+    unmount()
+
+    const unsafe = new Error('worker init failed')
+    unsafe.name = 'XmtpClientInitializationError'
+    await act(async () => {
+      creating.reject(unsafe)
+      await connection
+    })
+
+    expect(lease.release).not.toHaveBeenCalled()
   })
 
   it('stops automatic setup after rejection and retries only on request', async () => {

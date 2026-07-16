@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { MessagingApp } from './MessagingApp'
@@ -15,6 +15,7 @@ vi.mock('./useXmtpMessaging', () => ({
 }))
 
 vi.mock('../identity/useEnsIdentity', () => ({
+  allowAutomaticEnsDiscovery: vi.fn(),
   useEnsIdentity: mocks.ens,
 }))
 
@@ -62,7 +63,10 @@ describe('MessagingApp storage and installation states', () => {
 
     render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
 
-    expect(mocks.messaging).toHaveBeenCalledWith({ autoConnect: true })
+    expect(mocks.messaging).toHaveBeenCalledWith({
+      autoConnect: true,
+      inboxTarget: null,
+    })
     expect(screen.getByRole('heading', { name: 'Opening your inbox' })).toBeVisible()
     expect(screen.queryByRole('button', { name: /open private inbox/i })).not.toBeInTheDocument()
   })
@@ -76,7 +80,10 @@ describe('MessagingApp storage and installation states', () => {
 
     render(<MessagingApp canUseBack={false} canUseWallet={false} user={user} />)
 
-    expect(mocks.messaging).toHaveBeenCalledWith({ autoConnect: false })
+    expect(mocks.messaging).toHaveBeenCalledWith({
+      autoConnect: false,
+      inboxTarget: null,
+    })
     expect(screen.getByRole('heading', {
       name: 'This Farcaster client cannot open XMTP',
     })).toBeVisible()
@@ -203,22 +210,467 @@ describe('MessagingApp storage and installation states', () => {
     expect(setPreference).toHaveBeenCalledWith('dismissed')
   })
 
-  it('keeps separate ENS inboxes out of the automatic offer and explains the menu action', () => {
+  it('freshly verifies and remembers an explicit separate ENS inbox switch', async () => {
+    const candidate = {
+      address: '0x2222222222222222222222222222222222222222' as const,
+      name: 'deanpierce.eth',
+    }
+    const fresh = {
+      candidate,
+      preference: 'dismissed' as const,
+      relationship: 'different-inbox' as const,
+      status: 'ready' as const,
+    }
+    const refresh = vi.fn().mockResolvedValue(fresh)
+    const setPreference = vi.fn().mockResolvedValue(undefined)
+    const prepareInboxSwitch = vi.fn().mockResolvedValue({
+      address: candidate.address,
+      inboxId: 'deanpierce-inbox',
+    })
+    const reloadDocument = vi.fn()
     mocks.ens.mockReturnValue(readyEns({
-      candidate: {
-        address: '0x1111111111111111111111111111111111111111',
-        name: 'separate.eth',
-      },
-      preference: 'dismissed',
+      ...fresh,
+      refresh,
+      setPreference,
+    }))
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      prepareInboxSwitch,
+    })
+
+    render(
+      <MessagingApp
+        canUseBack={false}
+        canUseWallet
+        reloadDocument={reloadDocument}
+        user={user}
+      />,
+    )
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Review inbox switch' }))
+
+    expect(screen.getByRole('dialog', {
+      name: 'Leave this inbox and join deanpierce.eth?',
+    })).toBeVisible()
+    expect(screen.getByText(/you’re abandoning this inbox/i)).toBeVisible()
+    expect(screen.getByText(/nothing moves or merges/i)).toBeVisible()
+    expect(screen.getAllByText(candidate.address)).toHaveLength(2)
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Leave and join deanpierce.eth',
+    }))
+
+    await screen.findByText(/restarting Converge Mini/i)
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(prepareInboxSwitch).toHaveBeenCalledWith(candidate.address)
+    expect(setPreference).not.toHaveBeenCalled()
+    expect(JSON.parse(window.localStorage.getItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+    )!)).toMatchObject({
+      address: candidate.address,
+      inboxId: 'deanpierce-inbox',
+      name: candidate.name,
+      sourceAddress: '0x1111111111111111111111111111111111111111',
+      version: 2,
+    })
+    expect(reloadDocument).toHaveBeenCalledOnce()
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }))
+    expect(screen.getByRole('dialog')).toBeVisible()
+  })
+
+  it('keeps the current inbox open when the exact ENS signer is unavailable', async () => {
+    const candidate = {
+      address: '0x2222222222222222222222222222222222222222' as const,
+      name: 'deanpierce.eth',
+    }
+    const fresh = {
+      candidate,
+      preference: null,
+      relationship: 'different-inbox' as const,
+      status: 'ready' as const,
+    }
+    const unavailable = Object.assign(new Error('not exposed'), {
+      code: 'host-wallet-target-unavailable',
+    })
+    const prepareInboxSwitch = vi.fn().mockRejectedValue(unavailable)
+    const reloadDocument = vi.fn()
+    mocks.ens.mockReturnValue(readyEns({
+      ...fresh,
+      refresh: vi.fn().mockResolvedValue(fresh),
+    }))
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      prepareInboxSwitch,
+    })
+
+    render(
+      <MessagingApp
+        canUseBack={false}
+        canUseWallet
+        reloadDocument={reloadDocument}
+        user={user}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Review inbox switch' }))
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Leave and join deanpierce.eth',
+    }))
+
+    expect(await screen.findByRole('heading', {
+      name: 'deanpierce.eth can’t sign in this Farcaster client',
+    })).toBeVisible()
+    expect(screen.getByText(/No XMTP signature was requested/i)).toBeVisible()
+    expect(reloadDocument).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+    )).toBeNull()
+  })
+
+  it('cancels an in-flight inbox-switch check without saving or restarting', async () => {
+    const candidate = {
+      address: '0x2222222222222222222222222222222222222222' as const,
+      name: 'deanpierce.eth',
+    }
+    const fresh = deferred<ReturnType<typeof readyEns>>()
+    const refresh = vi.fn().mockReturnValue(fresh.promise)
+    const prepareInboxSwitch = vi.fn()
+    const reloadDocument = vi.fn()
+    mocks.ens.mockReturnValue(readyEns({
+      candidate,
+      preference: null,
+      refresh,
       relationship: 'different-inbox',
+      status: 'ready',
+    }))
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      prepareInboxSwitch,
+    })
+    render(
+      <MessagingApp
+        canUseBack={false}
+        canUseWallet
+        reloadDocument={reloadDocument}
+        user={user}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review inbox switch' }))
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Leave and join deanpierce.eth',
+    }))
+    fireEvent.click(screen.getByRole('button', { name: 'Keep this inbox' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    await act(async () => fresh.resolve(readyEns({
+      candidate,
+      preference: null,
+      relationship: 'different-inbox',
+      status: 'ready',
+    })))
+
+    expect(prepareInboxSwitch).not.toHaveBeenCalled()
+    expect(reloadDocument).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+    )).toBeNull()
+  })
+
+  it('keeps the current inbox open when the verified target cannot be saved', async () => {
+    const candidate = {
+      address: '0x2222222222222222222222222222222222222222' as const,
+      name: 'deanpierce.eth',
+    }
+    const fresh = {
+      candidate,
+      preference: null,
+      relationship: 'different-inbox' as const,
+      status: 'ready' as const,
+    }
+    const reloadDocument = vi.fn()
+    mocks.ens.mockReturnValue(readyEns({
+      ...fresh,
+      refresh: vi.fn().mockResolvedValue(fresh),
+    }))
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      prepareInboxSwitch: vi.fn().mockResolvedValue({
+        address: candidate.address,
+        inboxId: 'target-inbox',
+      }),
+    })
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage full')
+    })
+
+    render(
+      <MessagingApp
+        canUseBack={false}
+        canUseWallet
+        reloadDocument={reloadDocument}
+        user={user}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Review inbox switch' }))
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Leave and join deanpierce.eth',
+    }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /could not remember the verified inbox safely/i,
+    )
+    expect(reloadDocument).not.toHaveBeenCalled()
+    setItem.mockRestore()
+    expect(window.localStorage.getItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+    )).toBeNull()
+  })
+
+  it('never falls back silently when a remembered ENS target cannot sign', () => {
+    window.localStorage.setItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+      JSON.stringify({
+        address: '0x2222222222222222222222222222222222222222',
+        inboxId: 'target-inbox',
+        name: 'deanpierce.eth',
+        sourceAddress: '0x1111111111111111111111111111111111111111',
+        version: 2,
+      }),
+    )
+    const reloadDocument = vi.fn()
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      address: null,
+      connection: {
+        error: 'The requested account is unavailable.',
+        phase: 'target-unavailable',
+      },
+    })
+
+    render(
+      <MessagingApp
+        canUseBack={false}
+        canUseWallet
+        reloadDocument={reloadDocument}
+        user={user}
+      />,
+    )
+
+    expect(mocks.messaging).toHaveBeenCalledWith({
+      autoConnect: true,
+      inboxTarget: expect.objectContaining({ name: 'deanpierce.eth' }),
+    })
+    expect(screen.getByRole('heading', {
+      name: 'The saved ENS address can’t sign in this Farcaster client',
+    })).toBeVisible()
+    expect(screen.getByText(/No XMTP signature was requested/i)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Use Farcaster inbox' }))
+
+    expect(window.localStorage.getItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+    )).toBeNull()
+    expect(reloadDocument).toHaveBeenCalledOnce()
+  })
+
+  it('uses the target address until the remembered ENS name is freshly verified', () => {
+    window.localStorage.setItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+      JSON.stringify({
+        address: '0x2222222222222222222222222222222222222222',
+        inboxId: 'target-inbox',
+        name: 'deanpierce.eth',
+        sourceAddress: '0x1111111111111111111111111111111111111111',
+        version: 2,
+      }),
+    )
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      address: '0x2222222222222222222222222222222222222222',
+    })
+    mocks.ens.mockReturnValue(readyEns({ status: 'unavailable' }))
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    expect(screen.getByRole('heading', { name: '0x2222…2222' })).toBeVisible()
+    expect(screen.queryByText('deanpierce.eth')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'pierce' })).not.toBeInTheDocument()
+  })
+
+  it('shows a freshly reverified target name without another automatic decision', () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222'
+    window.localStorage.setItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+      JSON.stringify({
+        address: targetAddress,
+        inboxId: 'target-inbox',
+        name: 'deanpierce.eth',
+        sourceAddress: '0x1111111111111111111111111111111111111111',
+        version: 2,
+      }),
+    )
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      address: targetAddress,
+    })
+    mocks.ens.mockReturnValue(readyEns({
+      candidate: { address: targetAddress, name: 'deanpierce.eth' },
+      preference: null,
+      relationship: 'active-address',
+      status: 'ready',
     }))
 
     render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
 
+    expect(screen.getByRole('heading', { name: 'deanpierce.eth' })).toBeVisible()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Connect ENS inbox' }))
-    expect(screen.getByText(/separate XMTP inbox/i)).toBeInTheDocument()
-    expect(screen.getByText(/cannot be merged/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Identity and privacy'))
+    expect(screen.queryByRole('button', { name: 'Use ENS name' })).not.toBeInTheDocument()
+    expect(screen.getByText('ENS name verified for this inbox')).toBeVisible()
+  })
+
+  it('keeps the saved target active and reports a failed menu recovery clear', () => {
+    window.localStorage.setItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+      JSON.stringify({
+        address: '0x2222222222222222222222222222222222222222',
+        inboxId: 'target-inbox',
+        name: 'deanpierce.eth',
+        sourceAddress: '0x1111111111111111111111111111111111111111',
+        version: 2,
+      }),
+    )
+    const reloadDocument = vi.fn()
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('storage disabled')
+    })
+
+    render(
+      <MessagingApp
+        canUseBack={false}
+        canUseWallet
+        reloadDocument={reloadDocument}
+        user={user}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Use Farcaster inbox' }))
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /saved inbox could not be cleared/i,
+    )
+    expect(reloadDocument).not.toHaveBeenCalled()
+    removeItem.mockRestore()
+    expect(window.localStorage.getItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+    )).not.toBeNull()
+  })
+
+  it('blocks wallet setup until a corrupt saved selector is explicitly cleared', () => {
+    window.localStorage.setItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+      '{',
+    )
+    const reloadDocument = vi.fn()
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      address: null,
+      connection: { error: null, phase: 'idle' },
+    })
+
+    render(
+      <MessagingApp
+        canUseBack={false}
+        canUseWallet
+        reloadDocument={reloadDocument}
+        user={user}
+      />,
+    )
+
+    expect(mocks.messaging).toHaveBeenCalledWith({
+      autoConnect: false,
+      inboxTarget: null,
+    })
+    expect(screen.getByRole('heading', {
+      name: 'Choose how to recover safely',
+    })).toBeVisible()
+    expect(screen.getByText(/will not guess which inbox to open/i)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Use Farcaster inbox' }))
+    expect(reloadDocument).toHaveBeenCalledOnce()
+  })
+
+  it('uses an unreadable selector recovery choice for this mounted session only', () => {
+    const reloadDocument = vi.fn()
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage unavailable')
+    })
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('storage unavailable')
+    })
+
+    render(
+      <MessagingApp
+        canUseBack={false}
+        canUseWallet
+        reloadDocument={reloadDocument}
+        user={user}
+      />,
+    )
+    expect(mocks.messaging).toHaveBeenLastCalledWith({
+      autoConnect: false,
+      inboxTarget: null,
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Use Farcaster inbox' }))
+
+    expect(mocks.messaging).toHaveBeenLastCalledWith({
+      autoConnect: true,
+      inboxTarget: null,
+    })
+    expect(screen.getByRole('heading', { name: 'pierce' })).toBeVisible()
+    expect(reloadDocument).not.toHaveBeenCalled()
+    getItem.mockRestore()
+    removeItem.mockRestore()
+  })
+
+  it('closes stale ENS review instead of retrying a changed mapping forever', async () => {
+    const candidate = {
+      address: '0x2222222222222222222222222222222222222222' as const,
+      name: 'deanpierce.eth',
+    }
+    const prepareInboxSwitch = vi.fn()
+    mocks.ens.mockReturnValue(readyEns({
+      candidate,
+      preference: null,
+      refresh: vi.fn().mockResolvedValue({
+        candidate: {
+          address: '0x3333333333333333333333333333333333333333',
+          name: 'updated.eth',
+        },
+        preference: null,
+        relationship: 'different-inbox',
+        status: 'ready',
+      }),
+      relationship: 'different-inbox',
+      status: 'ready',
+    }))
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      prepareInboxSwitch,
+    })
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review inbox switch' }))
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Leave and join deanpierce.eth',
+    }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /ENS name or XMTP inbox changed/i,
+    )
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', {
+      name: 'Review updated identity',
+    })).toBeVisible()
+    expect(prepareInboxSwitch).not.toHaveBeenCalled()
   })
 
   it('wires ENS recipient resolution through reachability before opening a DM', async () => {
@@ -314,6 +766,7 @@ function readyMessaging() {
     environment: 'dev',
     hasOlderMessages: false,
     inspectIdentityRelationship: vi.fn(),
+    prepareInboxSwitch: vi.fn(),
     canMessageAddress: vi.fn(),
     loadOlderMessages: vi.fn(),
     loadingConversation: false,
@@ -321,7 +774,7 @@ function readyMessaging() {
     messages: [],
     notice: null,
     openConversation: vi.fn(),
-    refresh: vi.fn(),
+    refresh: vi.fn().mockResolvedValue(null),
     refreshing: false,
     retryLiveUpdates: vi.fn(),
     retryMessage: vi.fn(),
@@ -359,4 +812,12 @@ function readyEns(overrides: Record<string, unknown> = {}) {
     status: 'none',
     ...overrides,
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
 }

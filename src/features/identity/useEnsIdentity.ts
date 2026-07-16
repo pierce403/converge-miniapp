@@ -18,6 +18,8 @@ export type EnsIdentityState = {
   status: 'idle' | 'checking' | 'ready' | 'none' | 'unavailable'
 }
 
+export type EnsIdentityRefreshResult = EnsIdentityState | null
+
 type UseEnsIdentityOptions = {
   enabled: boolean
   fid: number
@@ -39,18 +41,32 @@ export function useEnsIdentity({
   inspectRelationship,
 }: UseEnsIdentityOptions) {
   const requestRef = useRef(0)
-  const [initiallyDismissed] = useState(() => readLocalDismissal(fid))
-  const suppressAutomaticLookupRef = useRef(initiallyDismissed)
+  const fidRef = useRef(fid)
+  const [initiallySuppressed] = useState(() => readLocalDismissal(fid))
+  const suppressAutomaticLookupRef = useRef(initiallySuppressed)
   const [state, setState] = useState<EnsIdentityState>(() => (
-    initiallyDismissed
+    initiallySuppressed
       ? { ...initialState, preference: 'dismissed' }
       : initialState
   ))
+  const stateRef = useRef(state)
 
-  const load = useCallback(async () => {
-    if (!enabled) return
+  const commitState = useCallback((next: EnsIdentityState) => {
+    stateRef.current = next
+    setState(next)
+    return next
+  }, [])
+
+  const updateState = useCallback((
+    update: (current: EnsIdentityState) => EnsIdentityState,
+  ) => commitState(update(stateRef.current)), [commitState])
+
+  const load = useCallback(async (): Promise<EnsIdentityRefreshResult> => {
+    if (!enabled) return null
     const request = ++requestRef.current
-    setState((current) => ({ ...current, status: 'checking' }))
+    const requestFid = fid
+    const isStale = () => requestRef.current !== request || fidRef.current !== requestFid
+    updateState((current) => ({ ...current, status: 'checking' }))
 
     try {
       const { sdk } = await import('@farcaster/miniapp-sdk')
@@ -59,16 +75,15 @@ export function useEnsIdentity({
       })
       if (!response.ok) throw new Error('ENS identity lookup is unavailable.')
       const result = parseIdentityResponse(await response.json())
-      if (requestRef.current !== request) return
+      if (isStale()) return null
 
       if (result.status !== 'available' || !result.candidate) {
-        setState({
+        return commitState({
           candidate: null,
           preference: result.preference,
           relationship: null,
           status: result.status === 'none' ? 'none' : 'unavailable',
         })
-        return
       }
 
       let relationship: EnsRelationship
@@ -77,30 +92,39 @@ export function useEnsIdentity({
       } catch {
         relationship = 'unavailable'
       }
-      if (requestRef.current === request) {
-        setState({
-          candidate: result.candidate,
-          preference: result.preference,
-          relationship,
-          status: 'ready',
-        })
-      }
+      if (isStale()) return null
+      return commitState({
+        candidate: result.candidate,
+        preference: result.preference,
+        relationship,
+        status: 'ready',
+      })
     } catch {
-      if (requestRef.current === request) {
-        setState((current) => ({
-          ...current,
-          candidate: null,
-          relationship: null,
-          status: 'unavailable',
-        }))
-      }
+      if (isStale()) return null
+      return updateState((current) => ({
+        ...current,
+        candidate: null,
+        relationship: null,
+        status: 'unavailable',
+      }))
     }
-  }, [enabled, inspectRelationship])
+  }, [commitState, enabled, fid, inspectRelationship, updateState])
+
+  useEffect(() => {
+    if (fidRef.current === fid) return
+    fidRef.current = fid
+    requestRef.current += 1
+    const dismissed = readLocalDismissal(fid)
+    suppressAutomaticLookupRef.current = dismissed
+    commitState(dismissed
+      ? { ...initialState, preference: 'dismissed' }
+      : initialState)
+  }, [commitState, fid])
 
   useEffect(() => {
     if (!enabled) {
       requestRef.current += 1
-      const resetTimer = window.setTimeout(() => setState(
+      const resetTimer = window.setTimeout(() => commitState(
         suppressAutomaticLookupRef.current
           ? { ...initialState, preference: 'dismissed' }
           : initialState,
@@ -114,7 +138,7 @@ export function useEnsIdentity({
       window.clearTimeout(timer)
       requestRef.current += 1
     }
-  }, [enabled, load])
+  }, [commitState, enabled, load])
 
   const setPreference = useCallback(async (
     choice: Exclude<EnsPreference, null>,
@@ -137,8 +161,8 @@ export function useEnsIdentity({
       suppressAutomaticLookupRef.current = false
       writeLocalDismissal(fid, false)
     }
-    setState((current) => ({ ...current, preference: choice }))
-  }, [fid, state.candidate])
+    updateState((current) => ({ ...current, preference: choice }))
+  }, [fid, state.candidate, updateState])
 
   const clearPreference = useCallback(async () => {
     const { sdk } = await import('@farcaster/miniapp-sdk')
@@ -150,8 +174,8 @@ export function useEnsIdentity({
     }
     suppressAutomaticLookupRef.current = false
     writeLocalDismissal(fid, false)
-    setState((current) => ({ ...current, preference: null }))
-  }, [fid])
+    updateState((current) => ({ ...current, preference: null }))
+  }, [fid, updateState])
 
   return {
     ...state,
@@ -186,6 +210,10 @@ function writeLocalDismissal(fid: number, dismissed: boolean): void {
   } catch {
     // D1 remains authoritative if this browser disables local storage.
   }
+}
+
+export function allowAutomaticEnsDiscovery(fid: number): void {
+  writeLocalDismissal(fid, false)
 }
 
 function parseIdentityResponse(value: unknown): {

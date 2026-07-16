@@ -11,6 +11,7 @@ vi.mock('@farcaster/miniapp-sdk', () => ({
 }))
 
 const address = '0x7ab874Eeef0169ADA0d225E9801A3FfFfa26aAC3' as const
+const secondAddress = '0x1111111111111111111111111111111111111111' as const
 const availableResponse = {
   ens: { address, name: 'deanpierce.eth' },
   preference: null,
@@ -148,4 +149,135 @@ describe('useEnsIdentity', () => {
     await waitFor(() => expect(result.current.status).toBe('unavailable'))
     expect(result.current.candidate).toBeNull()
   })
+
+  it('resets discovery state when the mounted Farcaster FID changes', async () => {
+    mocks.fetch
+      .mockResolvedValueOnce(Response.json(availableResponse))
+      .mockResolvedValueOnce(Response.json({
+        ens: { address: secondAddress, name: 'second.eth' },
+        preference: null,
+        status: 'available',
+      }))
+    const inspectRelationship = vi.fn()
+      .mockResolvedValueOnce('active-address')
+      .mockResolvedValueOnce('different-inbox')
+    const hook = renderHook(({ fid }) => useEnsIdentity({
+      enabled: true,
+      fid,
+      inspectRelationship,
+    }), { initialProps: { fid: 8531 } })
+    await waitFor(() => expect(hook.result.current.candidate?.name).toBe(
+      'deanpierce.eth',
+    ))
+
+    hook.rerender({ fid: 8532 })
+
+    await waitFor(() => expect(hook.result.current.candidate).toEqual({
+      address: secondAddress,
+      name: 'second.eth',
+    }))
+    expect(mocks.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns the exact different-inbox state committed by a fresh refresh', async () => {
+    mocks.fetch
+      .mockResolvedValueOnce(Response.json(availableResponse))
+      .mockResolvedValueOnce(Response.json({
+        ens: { address: secondAddress, name: 'second.eth' },
+        preference: 'accepted',
+        status: 'available',
+      }))
+    const inspectRelationship = vi.fn()
+      .mockResolvedValueOnce('active-address')
+      .mockResolvedValueOnce('different-inbox')
+    const { result } = renderHook(() => useEnsIdentity({
+      enabled: true,
+      fid: 8531,
+      inspectRelationship,
+    }))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+
+    let refreshed: Awaited<ReturnType<typeof result.current.refresh>> | undefined
+    await act(async () => {
+      refreshed = await result.current.refresh()
+    })
+
+    expect(refreshed).toEqual({
+      candidate: { address: secondAddress, name: 'second.eth' },
+      preference: 'accepted',
+      relationship: 'different-inbox',
+      status: 'ready',
+    })
+    expect(result.current).toMatchObject(refreshed!)
+  })
+
+  it('returns null when an overlapping refresh supersedes an older result', async () => {
+    mocks.fetch.mockResolvedValueOnce(Response.json(availableResponse))
+    const inspectRelationship = vi.fn()
+      .mockResolvedValueOnce('active-address')
+      .mockResolvedValueOnce('different-inbox')
+    const { result } = renderHook(() => useEnsIdentity({
+      enabled: true,
+      fid: 8531,
+      inspectRelationship,
+    }))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+
+    const older = deferred<Response>()
+    const newer = deferred<Response>()
+    mocks.fetch
+      .mockImplementationOnce(() => older.promise)
+      .mockImplementationOnce(() => newer.promise)
+
+    let olderRefresh!: ReturnType<typeof result.current.refresh>
+    let newerRefresh!: ReturnType<typeof result.current.refresh>
+    await act(async () => {
+      olderRefresh = result.current.refresh()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      newerRefresh = result.current.refresh()
+      await Promise.resolve()
+    })
+
+    newer.resolve(Response.json({
+      ens: { address: secondAddress, name: 'current.eth' },
+      preference: null,
+      status: 'available',
+    }))
+    let newerResult!: Awaited<typeof newerRefresh>
+    await act(async () => {
+      newerResult = await newerRefresh
+    })
+
+    older.resolve(Response.json({
+      ens: { address, name: 'stale.eth' },
+      preference: null,
+      status: 'available',
+    }))
+    let olderResult!: Awaited<typeof olderRefresh>
+    await act(async () => {
+      olderResult = await olderRefresh
+    })
+
+    expect(olderResult).toBeNull()
+    expect(newerResult).toEqual({
+      candidate: { address: secondAddress, name: 'current.eth' },
+      preference: null,
+      relationship: 'different-inbox',
+      status: 'ready',
+    })
+    expect(result.current.candidate).toEqual({
+      address: secondAddress,
+      name: 'current.eth',
+    })
+  })
 })
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}

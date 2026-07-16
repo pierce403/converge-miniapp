@@ -12,6 +12,7 @@ This runbook covers the Cloudflare-hosted SPA and Worker API at `https://miniapp
 | Account association | Three Worker secrets listed below | Public Farcaster ownership proof, kept out of source control. |
 | ENS preferences | `PREFERENCES` D1 binding | Stores only Quick Auth-verified FID, `accepted`/`dismissed`, and update time. Production and preview databases are isolated. |
 | ENS discovery | `ENS_MAINNET_RPC_URLS` Worker variable | Ordered comma-separated public HTTPS Ethereum RPC fallbacks for reverse and forward ENS verification. |
+| ENS inbox selection | Browser `localStorage`, namespaced by host-context FID | Remembers only a freshly verified public ENS name, checksummed target address, expected existing inbox ID, and checksummed source address. The FID is a non-authoritative namespace hint; every launch must match the provider's preferred account to the saved source and select the exact target from the same fresh provider/account snapshot, then require the expected inbox ID. No Worker binding or server row is involved. |
 | Peer Farcaster hints | Optional `FARCASTER_BASE_RPC_URL` Worker secret | Production Base RPC used for a bounded read of the experimental address-to-FID Verifications contract. Without it, ENS/Basename still work and registered-fname hints stay off. |
 | Identity abuse control | `IDENTITY_RATE_LIMITER` binding | Separately limits participant-identity batches and ENS recipient resolutions per verified FID in each Cloudflare location. |
 | Farcaster identity | Quick Auth JWKS + official primary-address API | Verifies the exact-domain FID and resolves its public primary Ethereum address. |
@@ -38,7 +39,7 @@ The hosted shell, first-party health endpoint, and signed ownership manifest are
 - The authenticated, quota-enforced XMTP payer Gateway and its CSP origins remain unconfigured. That blocks a switch to decentralized `mainnet`, but does not block the pinned SDK's legacy `production` endpoint.
 - Real Farcaster desktop, iOS, and Android wallet/WebView validation remains required before launch.
 
-The ENS identity release adds protected API routes and D1 state, but does not remove the payer-Gateway blocker. Treat it as deployed only after the repository migration is applied, the verified `main` build is live, an authenticated canonical-host lookup succeeds, and accepted/dismissed/delete behavior is confirmed without logging identity data.
+The ENS identity release adds protected API routes and D1 state, while the explicit existing-inbox session selector is browser-local only; neither removes the payer-Gateway blocker. Treat the switch as deployed only after the verified `main` build is live, canonical-host discovery still works, an exact-address provider test proves both the success and signer-missing paths, and sampled logs contain no identity values.
 
 Run release commands locally only for an explicit operator task, using Node `22.13+` in the Node 22 line or Node `24+`. Node 23 is outside this repository's supported engine range even if a local build happens to pass. An XMTP-development preview on `workers.dev` still requires interactive Wrangler authentication, and preview storage, manifest ownership, and Quick Auth behavior are not evidence for the canonical production origin.
 

@@ -108,6 +108,13 @@ export class XmtpClientInitializationTimeoutError extends Error {
   }
 }
 
+export class XmtpInboxTargetMismatchError extends Error {
+  constructor() {
+    super('XMTP opened a different inbox than the verified target.')
+    this.name = 'XmtpInboxTargetMismatchError'
+  }
+}
+
 export class XmtpGatewayConfigurationError extends Error {
   constructor(environment: XmtpEnv) {
     super(`XMTP ${environment} requires an authenticated payer Gateway.`)
@@ -134,7 +141,11 @@ export class XmtpMessagingSession {
     this.isNewInstallation = isNewInstallation
   }
 
-  static async create(signer: Signer, address: `0x${string}`) {
+  static async create(
+    signer: Signer,
+    address: `0x${string}`,
+    expectedInboxId?: string,
+  ) {
     const options = clientOptions()
     let client: Client
     let clientPromise: Promise<Client> | null = null
@@ -158,6 +169,9 @@ export class XmtpMessagingSession {
     }
 
     try {
+      if (expectedInboxId && client.inboxId !== expectedInboxId) {
+        throw new XmtpInboxTargetMismatchError()
+      }
       const isNewInstallation = !(await client.isRegistered())
       await client.register()
       return new XmtpMessagingSession(client, address, isNewInstallation)
@@ -183,11 +197,22 @@ export class XmtpMessagingSession {
       return 'active-address'
     }
 
-    const targetInboxId = await this.client.fetchInboxIdByIdentifier(
-      ethereumIdentifier(address),
-    )
+    const targetInboxId = await this.findInboxId(address)
     if (!targetInboxId) return 'no-inbox'
     return targetInboxId === this.inboxId ? 'same-inbox' : 'different-inbox'
+  }
+
+  /**
+   * Resolves an address to its existing inbox without changing either inbox.
+   * The explicit ENS session-switch preflight uses the returned ID as the
+   * target that must still match after the document restarts.
+   */
+  async findInboxId(address: `0x${string}`): Promise<string | null> {
+    if (address.toLowerCase() === this.address.toLowerCase()) return this.inboxId
+
+    return await this.client.fetchInboxIdByIdentifier(
+      ethereumIdentifier(address),
+    ) ?? null
   }
 
   async requestHistorySync(): Promise<boolean> {

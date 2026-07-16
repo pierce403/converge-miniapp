@@ -75,8 +75,9 @@ Quick Auth also protects stateless recipient ENS forward resolution and a public
 | Use “Converge Mini” as the working public name | Committed | The name can be revisited before broad discovery without changing the canonical hostname. |
 | Accept addresses and ENS names for P0 recipient entry | Committed | A typed dot-separated ENS name is normalized and forward-resolved, then the user confirms the visible name/address pair after XMTP reachability succeeds. Farcaster handle search remains P1. |
 | Open XMTP immediately with Farcaster's preferred host account | Committed | No app-level wallet, key, or inbox chooser is shown before the host/XMTP approvals needed to open that account. |
-| Treat a verified ENS name as a safe label, not a migration | Committed | Offer it automatically only when the Farcaster primary address is the active XMTP address or already belongs to the active inbox. Acceptance changes presentation only. |
-| Never merge or silently relink separate XMTP inboxes | Committed | A different ENS-address inbox gets an explanation in the identity menu; no account, recovery identity, key, or history is moved. |
+| Treat a same-inbox ENS name as a safe label | Committed | Offer it automatically only when the Farcaster primary address is the active XMTP address or already belongs to the active inbox. Acceptance changes presentation only. |
+| Allow an explicit signer-backed switch to a separate ENS inbox | Committed | The identity menu may leave the current local session and open the existing ENS-address inbox only after fresh resolution, exact-address signer proof, and a no-merge confirmation. This is a session switch, not an inbox/account/history migration. |
+| Never merge or silently relink separate XMTP inboxes | Committed | No account, recovery identity, key, installation, or history is reassigned or merged. The old inbox and local database remain intact and no installation is revoked automatically. |
 | Remember the ENS choice by trusted Farcaster FID | Committed | Quick Auth supplies the authoritative FID; D1 stores only `accepted` or `dismissed` plus an update timestamp. |
 | Resolve known peer addresses as display hints | Committed | Prefer ENS, then Basename, and always retain the wallet address. Show a registered fname only as a separately labeled best-effort hint, never for authorization. |
 | Use Git and GitHub from the beginning | Committed | Each coherent task is verified, committed, and pushed before the next task begins. |
@@ -121,7 +122,7 @@ The first architecture should keep the client usable even if optional backend fe
 - Creating a general Farcaster client, social feed, cast composer, or wallet dashboard.
 - Custodying users' wallet or XMTP private keys on the backend.
 - Storing message plaintext, decrypted attachments, or searchable message history on the backend.
-- Multi-inbox switching, keyfile import/export, device pairing, or elaborate account recovery.
+- A general multi-inbox chooser, keyfile import/export, device pairing, or elaborate account recovery. One explicit switch from the host-opened inbox to a verified ENS-backed existing inbox is the narrow exception.
 - Group creation or administration.
 - Composing attachments or other rich content, rendering attachment bytes inline, audio, forwarding, editing, disappearing messages, or live typing/read-receipt UI. Compatible received replies, reaction summaries, and attachment metadata may render safely.
 - Token transfers, swaps, mints, or other onchain transaction features.
@@ -279,9 +280,10 @@ This journey is P1 until the incoming-XMTP-to-Farcaster notification bridge is p
 4. The browser compares that address with the active signer and its current XMTP inbox without mutating either.
 5. If the address is active or already belongs to the same inbox and no preference exists, the app asks once whether to use the ENS name as the inbox label. **Use ENS name** or **No thanks** is saved account-wide as `accepted` or `dismissed`.
 6. A dismissal prevents future automatic prompts, but the identity/privacy menu keeps the ENS option available. D1 stores the account-wide choice, while a local dismissal bit also skips repeat background Quick Auth on that browser.
-7. If the address belongs to a different XMTP inbox, has no inbox, or cannot be checked, the app does not interrupt the user. The menu explains the exact boundary and changes nothing.
+7. If the address belongs to a different XMTP inbox, the app does not interrupt the user but the identity menu can offer an explicit switch. A confirmation explains that the current inbox is being left in Converge Mini, messages do not move, histories cannot merge, and the exact ENS address must sign XMTP access before anything closes.
+8. The app re-resolves and rechecks the candidate, confirms the host provider exposes its exact address, then records the verified target and restarts the document before opening it. The restart is the deliberate boundary that closes the old Worker and releases its OPFS lock before the target client starts. A missing signer, stale mapping, cancellation, or failed preflight leaves the old inbox untouched. A no-inbox or unavailable candidate remains explanation-only.
 
-Success condition: the optional flow never moves a key, recovery identity, inbox, installation, conversation, or message history, and failure never blocks messaging.
+Success condition: the optional label flow never moves identity state; the explicit switch opens only the already-existing signer-controlled target inbox, never merges or reassigns either inbox, and never tears down the current session before all safe preflight checks pass.
 
 ## First-release feature matrix
 
@@ -297,7 +299,8 @@ Success condition: the optional flow never moves a key, recovery identity, inbox
 | Identity | Stable XMTP inbox/installation reuse | P0 | Implemented locally | Persistent OPFS defaults and a single-owner Web Lock exist; host re-entry proof remains. |
 | Identity | Forward-verified ENS primary-name offer | P1 | Implemented locally | Trusted-FID discovery, reverse/forward ENS proof, read-only XMTP relationship checks, remembered acceptance/dismissal, safe label-only use, and truthful separate-inbox states are tested; canonical-host proof remains. |
 | Identity | Peer fname, ENS, and Basename labels | P1 | Implemented locally | Bounded, rate-limited protected batches resolve public wallet metadata without persistence; ambiguous/broken sources fall back to the visible address. A registered fname is secondary registry metadata, not a canonical profile or authorization. |
-| Identity | Compact identity/privacy menu | P0 | Implemented locally | Active wallet, network, local-storage disclosure, ENS recheck, label selection/deletion, and non-migration explanations remain available after onboarding. |
+| Identity | Compact identity/privacy menu | P0 | Implemented locally | Active wallet, network, local-storage disclosure, ENS recheck, label selection/deletion, and an explicit signer-backed separate-inbox switch remain available after onboarding. Short-viewport host proof remains. |
+| Identity | ENS-backed inbox session switch | P1 | Implemented locally | A fresh different-inbox candidate can be opened only with its exact host-exposed signer after explicit no-merge confirmation; safe cancellation/preflight failure preserves the origin session and post-restart failure offers an explicit return to it. Canonical-host signer proof remains. |
 | Inbox | Allowed DM conversation list | P0 | Implemented locally | Allowed-only cached-first sync/list/stream UI exists; dev-network and offline host acceptance remain. |
 | Inbox | Separate message requests | P1 | Later | Unknown contacts stay excluded from the P0 allowed list; later accept/decline updates consent. |
 | Compose | Address-or-ENS recipient reachability | P0 | Implemented locally | Addresses are checksummed directly; bounded ENS names are normalized and forward-resolved through the protected Worker before the full name/address pair is confirmed and checked with `canMessage()`. Canonical-host and two-client network proof remain. |
@@ -412,12 +415,25 @@ Requirements:
 
 Farcaster supplies one preferred EIP-1193 account to this Mini App. It does not provide a safe signer inventory for a “primary” and separate embedded-wallet/Warplet address, so Converge Mini does not present those as selectable keys.
 
-The current implementation never adds, removes, or reassigns an XMTP account:
+Converge Mini never adds, removes, or reassigns an XMTP account as part of this flow:
 
 - If the verified ENS address is active or already belongs to the same inbox, the app can safely use its name as a label.
-- If it belongs to a different inbox, the app explains that existing XMTP inboxes and their message histories cannot be merged. It does not call the state an available migration.
-- If it has no inbox, the Farcaster host still does not expose that ENS address as a signer, so the app cannot prove and add it safely.
+- If it belongs to a different inbox, the menu can offer a session switch only when the Farcaster provider exposes that exact address as a signable account. After preflight, the app records the verified target and reloads; the old document closes inbox A before the new document creates/registers a client with the target signer, verifies inbox B's ID, and loads B without changing either inbox's identity graph.
+- If it has no inbox, there is no existing inbox to join. Creating a new ENS-address recovery inbox remains a separate product decision even if the host exposes its signer.
 - A future first-registration flow targeting another recovery identity would require that identity's signer before registration, explicit user intent, and a separately reviewed protocol. It is not a post-registration migration and is not silently inferred from ENS ownership.
+
+Acceptance criteria for a different-inbox switch:
+
+- Keep automatic onboarding unchanged. Never auto-switch or present a wallet/key chooser; the action lives only in the identity menu after the current inbox is usable.
+- Confirm with the normalized ENS name and full target address. Explain that the user is leaving the current inbox in Converge Mini, the old inbox and messages remain where they are, histories cannot merge, and older target history recovery is best effort.
+- Explain that XMTP will ask the exact ENS address to grant this Mini App access with a signature, not a transaction. **Leave and join {name}** and **Keep this inbox** are the only confirmation decisions.
+- Immediately before switching, fetch fresh trusted-FID ENS evidence, require the normalized name/address pair to match the confirmation, and require the current client still classifies it as the same different target inbox.
+- Before closing the current client, require one fresh host EIP-1193 provider/account snapshot to show the current address as the preferred source and expose the exact checksummed target account, then build the target's matching EOA/SCW signer from that same provider. A missing or mismatched signer leaves the current session, streams, messages, and local database untouched and names the required address without exposing raw errors.
+- After successful preflight, save only the public normalized name, checksummed source and target addresses, and expected target inbox ID in local storage under a host-context FID namespace hint, then reload the document. The FID is not authority: the new launch must first prove the provider's fresh preferred account matches the saved source. The reload closes the origin client/streams and releases its Web Lock before target setup begins, so two Browser SDK clients never run against OPFS concurrently.
+- Verify the opened inbox ID equals the preflight target inbox ID before rendering it. Do not call `unsafe_addAccount`, `removeAccount`, `changeRecoveryIdentifier`, or any installation/account revocation method.
+- On target wallet rejection, registration failure, installation limit, network failure, or inbox-ID mismatch after the restart, do not silently fall back or mix identity state. Show the target-specific failure and offer an explicit **Use Farcaster inbox** recovery that clears the remembered target and reloads. If Browser SDK initialization may have left an unclosable Worker, require that reload before any other inbox opens.
+- On success, load only target state, request best-effort history for a new installation, start one target stream, and remember the explicit target locally for re-entry only while the host continues to expose that exact signer. Display the ENS label only while fresh discovery still maps it to the active target; otherwise show the address. The explicit switch is already the identity decision, so do not follow it with the ordinary same-inbox ENS-label prompt. Re-entry must require the saved source binding and exact target address in one fresh account snapshot plus the expected inbox ID; never silently fall back to the inbox the user left.
+- Leaving inbox A does not delete its OPFS database, revoke its Converge installation, remove an identity, or make the XMTP inbox inaccessible elsewhere.
 
 #### Explicitly rejected default
 
@@ -618,7 +634,7 @@ XMTP push HMAC keys are privacy-sensitive filtering material, but they are not m
 
 ### 11. Identity/privacy menu and expanded settings sheet
 
-The implemented compact menu is available from the inbox header rather than as a permanent navigation destination. It shows the active Farcaster wallet, XMTP environment/wallet kind, local-storage disclosure, and the ENS discovery/relationship state. It can rerun discovery, opt into a safe ENS label after a prior dismissal, delete the saved ENS choice, or explain why a separate ENS inbox cannot be connected or merged.
+The compact menu is available from the inbox header rather than as a permanent navigation destination. It shows the active Farcaster wallet, XMTP environment/wallet kind, local-storage disclosure, and the ENS discovery/relationship state. It can rerun discovery, opt into a safe same-inbox ENS label after a prior dismissal, delete the saved ENS choice, or open the explicit leave/join confirmation for an existing separate ENS inbox. When the exact target signer is not exposed by the Farcaster provider, the menu explains that ENS resolution proves the destination but does not grant Converge signing access; no inbox changes.
 
 The expanded P1 modal/sheet remains Later. Include:
 
@@ -1408,13 +1424,13 @@ These features should be reconsidered only after P0 quality and usage justify th
 | Typing indicators | P2 | Later | Message costs and privacy justify ephemeral traffic. |
 | Full-text local search | P2 | Later | A safe local index/storage design exists. |
 | Multiple wallet identities per inbox | P2 | Later | Real users need it and recovery/update limits are addressed. |
-| Merge or migrate two existing XMTP inboxes | P2 | Blocked | XMTP exposes no safe inbox/history merge; reconsider only if protocol semantics and both signer proofs make the result explicit and portable. |
+| Merge or reassign two existing XMTP inboxes | P2 | Blocked | XMTP exposes no safe inbox/history merge; the explicit ENS flow switches local sessions and must never be described or implemented as a merge/reassignment. |
 | Installation management UI | P1 | Later | Error-only recovery is insufficient. |
 | History backup/recovery UX | P2 | Later | Current XMTP history-sync model is stable and understandable. |
 | Block/mute/report controls | P2 | Later | Abuse model and XMTP semantics are defined; decline remains available now. |
 | Dedicated desktop layout | P2 | Out | Embedded mobile-first usage proves a real desktop need. |
 | PWA/service-worker install | P2 | Out | Standalone demand justifies a second lifecycle/push model. |
-| Multi-inbox switching | P2 | Out | Product explicitly expands beyond simple wallet-backed use. |
+| General multi-inbox chooser | P2 | Out | The narrow ENS-backed switch does not introduce arbitrary wallet/key/inbox selection. |
 | Raw key import/export | P2 | Out | A separate custody/recovery security design is approved. |
 | Onchain transaction actions | — | Out | The product direction changes beyond focused messaging. |
 
@@ -1478,7 +1494,7 @@ Notifications for incoming XMTP messages are not a gate unless they are explicit
 | Farcaster wallet is an unsupported/misdetected SCW | Setup/signatures fail | Test real hosts/accounts; detect code/chain correctly; capability-gate unsupported cases. |
 | FID/profile is confused with XMTP identity | Messages go to wrong/unreachable address | Trusted resolution, clear identity UI, `canMessage()` before creation, proof before caching links. |
 | Host context is trusted as auth | Account spoofing/backend data exposure | Quick Auth verification on server; context only for provisional display. |
-| ENS name is mistaken for a migrated XMTP identity | User expects another inbox or history to appear | Offer only an active/same-inbox label; classify the address read-only; explain different/no-inbox states; never mutate or describe a merge. |
+| ENS session switch is mistaken for an inbox/history migration | User expects old messages to move or one inbox to disappear | Use explicit leave/join copy, show name plus address, require the exact target signer, never merge/reassign/revoke, preserve the old local database, and label target history recovery best effort. |
 | ENS/Farcaster discovery is unavailable or inconsistent | Optional prompt fails or presents a spoofed name | Require trusted FID, official primary address, reverse-plus-forward ENS match, no-store responses, provider failover, and nonblocking failure. |
 | Storage clearing creates installations | Ten-installation and 256-update limits are consumed | Persist/reuse DB, detect storage loss, never revoke automatically, recovery tooling and dedicated test wallets. |
 | Same wallet is mistaken for guaranteed history recovery | New Mini App installation appears empty or misleads the user | Separate same-origin resume from cross-install history sync; require another compatible installation online; label recovery best-effort and disclose the re-encrypted history service. |
@@ -1500,7 +1516,7 @@ These are deliberately not guessed into existence.
 6. **Public standalone mode:** After development fallback is stable, should non-Farcaster visitors be able to connect a wallet and message?
 7. **Directory/backend dependency:** Is a managed Farcaster data provider acceptable if it materially simplifies reliable handle search and webhook verification?
 8. **Gateway hosting split:** After the feasibility spike, compare Cloudflare Containers and an external container host for the XMTP payer Gateway.
-9. **Future ENS signer flow:** If users must target an ENS-controlled recovery identity before first XMTP registration, how will the app obtain that address's signer and present the irreversible identity choice without reintroducing a key/wallet picker? This is not an existing-inbox merge.
+9. **Future ENS first-registration flow:** If a verified ENS address has no XMTP inbox, should Converge ever create one with that recovery identity? This requires the exact signer and a separately reviewed irreversible choice; it is not the implemented existing-inbox session switch.
 
 ## Cloudflare versus Vercel comparison criteria for later
 
