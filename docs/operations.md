@@ -24,7 +24,7 @@ This runbook covers the Cloudflare-hosted SPA and Worker API at `https://miniapp
 
 The production `PREFERENCES` database is `converge-miniapp-preferences`; preview uses the separate `converge-miniapp-preview-preferences` database. There is no KV, R2, Queue, Durable Object, identity-link table, plaintext notification token store, or persistent application session store.
 
-## Current deployment state (2026-07-15)
+## Current deployment state (2026-07-17)
 
 The Cloudflare Worker and its `miniapp.converge.cv` Custom Domain are live. Cloudflare Workers Builds pulls and deploys verified `main` commits through the Cloudflare GitHub App; use `/api/health` and `wrangler deployments list` for the current immutable deployment ID instead of recording a value here that changes on every release.
 
@@ -42,9 +42,9 @@ The hosted shell, first-party health endpoint, and signed ownership manifest are
 - The authenticated, quota-enforced XMTP payer Gateway and its CSP origins remain unconfigured. That blocks a switch to decentralized `mainnet`, but does not block the pinned SDK's legacy `production` endpoint.
 - Farcaster notification enrollment remains unadvertised. The deployed Worker has no current-Hub API credential, so `/api/farcaster/webhook` must fail closed, the manifest must omit `webhookUrl`, and the UI must not ask users to enable alerts. The encrypted lifecycle foundation does not by itself observe incoming XMTP messages while the browser is closed.
 - Real Farcaster desktop, iOS, and Android wallet/WebView validation remains required before launch.
-- The external ENS-inbox path remains unavailable in any build that omits `VITE_WALLETCONNECT_PROJECT_ID`. Create a dedicated Reown project, allowlist `https://miniapp.converge.cv` (and each separately tested preview origin), and set the public ID as a Workers Builds variable before accepting the feature in production.
+- A dedicated public Reown project ID is configured as `VITE_WALLETCONNECT_PROJECT_ID` on the main-only production Workers Builds trigger. On 2026-07-17 an exact-origin browser relay probe from `https://miniapp.converge.cv` emitted a WalletConnect pairing URI and was stopped before wallet approval. Before release, confirm that the Reown dashboard allowlist contains the exact production origin and only separately tested preview origins, then complete the real-wallet tests below. Builds that omit the variable still fail closed with an explicit configuration state.
 
-The ENS identity release adds protected API routes and D1 state, while the explicit existing-inbox session selector is browser-local only; neither removes the payer-Gateway blocker. Treat the external switch as deployed only after the verified `main` build is live, canonical-host discovery still works, production has its allowlisted WalletConnect project ID, real MetaMask tests prove QR and same-phone handoff plus reload restoration and wrong-account rejection, and sampled logs contain no pairing URI or identity values.
+The ENS identity release adds protected API routes and D1 state, while the explicit existing-inbox session selector is browser-local only; neither removes the payer-Gateway blocker. Treat the external switch as deployed only after the verified `main` build is live and canonical-host discovery still works. Treat it as release-proven only after the exact Reown origin allowlist is confirmed, real MetaMask tests prove QR and same-phone handoff plus reload restoration and wrong-account rejection, and sampled logs contain no pairing URI or identity values.
 
 Run release commands locally only for an explicit operator task, using Node `22.13+` in the Node 22 line or Node `24+`. Node 23 is outside this repository's supported engine range even if a local build happens to pass. An XMTP-development preview on `workers.dev` still requires interactive Wrangler authentication, and preview storage, manifest ownership, and Quick Auth behavior are not evidence for the canonical production origin.
 
