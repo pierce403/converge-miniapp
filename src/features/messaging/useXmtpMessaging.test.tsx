@@ -21,8 +21,10 @@ const mocks = vi.hoisted(() => ({
   connectWalletConnectWallet: vi.fn(),
   createSession: vi.fn(),
   disconnectWalletConnect: vi.fn(),
+  disableAlert: vi.fn(),
   parseConvosInvite: vi.fn(),
   prepareStorage: vi.fn(),
+  syncAlert: vi.fn(),
   verifyHostWalletSource: vi.fn(),
 }))
 
@@ -55,6 +57,11 @@ vi.mock('../../lib/xmtp/storage', () => ({
 
 vi.mock('../../lib/convos/invite', () => ({
   parseConvosInvite: mocks.parseConvosInvite,
+}))
+
+vi.mock('../../lib/xmtp/alertRegistration', () => ({
+  disableXmtpAlertRegistration: mocks.disableAlert,
+  syncXmtpAlertRegistration: mocks.syncAlert,
 }))
 
 vi.mock('../../lib/xmtp/session', () => {
@@ -182,6 +189,8 @@ function createSession(overrides: Record<string, unknown> = {}) {
     requestConvosAccess: vi.fn(),
     requestHistorySync: vi.fn().mockResolvedValue(false),
     startMessageStream: vi.fn().mockResolvedValue(undefined),
+    startPushTopicStream: vi.fn().mockResolvedValue(undefined),
+    stopPushTopicStream: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   }
 }
@@ -235,6 +244,39 @@ describe('useXmtpMessaging', () => {
       provider,
       signer: {},
     })
+  })
+
+  it('runs one follow-up registration when push keys change during a sync', async () => {
+    const firstSync = deferred<void>()
+    let onPushChange: (() => void) | undefined
+    const session = createSession({
+      environment: 'production',
+      startPushTopicStream: vi.fn(async (onChange: () => void) => {
+        onPushChange = onChange
+      }),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    mocks.syncAlert
+      .mockImplementationOnce(() => firstSync.promise)
+      .mockResolvedValue(undefined)
+    const { result } = renderHook(() => useXmtpMessaging({ notificationFid: 403 }))
+    await act(async () => result.current.connect())
+
+    let registration!: Promise<void>
+    act(() => {
+      registration = result.current.syncAlerts()
+    })
+    await waitFor(() => expect(mocks.syncAlert).toHaveBeenCalledOnce())
+
+    act(() => {
+      onPushChange?.()
+      onPushChange?.()
+    })
+    firstSync.resolve()
+    await act(async () => registration)
+
+    expect(mocks.syncAlert).toHaveBeenCalledTimes(2)
+    expect(mocks.syncAlert).toHaveBeenLastCalledWith(session, 403)
   })
 
   it('automatically opens one host-wallet session through Strict Mode replay', async () => {

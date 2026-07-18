@@ -34,6 +34,7 @@ import {
   type Identifier,
   type InboxState,
   type Signer,
+  type UserPreferenceUpdate,
   type XmtpEnv,
 } from '@xmtp/browser-sdk'
 import type { ContentCodec } from '@xmtp/content-type-primitives'
@@ -59,6 +60,11 @@ import {
   type MessageItem,
   type StreamHealth,
 } from '../../features/messaging/types'
+import {
+  buildXmtpPushSnapshot,
+  bytesToBase64Url,
+  type XmtpPushSnapshot,
+} from './pushRegistration'
 
 /*
  * Keep the inbox lookup bounded. If the window contains only silent control
@@ -213,6 +219,7 @@ export class XmtpMessagingSession {
   readonly isNewInstallation: boolean
   #messageStream: AsyncStreamProxy<IncomingMessage> | null = null
   #groupStream: AsyncStreamProxy<AppGroup> | null = null
+  #pushPreferenceStream: AsyncStreamProxy<UserPreferenceUpdate[]> | null = null
   #messageStreamHealth: Extract<StreamHealth, 'live' | 'retrying'> = 'retrying'
   #groupStreamHealth: Extract<StreamHealth, 'live' | 'retrying'> = 'retrying'
   #messageStreamStart: Promise<void> | null = null
@@ -224,6 +231,7 @@ export class XmtpMessagingSession {
   #convosAccessSnapshot: ConvosAccessSnapshot | null = null
   #convosAccessSnapshotSentAtNs: bigint | null = null
   #convosReconcile: Promise<void> | null = null
+  #pushStreamGeneration = 0
   #streamGeneration = 0
 
   private constructor(
@@ -284,6 +292,80 @@ export class XmtpMessagingSession {
 
   get environment(): XmtpEnv {
     return this.client.env ?? configuredEnvironment()
+  }
+
+  async pushSnapshot(): Promise<XmtpPushSnapshot> {
+    await this.client.conversations.sync()
+    await this.client.preferences.sync()
+    const conversations = await this.client.conversations.list({
+      consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+      includeDuplicateDms: true,
+    })
+    const snapshots = await Promise.all(
+      conversations.map((conversation) => conversation.hmacKeys()),
+    )
+    const merged = new Map<string, Awaited<ReturnType<AppConversation['hmacKeys']>> extends Map<string, infer Keys> ? Keys : never>()
+    for (const snapshot of snapshots) {
+      for (const [groupId, keys] of snapshot) {
+        const existing = merged.get(groupId) ?? []
+        const seen = new Set(existing.map((entry) => (
+          `${entry.epoch.toString()}:${bytesToBase64Url(entry.key)}`
+        )))
+        for (const key of keys) {
+          const fingerprint = `${key.epoch.toString()}:${bytesToBase64Url(key.key)}`
+          if (seen.has(fingerprint)) continue
+          existing.push(key)
+          seen.add(fingerprint)
+        }
+        merged.set(groupId, existing)
+      }
+    }
+    return await buildXmtpPushSnapshot({
+      conversations: {
+        hmacKeys: async () => merged,
+        topic: this.client.conversations.topic,
+      },
+      inboxId: this.client.inboxId,
+      installationId: this.client.installationId,
+      installationIdBytes: this.client.installationIdBytes,
+    })
+  }
+
+  async signPushEnrollmentTicket(ticket: string): Promise<string> {
+    if (!ticket || ticket.length > 4096) {
+      throw new Error('The XMTP push enrollment ticket is invalid.')
+    }
+    return bytesToBase64Url(
+      await this.client.signWithInstallationKey(ticket),
+    )
+  }
+
+  async startPushTopicStream(onChange: () => void): Promise<void> {
+    if (this.#pushPreferenceStream && !this.#pushPreferenceStream.isDone) return
+    const generation = this.#pushStreamGeneration
+    const stream = await this.client.preferences.streamPreferences({
+      disableSync: true,
+      onValue: (updates) => {
+        if (
+          generation === this.#pushStreamGeneration &&
+          updates.some((update) => (
+            update.type === 'HmacKeyUpdate' || update.type === 'ConsentUpdate'
+          ))
+        ) onChange()
+      },
+    })
+    if (generation !== this.#pushStreamGeneration) {
+      if (!stream.isDone) await stream.end()
+      return
+    }
+    this.#pushPreferenceStream = stream
+  }
+
+  async stopPushTopicStream(): Promise<void> {
+    this.#pushStreamGeneration += 1
+    const stream = this.#pushPreferenceStream
+    this.#pushPreferenceStream = null
+    if (stream && !stream.isDone) await stream.end()
   }
 
   get convosAccessSnapshot(): ConvosAccessSnapshot | null {
@@ -875,11 +957,14 @@ export class XmtpMessagingSession {
 
   async close(): Promise<void> {
     this.#streamGeneration += 1
+    this.#pushStreamGeneration += 1
     this.#reactionRefreshVersions.clear()
     const stream = this.#messageStream
     const groupStream = this.#groupStream
+    const pushPreferenceStream = this.#pushPreferenceStream
     this.#messageStream = null
     this.#groupStream = null
+    this.#pushPreferenceStream = null
     this.#messageStreamHealth = 'retrying'
     this.#groupStreamHealth = 'retrying'
     const starting = this.#messageStreamStart
@@ -893,6 +978,9 @@ export class XmtpMessagingSession {
       if (stream && !stream.isDone) void stream.end().catch(() => undefined)
       if (groupStream && !groupStream.isDone) {
         void groupStream.end().catch(() => undefined)
+      }
+      if (pushPreferenceStream && !pushPreferenceStream.isDone) {
+        void pushPreferenceStream.end().catch(() => undefined)
       }
     } finally {
       // Worker termination, not successful stream cleanup, is the boundary

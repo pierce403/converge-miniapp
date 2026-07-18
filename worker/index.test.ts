@@ -79,6 +79,35 @@ describe('worker API', () => {
     })
   })
 
+  it('reports notification readiness without exposing token state', async () => {
+    const unavailable = await handleRequest(
+      new Request('https://miniapp.converge.cv/api/notifications/status'),
+      environment(),
+    )
+    const preferences = fakePreferences()
+    const available = await handleRequest(
+      new Request('https://miniapp.converge.cv/api/notifications/status'),
+      environment({
+        FARCASTER_HUB_API_KEY: 'neynar-key',
+        FARCASTER_HUB_URL: 'https://hub-api.neynar.com',
+        FARCASTER_NOTIFICATION_DELIVERY_URLS:
+          'https://api.farcaster.xyz/v1/frame-notifications',
+        FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1:
+          Buffer.alloc(32, 1).toString('base64url'),
+        PREFERENCES: preferences.database,
+        VAPID_PARTY_APP_ID: 'app_12345678',
+        VAPID_PARTY_APP_SECRET: 'app-secret',
+        VAPID_PARTY_ORIGIN: 'https://vapid.party',
+        VAPID_PARTY_PUBLIC_KEY:
+          Buffer.from([4, ...new Uint8Array(64).fill(2)]).toString('base64url'),
+      }),
+    )
+
+    await expect(unavailable.json()).resolves.toEqual({ available: false })
+    await expect(available.json()).resolves.toEqual({ available: true })
+    expect(available.headers.get('cache-control')).toBe('no-store')
+  })
+
   it('returns an authenticated, forward-verified ENS candidate and preference', async () => {
     const preferences = fakePreferences('dismissed')
     const dependencies = identityDependencies()
@@ -701,6 +730,27 @@ describe('worker API', () => {
     expect(deleted.status).toBe(204)
     expect(preferences.choice()).toBeNull()
     expect(preferences.notificationRows()).toBe(0)
+    expect(dependencies.revokeNotificationRoute).toHaveBeenCalledWith(
+      preferencesOnlyEnvironment,
+      8531,
+    )
+  })
+
+  it('retains account data when upstream notification revocation must retry', async () => {
+    const preferences = fakePreferences('accepted')
+    const dependencies = identityDependencies()
+    dependencies.revokeNotificationRoute.mockRejectedValue(
+      new Error('vapid.party unavailable'),
+    )
+    const response = await handleRequest(
+      authorizedRequest('/api/me', { method: 'DELETE' }),
+      environment({ PREFERENCES: preferences.database }),
+      dependencies,
+    )
+
+    expect(response.status).toBe(503)
+    expect(preferences.choice()).toBe('accepted')
+    expect(preferences.notificationRows()).toBe(1)
   })
 
   it('rejects malformed preference writes without touching D1', async () => {
@@ -770,6 +820,7 @@ function identityDependencies() {
       identities: [],
       status: 'complete',
     }),
+    revokeNotificationRoute: vi.fn().mockResolvedValue(false),
     verifyQuickAuthToken: vi.fn().mockResolvedValue(8531),
   } satisfies WorkerDependencies
 }
@@ -782,7 +833,9 @@ function fakePreferences(initialChoice: 'accepted' | 'dismissed' | null = null) 
       Promise.all(statements.map((statement) => statement.run())),
     prepare: (query: string) => ({
       bind: (...values: unknown[]) => ({
-        first: async () => query.includes('SELECT') && choice ? { choice } : null,
+        first: async () => query.includes('FROM ens_identity_preferences') && choice
+          ? { choice }
+          : null,
         run: async () => {
           if (query.includes('INSERT')) choice = values[1] as typeof choice
           if (query.includes('DELETE FROM ens_identity_preferences')) choice = null
@@ -930,6 +983,42 @@ describe('Farcaster manifest', () => {
         version: '1',
       },
     })
+  })
+
+  it('advertises the exact webhook only after the full alert bridge is ready', async () => {
+    const preferences = fakePreferences()
+    const configured = await handleRequest(
+      new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
+      environment({
+        ...association,
+        FARCASTER_HUB_API_KEY: 'neynar-key',
+        FARCASTER_HUB_URL: 'https://hub-api.neynar.com',
+        FARCASTER_NOTIFICATION_DELIVERY_URLS:
+          'https://api.farcaster.xyz/v1/frame-notifications',
+        FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1:
+          Buffer.alloc(32, 1).toString('base64url'),
+        PREFERENCES: preferences.database,
+        VAPID_PARTY_APP_ID: 'app_12345678',
+        VAPID_PARTY_APP_SECRET: 'app-secret',
+        VAPID_PARTY_ORIGIN: 'https://vapid.party',
+        VAPID_PARTY_PUBLIC_KEY:
+          Buffer.from([4, ...new Uint8Array(64).fill(2)]).toString('base64url'),
+      }),
+    )
+    const incomplete = await handleRequest(
+      new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
+      environment(association),
+    )
+
+    await expect(configured.json()).resolves.toMatchObject({
+      miniapp: {
+        webhookUrl: 'https://miniapp.converge.cv/api/farcaster/webhook',
+      },
+    })
+    const incompleteManifest = await incomplete.json() as {
+      miniapp: { webhookUrl?: string }
+    }
+    expect(incompleteManifest.miniapp.webhookUrl).toBeUndefined()
   })
 
   it('supports metadata-only HEAD requests and rejects writes', async () => {

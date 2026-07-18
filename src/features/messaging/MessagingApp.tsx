@@ -23,6 +23,7 @@ import {
 } from '../identity/inboxTarget'
 import { useParticipantIdentities } from '../identity/useParticipantIdentities'
 import { useRecipientResolution } from '../identity/useRecipientResolution'
+import { useFarcasterAlerts } from '../notifications/useFarcasterAlerts'
 import { ConversationScreen } from './ConversationScreen'
 import { EnsInboxSwitchDialog } from './EnsInboxSwitchDialog'
 import { shortIdentity } from './format'
@@ -32,8 +33,11 @@ import { NewDmScreen } from './NewDmScreen'
 import { useXmtpMessaging, type ConnectionPhase } from './useXmtpMessaging'
 
 type MessagingAppProps = {
+  canAddMiniApp?: boolean
   canUseBack: boolean
   canUseWallet: boolean
+  initiallyMiniAppAdded?: boolean
+  initiallyNotificationsEnabled?: boolean
   reloadDocument?: () => void
   user: {
     displayName?: string
@@ -121,8 +125,11 @@ const connectionCopy: Partial<Record<ConnectionPhase, {
 }
 
 export function MessagingApp({
+  canAddMiniApp = false,
   canUseBack,
   canUseWallet,
+  initiallyMiniAppAdded = false,
+  initiallyNotificationsEnabled = false,
   reloadDocument = reloadCurrentDocument,
   user,
 }: MessagingAppProps) {
@@ -147,7 +154,54 @@ export function MessagingApp({
   const messaging = useXmtpMessaging({
     autoConnect: canUseWallet && !selectionBlocked,
     inboxTarget,
+    notificationFid: user.fid,
   })
+  const alerts = useFarcasterAlerts({
+    canAddMiniApp,
+    canPrompt: messaging.connection.phase === 'ready' &&
+      messaging.view === 'inbox' &&
+      messaging.streamHealth !== 'offline',
+    fid: user.fid,
+    initiallyAdded: initiallyMiniAppAdded,
+    initiallyNotificationsEnabled,
+  })
+  const messagingPhase = messaging.connection.phase
+  const disableMessagingAlerts = messaging.disableAlerts
+  const setMessagingNotice = messaging.setNotice
+  const syncMessagingAlerts = messaging.syncAlerts
+  const previousNotificationsEnabledRef = useRef(alerts.notificationsEnabled)
+  useEffect(() => {
+    if (
+      !alerts.available ||
+      messagingPhase !== 'ready'
+    ) return
+
+    let cancelled = false
+    const wasEnabled = previousNotificationsEnabledRef.current
+    previousNotificationsEnabledRef.current = alerts.notificationsEnabled
+    if (!alerts.notificationsEnabled && !wasEnabled) return
+
+    const update = alerts.notificationsEnabled ? syncMessagingAlerts : disableMessagingAlerts
+    void update().catch(() => {
+      if (cancelled) return
+      setMessagingNotice(
+        alerts.notificationsEnabled
+          ? 'Farcaster alerts are on, but this inbox could not finish alert registration. Reopen Converge Mini while online to retry.'
+          : 'Farcaster notifications are off, but alert cleanup could not reach the relay. Converge Mini will retry while it is open.',
+      )
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    alerts.available,
+    alerts.notificationsEnabled,
+    disableMessagingAlerts,
+    messagingPhase,
+    setMessagingNotice,
+    syncMessagingAlerts,
+  ])
   const recipientResolution = useRecipientResolution()
   const ensIdentity = useEnsIdentity({
     enabled: messaging.connection.phase === 'ready' && messaging.address !== null,
@@ -570,6 +624,7 @@ export function MessagingApp({
             inboxTarget ? shortIdentity(messaging.address) : undefined
           )}
           address={messaging.address}
+          alerts={alerts}
           conversations={messaging.conversations}
           ensIdentity={ensIdentity}
           ensTargetNameVerified={verifiedTargetName !== undefined}

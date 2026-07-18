@@ -48,6 +48,7 @@ describe('Farcaster notification webhook', () => {
       'https://hub.example',
       expect.objectContaining({
         headers: { 'x-api-key': 'hub-secret' },
+        redirect: 'error',
         signal: expect.any(AbortSignal),
       }),
     )
@@ -110,16 +111,59 @@ describe('Farcaster notification webhook', () => {
     storage.seed(8531, 9152)
     storage.seed(8531, 9999)
     storage.seed(9000, 9152)
+    storage.seedRoute(8531)
+    const dependencies = webhookDependencies()
     const response = await handleFarcasterWebhook(
       webhookRequest(event),
       webhookEnvironment(storage.database),
-      webhookDependencies().value,
+      dependencies.value,
     )
 
     expect(response.status).toBe(200)
     expect(storage.row(8531, 9152)).toBeNull()
     expect(storage.row(8531, 9999)).not.toBeNull()
     expect(storage.row(9000, 9152)).not.toBeNull()
+    expect(storage.hasRoute(8531)).toBe(true)
+    expect(dependencies.revokeNotificationRoute).not.toHaveBeenCalled()
+  })
+
+  it('revokes the XMTP route after the final Farcaster client disables alerts', async () => {
+    const storage = fakeNotificationDatabase()
+    storage.seed(8531, 9152)
+    storage.seedRoute(8531)
+    const dependencies = webhookDependencies()
+    dependencies.revokeNotificationRoute.mockImplementation(async () => {
+      storage.revokeRoute(8531)
+      return true
+    })
+    const response = await handleFarcasterWebhook(
+      webhookRequest({ event: 'notifications_disabled' }),
+      webhookEnvironment(storage.database),
+      dependencies.value,
+    )
+
+    expect(response.status).toBe(200)
+    expect(storage.row(8531, 9152)).toBeNull()
+    expect(storage.hasRoute(8531)).toBe(false)
+  })
+
+  it('retains the opaque route and retries when upstream revocation fails', async () => {
+    const storage = fakeNotificationDatabase()
+    storage.seed(8531, 9152)
+    storage.seedRoute(8531)
+    const dependencies = webhookDependencies()
+    dependencies.revokeNotificationRoute.mockRejectedValue(
+      new Error('vapid.party unavailable'),
+    )
+    const response = await handleFarcasterWebhook(
+      webhookRequest({ event: 'notifications_disabled' }),
+      webhookEnvironment(storage.database),
+      dependencies.value,
+    )
+
+    expect(response.status).toBe(503)
+    expect(storage.row(8531, 9152)).toBeNull()
+    expect(storage.hasRoute(8531)).toBe(true)
   })
 
   it.each([
@@ -304,14 +348,17 @@ function webhookDependencies(appFid = 9152) {
     valid: true,
   })
   const createVerifier = vi.fn(() => verifyAppKey)
+  const revokeRoute = vi.fn().mockResolvedValue(false)
   return {
     createVerifier,
     value: {
       createVerifyAppKeyWithHub: createVerifier,
       encryptNotificationDetails,
       parseWebhookEvent,
+      revokeNotificationRoute: revokeRoute,
     } satisfies FarcasterWebhookDependencies,
     verifyAppKey,
+    revokeNotificationRoute: revokeRoute,
   }
 }
 
@@ -344,12 +391,25 @@ function signedWebhook(event: object) {
 
 function fakeNotificationDatabase(options: { failWrites?: boolean } = {}) {
   const rows = new Map<string, StoredRow>()
+  const routes = new Set<number>()
   const key = (fid: number, appFid: number) => `${fid}:${appFid}`
   const database = {
+    async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+      return await Promise.all(statements.map((statement) => statement.run()))
+    },
     prepare(query: string) {
       return {
         bind(...values: unknown[]) {
           return {
+            async first() {
+              if (query.includes('FROM farcaster_notification_subscriptions')) {
+                const fid = values[0] as number
+                return [...rows.values()].some((row) => row.fid === fid)
+                  ? { active: 1 }
+                  : null
+              }
+              return null
+            },
             async run() {
               if (options.failWrites) throw new Error('D1 unavailable')
               const fid = values[0] as number
@@ -364,6 +424,10 @@ function fakeNotificationDatabase(options: { failWrites?: boolean } = {}) {
                 })
               } else if (query.includes('DELETE FROM farcaster_notification_subscriptions')) {
                 rows.delete(key(fid, appFid))
+              } else if (query.includes('DELETE FROM xmtp_notification_routes')) {
+                const hasSubscription = [...rows.values()].some((row) =>
+                  row.fid === fid)
+                if (!hasSubscription) routes.delete(fid)
               }
               return { success: true }
             },
@@ -374,6 +438,7 @@ function fakeNotificationDatabase(options: { failWrites?: boolean } = {}) {
   } as unknown as D1Database
   return {
     database,
+    hasRoute: (fid: number) => routes.has(fid),
     row: (fid: number, appFid: number) => rows.get(key(fid, appFid)) ?? null,
     seed(fid: number, appFid: number) {
       rows.set(key(fid, appFid), {
@@ -383,6 +448,12 @@ function fakeNotificationDatabase(options: { failWrites?: boolean } = {}) {
         keyVersion: 1,
         nonce: 'seed-nonce',
       })
+    },
+    seedRoute(fid: number) {
+      routes.add(fid)
+    },
+    revokeRoute(fid: number) {
+      routes.delete(fid)
     },
     size: () => rows.size,
   }

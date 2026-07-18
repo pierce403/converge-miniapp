@@ -10,6 +10,10 @@ import {
   type EncryptedNotificationDetails,
   type NotificationDetails,
 } from './notificationCrypto.js'
+import {
+  revokeNotificationRoute,
+  type NotificationBridgeEnv,
+} from './notificationBridge.js'
 
 const BODY_LIMIT_BYTES = 8_192
 const HUB_TIMEOUT_MS = 5_000
@@ -25,15 +29,7 @@ const responseHeaders = {
   'x-content-type-options': 'nosniff',
 }
 
-export type FarcasterWebhookEnv = {
-  APP_ENV: string
-  CANONICAL_ORIGIN: string
-  FARCASTER_HUB_API_KEY?: string
-  FARCASTER_HUB_URL?: string
-  FARCASTER_NOTIFICATION_DELIVERY_URLS?: string
-  FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1?: string
-  PREFERENCES?: D1Database
-}
+export type FarcasterWebhookEnv = NotificationBridgeEnv
 
 export type FarcasterWebhookDependencies = {
   createVerifyAppKeyWithHub: (
@@ -45,12 +41,14 @@ export type FarcasterWebhookDependencies = {
     rawData: unknown,
     verifyAppKey: VerifyAppKey,
   ) => Promise<ParseWebhookEventResult>
+  revokeNotificationRoute: typeof revokeNotificationRoute
 }
 
 const defaultDependencies: FarcasterWebhookDependencies = {
   createVerifyAppKeyWithHub,
   encryptNotificationDetails,
   parseWebhookEvent,
+  revokeNotificationRoute,
 }
 
 export async function handleFarcasterWebhook(
@@ -76,7 +74,8 @@ export async function handleFarcasterWebhook(
     'application/json') return jsonError('invalid_request', 415)
 
   const configuration = notificationConfiguration(env)
-  if (!configuration || !env.PREFERENCES) {
+  const database = env.PREFERENCES
+  if (!configuration || !database) {
     return jsonError('notification_unavailable', 503)
   }
 
@@ -93,6 +92,7 @@ export async function handleFarcasterWebhook(
       configuration.hubUrl,
       {
         headers: { 'x-api-key': configuration.hubApiKey },
+        redirect: 'error',
         signal: controller.signal,
       },
     )
@@ -120,7 +120,7 @@ export async function handleFarcasterWebhook(
       )
       if (!details) return jsonError('invalid_request', 400)
       await upsertSubscription(
-        env.PREFERENCES,
+        database,
         parsed.fid,
         parsed.appFid,
         details,
@@ -135,7 +135,7 @@ export async function handleFarcasterWebhook(
       )
       if (!details) return jsonError('invalid_request', 400)
       await upsertSubscription(
-        env.PREFERENCES,
+        database,
         parsed.fid,
         parsed.appFid,
         details,
@@ -144,7 +144,13 @@ export async function handleFarcasterWebhook(
         dependencies,
       )
     } else {
-      await deleteSubscription(env.PREFERENCES, parsed.fid, parsed.appFid)
+      await deleteSubscription(
+        env,
+        database,
+        parsed.fid,
+        parsed.appFid,
+        dependencies,
+      )
     }
   } catch {
     return jsonError('notification_unavailable', 503)
@@ -193,14 +199,25 @@ async function upsertSubscription(
 }
 
 async function deleteSubscription(
+  env: FarcasterWebhookEnv,
   database: D1Database,
   fid: number,
   appFid: number,
+  dependencies: FarcasterWebhookDependencies,
 ): Promise<void> {
   await database.prepare(`
     DELETE FROM farcaster_notification_subscriptions
     WHERE fid = ?1 AND app_fid = ?2
   `).bind(fid, appFid).run()
+  const remaining = await database.prepare(`
+    SELECT 1 AS active
+    FROM farcaster_notification_subscriptions
+    WHERE fid = ?1
+    LIMIT 1
+  `).bind(fid).first<{ active: number }>()
+  if (remaining?.active !== 1) {
+    await dependencies.revokeNotificationRoute(env, fid)
+  }
 }
 
 function acceptedNotificationDetails(

@@ -25,6 +25,8 @@ The messaging path always uses the Farcaster host wallet—EOA or supported smar
 
 Peer wallet labels upgrade asynchronously from a shortened address to ENS or Basename through a bounded, Quick Auth-protected first-party lookup. A registered fname can appear separately as a best-effort registry hint, never as the authoritative participant label, and the wallet address remains visible. The pinned XMTP Browser SDK has no finalized typing-notification API, so silent typing-style control messages are ignored instead of rendered as unsupported content.
 
+Incoming alerts use Farcaster's native Mini App notification permission plus vapid.party's queue-backed XMTP observer. The browser proves its current XMTP installation and registers only push topics/HMAC filtering material; message plaintext and decryption keys never enter either backend. vapid.party signs an opaque message-available callback, and the Mini Worker maps it to encrypted Farcaster tokens and sends fixed generic copy to the exact canonical root. `GET /api/notifications/status` stays unavailable and the manifest omits its webhook until every production dependency is configured.
+
 ## Verification
 
 ```sh

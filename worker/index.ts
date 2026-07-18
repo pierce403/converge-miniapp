@@ -10,6 +10,12 @@ import {
   type ParticipantIdentityBatch,
 } from './participantIdentities.js'
 import { handleFarcasterWebhook } from './farcasterWebhook.js'
+import {
+  handleNotificationUserApi,
+  handleXmtpNotificationCallback,
+  notificationBridgeConfigured,
+  revokeNotificationRoute,
+} from './notificationBridge.js'
 import { verifyQuickAuthToken } from './quickAuth.js'
 import { getAddress, isAddress } from 'viem'
 
@@ -60,6 +66,10 @@ export type AppEnv = {
   FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1?: string
   IDENTITY_RATE_LIMITER?: RateLimit
   PREFERENCES?: D1Database
+  VAPID_PARTY_APP_ID?: string
+  VAPID_PARTY_APP_SECRET?: string
+  VAPID_PARTY_ORIGIN?: Env['VAPID_PARTY_ORIGIN']
+  VAPID_PARTY_PUBLIC_KEY?: string
 }
 
 export type WorkerDependencies = {
@@ -73,6 +83,7 @@ export type WorkerDependencies = {
     rpcUrls?: string,
     options?: { baseRpcUrl?: string; signal?: AbortSignal },
   ) => Promise<ParticipantIdentityBatch>
+  revokeNotificationRoute: typeof revokeNotificationRoute
   verifyQuickAuthToken: (token: string, domain: string) => Promise<number>
 }
 
@@ -80,6 +91,7 @@ const defaultDependencies: WorkerDependencies = {
   discoverEnsIdentity,
   resolveEnsName,
   resolveParticipantIdentities,
+  revokeNotificationRoute,
   verifyQuickAuthToken,
 }
 
@@ -116,6 +128,29 @@ export async function handleRequest(
     return handleFarcasterWebhook(request, env)
   }
 
+  if (url.pathname === '/api/internal/xmtp-notification') {
+    return handleXmtpNotificationCallback(request, env)
+  }
+
+  if (url.pathname === '/api/notifications/status') {
+    const canonicalOrigin = new URL(env.CANONICAL_ORIGIN).origin
+    if (env.APP_ENV === 'production' && url.origin !== canonicalOrigin) {
+      return jsonError('not_found', 404)
+    }
+    if (request.method !== 'GET') return methodNotAllowed('GET')
+    return Response.json(
+      { available: notificationBridgeConfigured(env) },
+      { headers: noStoreJsonHeaders },
+    )
+  }
+
+  if (
+    url.pathname === '/api/me/notifications/xmtp-ticket' ||
+    url.pathname === '/api/me/notifications/xmtp-subscription'
+  ) {
+    return notificationUserApi(request, env, dependencies)
+  }
+
   if (
     url.pathname === '/api/me/ens' ||
     url.pathname === '/api/me/ens-preference' ||
@@ -142,6 +177,30 @@ export async function handleRequest(
   }
 
   return new Response(null, { status: 404, headers: securityHeaders })
+}
+
+async function notificationUserApi(
+  request: Request,
+  env: AppEnv,
+  dependencies: WorkerDependencies,
+): Promise<Response> {
+  const url = new URL(request.url)
+  const canonicalDomain = new URL(env.CANONICAL_ORIGIN).host
+  if (env.APP_ENV === 'production' && url.host !== canonicalDomain) {
+    return jsonError('not_found', 404)
+  }
+  const token = bearerToken(request)
+  if (!token) return jsonError('unauthorized', 401)
+  let fid: number
+  try {
+    fid = await dependencies.verifyQuickAuthToken(
+      token,
+      env.APP_ENV === 'production' ? canonicalDomain : url.host,
+    )
+  } catch {
+    return jsonError('unauthorized', 401)
+  }
+  return handleNotificationUserApi(request, env, fid)
 }
 
 async function recipientResolutionApi(
@@ -490,12 +549,16 @@ async function identityApi(
       })
     }
 
+    await dependencies.revokeNotificationRoute(env, fid)
     await env.PREFERENCES.batch([
       env.PREFERENCES.prepare(
         'DELETE FROM ens_identity_preferences WHERE fid = ?1',
       ).bind(fid),
       env.PREFERENCES.prepare(
         'DELETE FROM farcaster_notification_subscriptions WHERE fid = ?1',
+      ).bind(fid),
+      env.PREFERENCES.prepare(
+        'DELETE FROM xmtp_notification_routes WHERE fid = ?1',
       ).bind(fid),
     ])
     return new Response(null, {
@@ -616,6 +679,9 @@ function farcasterManifest(request: Request, env: AppEnv): Response {
       tagline: 'Private messages in Farcaster',
       tags: ['xmtp', 'messaging', 'privacy', 'farcaster'],
       version: '1',
+      ...(association.state === 'valid' && notificationBridgeConfigured(env)
+        ? { webhookUrl: `${origin}/api/farcaster/webhook` }
+        : {}),
     },
   }
   const responseHeaders = association.state === 'valid'

@@ -7,6 +7,10 @@ const context = {
   client: {
     added: false,
     clientFid: 1,
+    notificationDetails: {
+      token: 'host-secret',
+      url: 'https://notifications.example.test',
+    },
     safeAreaInsets: { bottom: 8, left: 0, right: 0, top: 12 },
   },
   user: { fid: 403, username: 'pierce' },
@@ -60,7 +64,15 @@ describe('useMiniAppHost', () => {
     resolveContext(context)
 
     await waitFor(() => expect(result.current.status).toBe('embedded'))
-    expect(result.current.context).toEqual(context)
+    expect(result.current.context).toEqual({
+      client: {
+        added: false,
+        notificationsEnabled: true,
+        safeAreaInsets: { bottom: 8, left: 0, right: 0, top: 12 },
+      },
+      user: { fid: 403, username: 'pierce' },
+    })
+    expect(JSON.stringify(result.current.context)).not.toContain('host-secret')
     expect(result.current.capabilities).toEqual(['wallet.getEthereumProvider', 'back'])
   })
 

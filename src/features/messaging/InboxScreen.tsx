@@ -13,6 +13,11 @@ import { Avatar } from '../../components/Avatar'
 import { Button } from '../../components/Button'
 import type { EnsIdentityState } from '../identity/useEnsIdentity'
 import {
+  FarcasterAlertPrompt,
+  FarcasterAlertsMenu,
+} from '../notifications/FarcasterAlerts'
+import type { FarcasterAlertsState } from '../notifications/useFarcasterAlerts'
+import {
   participantPresentation,
   type ParticipantIdentity,
 } from '../identity/useParticipantIdentities'
@@ -22,6 +27,7 @@ import { conversationTime, shortIdentity } from './format'
 type InboxScreenProps = {
   activeInboxName?: string | undefined
   address: `0x${string}`
+  alerts?: FarcasterAlertsState | undefined
   conversations: ConversationSummary[]
   ensIdentity: EnsIdentityState
   ensTargetNameVerified?: boolean | undefined
@@ -50,6 +56,7 @@ type InboxScreenProps = {
 export function InboxScreen({
   activeInboxName,
   address,
+  alerts,
   conversations,
   ensIdentity,
   ensTargetNameVerified = false,
@@ -117,6 +124,7 @@ export function InboxScreen({
             </h2>
             <code>{address}</code>
             <p>{environment}</p>
+            {alerts ? <FarcasterAlertsMenu alerts={alerts} /> : null}
             <EnsMenuIdentity
               identity={ensIdentity}
               offline={offline}
@@ -144,21 +152,24 @@ export function InboxScreen({
         </details>
       </header>
 
-      {streamHealth !== 'live' ? (
-        <div className={`connection-banner connection-banner--${streamHealth}`} role="status">
-          {streamHealth === 'retrying' ? <ArrowDownUp aria-hidden="true" /> : <WifiOff aria-hidden="true" />}
-          <span>
-            {offline
-              ? 'Offline. Showing conversations saved on this device.'
-              : streamHealth === 'retrying'
-              ? 'Live updates are reconnecting. Your local inbox is still available.'
-              : 'Live updates paused. Pull a fresh sync when your connection returns.'}
-          </span>
-          {!offline ? (
-            <button type="button" onClick={onRetryLiveUpdates}>Refresh now</button>
-          ) : null}
-        </div>
-      ) : null}
+      <div className="inbox-banners">
+        {alerts ? <FarcasterAlertPrompt alerts={alerts} /> : null}
+        {streamHealth !== 'live' ? (
+          <div className={`connection-banner connection-banner--${streamHealth}`} role="status">
+            {streamHealth === 'retrying' ? <ArrowDownUp aria-hidden="true" /> : <WifiOff aria-hidden="true" />}
+            <span>
+              {offline
+                ? 'Offline. Showing conversations saved on this device.'
+                : streamHealth === 'retrying'
+                ? 'Live updates are reconnecting. Your local inbox is still available.'
+                : 'Live updates paused. Pull a fresh sync when your connection returns.'}
+            </span>
+            {!offline ? (
+              <button type="button" onClick={onRetryLiveUpdates}>Refresh now</button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
 
       <div className="inbox-actions">
         <div>

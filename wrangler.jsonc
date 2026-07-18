@@ -39,7 +39,8 @@
     "CANONICAL_ORIGIN": "https://miniapp.converge.cv",
     "ENS_MAINNET_RPC_URLS": "https://ethereum-rpc.publicnode.com,https://eth.llamarpc.com",
     "FARCASTER_HUB_URL": "https://hub-api.neynar.com",
-    "FARCASTER_NOTIFICATION_DELIVERY_URLS": "https://api.farcaster.xyz/v1/frame-notifications"
+    "FARCASTER_NOTIFICATION_DELIVERY_URLS": "https://api.farcaster.xyz/v1/frame-notifications",
+    "VAPID_PARTY_ORIGIN": "https://vapid.party"
   },
   "version_metadata": {
     "binding": "CF_VERSION_METADATA"
@@ -78,7 +79,8 @@
         "CANONICAL_ORIGIN": "http://localhost:5173",
         "ENS_MAINNET_RPC_URLS": "https://ethereum-rpc.publicnode.com,https://eth.llamarpc.com",
         "FARCASTER_HUB_URL": "https://hub-api.neynar.com",
-        "FARCASTER_NOTIFICATION_DELIVERY_URLS": "https://api.farcaster.xyz/v1/frame-notifications"
+        "FARCASTER_NOTIFICATION_DELIVERY_URLS": "https://api.farcaster.xyz/v1/frame-notifications",
+        "VAPID_PARTY_ORIGIN": "https://vapid.party"
       },
       "version_metadata": {
         "binding": "CF_VERSION_METADATA"

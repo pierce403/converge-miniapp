@@ -11,20 +11,20 @@ This runbook covers the Cloudflare-hosted SPA and Worker API at `https://miniapp
 | Version metadata | `CF_VERSION_METADATA` binding | Exposes deployment ID/tag/timestamp through `/api/health`. |
 | Account association | Three Worker secrets listed below | Public Farcaster ownership proof, kept out of source control. |
 | ENS preferences | `PREFERENCES` D1 binding | Stores only Quick Auth-verified FID, `accepted`/`dismissed`, and update time. Production and preview databases are isolated. |
-| Farcaster notification lifecycle | `PREFERENCES` D1 binding plus two Worker secrets | Stores only verified `(fid, app_fid)` lifecycle rows with the delivery URL and token encrypted together. The Hub credential verifies current app-key state; the AES key protects stored details. The manifest and UI remain off until both are configured and proven. |
+| XMTP-to-Farcaster alerts | `PREFERENCES`, `IDENTITY_RATE_LIMITER`, Farcaster secrets, and vapid.party app credentials | Stores encrypted native tokens plus one random opaque callback handle per verified FID. vapid.party observes registered XMTP topics and sends signed message-available callbacks; Mini owns native token custody and fixed alert copy. |
 | ENS discovery | `ENS_MAINNET_RPC_URLS` Worker variable | Ordered comma-separated public HTTPS Ethereum RPC fallbacks for reverse and forward ENS verification. |
 | ENS identity binding | Browser `localStorage`, namespaced by host-context FID | Remembers only a confirmed public ENS name, checksummed target/source addresses, expected target inbox ID, and Farcaster signer kind/chain. The FID is a non-authoritative namespace hint; every launch independently opens the exact source with Farcaster, requires the saved signer kind (and chain for a smart-contract wallet), and requires the expected inbox ID. WalletConnect is used and disconnected inside the one-time binding action; pairing URIs, topics, signatures, and keys are never stored in the binding record. No Worker binding or server row is involved. |
 | Peer Farcaster hints | Optional `FARCASTER_BASE_RPC_URL` Worker secret | Production Base RPC used for a bounded read of the experimental address-to-FID Verifications contract. Without it, ENS/Basename still work and registered-fname hints stay off. |
-| Identity abuse control | `IDENTITY_RATE_LIMITER` binding | Separately limits participant-identity batches and ENS recipient resolutions per verified FID in each Cloudflare location. |
+| Identity abuse control | `IDENTITY_RATE_LIMITER` binding | Separately limits participant-identity batches, ENS recipient resolutions, and alert enrollment mutations per verified FID in each Cloudflare location. |
 | Farcaster identity | Quick Auth JWKS + official primary-address API | Verifies the exact-domain FID and resolves its public primary Ethereum address. |
 | XMTP environment | `VITE_XMTP_ENV` at build time | `dev` for preview/local; legacy `production` for the current canonical build; decentralized `mainnet` remains gated. |
 | XMTP Gateway | `VITE_XMTP_GATEWAY_HOST` at build time | Required for `mainnet` and decentralized testnets. Public hostname only; never put a credential in a `VITE_` variable. |
 | External ENS wallet | `VITE_WALLETCONNECT_PROJECT_ID` at build time | Public Reown/WalletConnect project ID for the optional one-time ENS binding action. Configure it as a Cloudflare Workers Builds variable and allowlist the exact production/preview origins in Reown; it is not a Worker runtime secret and is not used for routine inbox authentication. |
 | Offline shell | Browser service worker + Cache Storage | Caches only the public shell and static same-origin assets. XMTP remains the sole local message store in OPFS; no binding or server resource is involved. |
 
-The production `PREFERENCES` database is `converge-miniapp-preferences`; preview uses the separate `converge-miniapp-preview-preferences` database. There is no KV, R2, Queue, Durable Object, identity-link table, plaintext notification token store, or persistent application session store.
+The production `PREFERENCES` database is `converge-miniapp-preferences`; preview uses the separate `converge-miniapp-preview-preferences` database. Mini has no KV, R2, Queue, Durable Object, identity-link table, plaintext notification token store, or persistent application session store. Retryable XMTP observation and callback delivery run in vapid.party's separate queue-backed service.
 
-## Current deployment state (2026-07-17)
+## Current deployment state (2026-07-18)
 
 The Cloudflare Worker and its `miniapp.converge.cv` Custom Domain are live. Cloudflare Workers Builds pulls and deploys verified `main` commits through the Cloudflare GitHub App; use `/api/health` and `wrangler deployments list` for the current immutable deployment ID instead of recording a value here that changes on every release.
 
@@ -40,7 +40,7 @@ The hosted shell, first-party health endpoint, and signed ownership manifest are
 
 - The three exact-domain Farcaster account-association values are configured as Worker runtime secrets. On 2026-07-15 Farcaster's public debugger reported `valid`, `schemaValid`, `verified`, `domainMatches`, and `signatureValid` as true for FID `8531` (`deanpierce.eth`). The manifest remains `noindex: true` until launch is deliberately approved.
 - The authenticated, quota-enforced XMTP payer Gateway and its CSP origins remain unconfigured. That blocks a switch to decentralized `mainnet`, but does not block the pinned SDK's legacy `production` endpoint.
-- Farcaster notification enrollment remains unadvertised. The deployed Worker has no current-Hub API credential, so `/api/farcaster/webhook` must fail closed, the manifest must omit `webhookUrl`, and the UI must not ask users to enable alerts. The encrypted lifecycle foundation does not by itself observe incoming XMTP messages while the browser is closed.
+- Alert promotion remains fail-closed until the current-Hub credential and the three vapid.party app values are configured. `GET /api/notifications/status` then remains `{"available":false}`, the manifest omits `webhookUrl`, and the UI must not prompt. Once configured, the signed lifecycle webhook, installation-proof enrollment proxy, signed opaque callback, fixed native delivery, invalid-token cleanup, and logical-route revocation form one complete path; canonical-host proof is still required.
 - Real Farcaster desktop, iOS, and Android wallet/WebView validation remains required before launch.
 - A dedicated public Reown project ID is configured as `VITE_WALLETCONNECT_PROJECT_ID` on the main-only production Workers Builds trigger. On 2026-07-17 an exact-origin browser relay probe from `https://miniapp.converge.cv` emitted a WalletConnect pairing URI and was stopped before wallet approval. Before release, confirm that the Reown dashboard allowlist contains the exact production origin and only separately tested preview origins, then complete the real-wallet tests below. Builds that omit the variable still fail closed with an explicit configuration state.
 
@@ -82,7 +82,7 @@ CREATE TABLE ens_identity_preferences (
 );
 ```
 
-The additive notification migration creates a separate table keyed by the signed webhook's verified user and client FIDs. Its delivery URL and token are encrypted together; no name, address, XMTP identifier, plaintext token, or message data belongs in this database. The binding and database names are committed configuration; there are no D1 credentials to copy into GitHub Actions.
+The additive notification migrations create the encrypted native-token table, one random opaque callback handle per verified FID, and bounded callback replay/lease state. They store no XMTP inbox or installation ID, topic, HMAC key, name, address, plaintext token, or message data. The binding and database names are committed configuration; there are no D1 credentials to copy into GitHub Actions.
 
 After changing `wrangler.jsonc`, regenerate and review Worker bindings:
 
@@ -116,6 +116,10 @@ The protected routes are exact-host and no-store:
 | `POST /api/resolve` | `200` with `status: resolved` plus the normalized name/checksummed address, or `status: none` with no candidate | `400` malformed, oversized, dotless, or invalid ENS input; `401` invalid/missing token; `404` wrong production host; `405` wrong method; `429` verified-FID rate limit; `503` resolver configuration, provider, binding, or deadline failure. |
 | `POST /api/identities` | `200` with stateless registered-fname, ENS, and Basename display metadata plus a partial-result flag for up to 12 valid Ethereum addresses | `400` malformed/oversized JSON; `401` invalid/missing token; `404` wrong production host; `429` verified-FID rate limit; `503` total resolver outage/deadline or missing required configuration. |
 | `PUT /api/me/ens-preference` | `204` for JSON `{"choice":"accepted"}` or `{"choice":"dismissed"}` | `400` malformed/unsupported body; auth/binding failures as above. |
+| `GET /api/notifications/status` | `200 {"available":true}` only when every native and vapid.party dependency is configured; otherwise `false` | Never returns token, FID, route, or app-secret state. |
+| `POST /api/me/notifications/xmtp-ticket` | Returns the exact vapid.party ticket and a server-completed registration after a native token exists | Quick Auth and per-FID rate limit; `425` while the signed Farcaster webhook token is pending; `400/413` invalid bounded topic snapshot; `503` configuration/upstream failure. |
+| `POST /api/me/notifications/xmtp-subscription` | Verifies the owned opaque handle, forwards the installation proof, and returns only `{"registered":true}` | Never exposes vapid.party's management receipt or app secret; auth/rate/config/upstream failures are fail-closed. |
+| `DELETE /api/me/notifications/xmtp-subscription` | App-secret revokes every vapid.party logical callback route for the verified FID's opaque handle, then deletes that handle | Idempotent when no handle exists; local deletion occurs only after a valid upstream success envelope. |
 | `DELETE /api/me` | `204` after deleting the verified FID's preference and every notification row for that FID | Auth/binding failures as above. |
 
 Quick Auth verification checks Farcaster's issuer, signature, expiry, exact audience, and a positive integer FID subject. Production accepts only the canonical domain; non-production verifies the actual rendered host so localhost and a separately deployed preview can be exercised without weakening production. The Worker ignores any client-supplied FID. It then fetches the official Farcaster primary Ethereum address and requires mainnet ENS reverse and forward resolution to agree. `ENS_MAINNET_RPC_URLS` is public replaceable configuration, not a secret; keep multiple reviewed HTTPS providers so one RPC failure can fail over, and treat total lookup failure as a nonblocking identity-feature outage.
@@ -143,24 +147,27 @@ curl -i https://miniapp.converge.cv/api/me/ens
 
 Then, inside the canonical Farcaster Mini App, verify a valid account reaches one of the explicit `available`, `none`, or `unavailable` discovery states; save both choices idempotently; confirm a dismissal does not auto-prompt on re-entry; confirm the menu can opt in later; and verify **Delete saved ENS choice** removes the row and restores the unset offer state. Review sampled logs and confirm no JWT, FID, address, ENS name, preference, or XMTP identifier is emitted.
 
-## Farcaster notification lifecycle foundation
+## XMTP-to-Farcaster alert bridge
 
-`POST /api/farcaster/webhook` is deliberately an unadvertised server foundation until production verification is ready. It accepts only bounded JSON on the exact canonical host. The pinned official Mini App server package verifies the Farcaster Signature and asks the configured Hub for the latest app-key state; Quick Auth and browser context are not substitutes. A verified add/enable event encrypts its URL and token with AES-256-GCM and fresh nonce, binding the ciphertext to the verified user FID, client app FID, canonical domain, and key version. A verified add without details, disable, or removal deletes the exact client row.
+`POST /api/farcaster/webhook` accepts only bounded JSON on the exact canonical host. The pinned official Mini App server package verifies the Farcaster Signature and asks the configured Hub for the latest app-key state; Quick Auth and browser context are not substitutes. A verified add/enable event encrypts its URL and token with AES-256-GCM and fresh nonce, binding the ciphertext to the verified user FID, client app FID, canonical domain, and key version. A verified add without details, disable, or removal deletes the exact client row. After the last client row disappears, Mini first marks the FID's opaque XMTP callback handle `revoking`, revokes it through vapid.party's app-secret endpoint, and only then deletes the local handle. An upstream failure returns retryable `503` and retains the tombstone so a concurrent callback is terminal and Farcaster can retry cleanup safely.
 
-The committed public configuration is limited to the reviewed Hub base URL and exact notification delivery URL allowlist. Configure credentials independently for preview and production without committing them:
+After XMTP is ready, the browser sends its bounded topic/HMAC snapshot through two Quick Auth routes. Mini forces the exact callback URL, generic/minimal-payload preferences, and its own random FID-scoped `inboxHandle`; keeps the vapid.party app secret server-side; and forwards the installation-key proof. vapid.party atomically keeps one active installation for `(appId, inboxHandle)`. The Mini D1 never stores the XMTP inbox ID, installation ID, topics, HMAC keys, proof, ticket, or management receipt.
+
+vapid.party callbacks contain only a signed delivery ID and opaque handle. Mini pins the app ID and P-256 public key, verifies the exact raw body plus timestamp and delivery ID, rejects stale/replayed events, decrypts current native tokens, groups at most 100 tokens per exact allowlisted URL, and sends fixed copy to the canonical root. It deletes invalid tokens, returns retryable status for rate limits/outages, and uses the stable delivery ID as Farcaster's notification ID. A missing handle or a handle with no native token returns terminal `410`; vapid.party then removes that logical route without affecting other apps or handles.
+
+The committed public configuration is limited to the reviewed Hub base URL and exact notification delivery URL allowlist. The closed-app bridge is deliberately production-only because its callback, Quick Auth audience, notification target, and manifest identity are bound to `miniapp.converge.cv`. Configure these production credentials without committing them:
 
 ```sh
-npx wrangler secret put FARCASTER_HUB_API_KEY --env preview
-npx wrangler secret put FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1 --env preview
 npx wrangler secret put FARCASTER_HUB_API_KEY
 npx wrangler secret put FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1
+npx wrangler secret put VAPID_PARTY_APP_ID
+npx wrangler secret put VAPID_PARTY_APP_SECRET
+npx wrangler secret put VAPID_PARTY_PUBLIC_KEY
 ```
 
-`FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1` is exactly 32 random bytes encoded as unpadded base64url. Generate it in a trusted operator environment and enter it only through Wrangler's secret prompt; do not place its value in shell history, source control, GitHub Actions, build variables, tickets, or logs. The Hub key is also a Worker runtime secret. List only their names with `npx wrangler secret list`; never print their values.
+`FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1` is exactly 32 random bytes encoded as unpadded base64url. `VAPID_PARTY_APP_ID` and its 65-byte uncompressed P-256 `VAPID_PARTY_PUBLIC_KEY` are public identifiers but remain dashboard-managed because they are created during app registration; `VAPID_PARTY_APP_SECRET` is secret. Enter all values only through Wrangler's prompt. Do not place secret values in shell history, source control, GitHub Actions, build variables, tickets, or logs. List only their names with `npx wrangler secret list`; never print their values. Preview can still exercise bounded webhook fixtures with separate Hub/encryption secrets, but `/api/notifications/status` intentionally remains unavailable there and preview is not closed-app delivery proof.
 
-Before promotion, prove signed add, rotation, disable, removal, invalid app-key, verifier-outage, and URL-rejection fixtures in preview. Review D1 only for ciphertext metadata, and inspect sampled logs for token, URL, FID, or signature leakage. Then add the exact `https://miniapp.converge.cv/api/farcaster/webhook` URL to the manifest and ship the explicit user-action enrollment UI in one reviewed task. Until that promotion, a `503 notification_unavailable` response is intentional and must not be bypassed.
-
-This lifecycle endpoint does not send alerts and does not make the Worker an XMTP observer. Closed-app incoming-message alerts require a separate persistent listener that registers every allowed XMTP topic and HMAC epoch, filters own and `shouldPush: false` traffic, survives rotation/restart, and sends only a generic opaque wake event into a delivery queue. Do not claim that feature from token storage alone.
+The manifest includes the exact `https://miniapp.converge.cv/api/farcaster/webhook` URL only when every dependency above is present. Before promotion, prove signed add, rotation, disable/removal, token-pending `425`, installation replacement, signed callback replay, invalid-token deletion, upstream throttling, and app-side route revocation. Review D1 only for ciphertext, opaque handles, and delivery IDs, and inspect sampled logs for token, URL, FID, signature, topic, HMAC, inbox, or installation leakage.
 
 ## Farcaster account association
 

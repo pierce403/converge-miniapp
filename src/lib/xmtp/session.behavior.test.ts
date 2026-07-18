@@ -309,6 +309,7 @@ function client(conversation: Dm) {
       getConversationById: vi.fn().mockResolvedValue(conversation),
       getDmByInboxId: vi.fn().mockResolvedValue(undefined),
       getMessageById: vi.fn(),
+      list: vi.fn().mockResolvedValue([]),
       listDms: vi.fn().mockResolvedValue([]),
       listGroups: vi.fn().mockResolvedValue([]),
       streamAllMessages,
@@ -318,6 +319,7 @@ function client(conversation: Dm) {
       }),
       sync: vi.fn(),
       syncAll: vi.fn(),
+      topic: undefined,
     },
     env: 'dev',
     fetchInboxIdByIdentifier: vi.fn(),
@@ -331,6 +333,8 @@ function client(conversation: Dm) {
         }],
         inboxId: 'peer-inbox',
       }]),
+      streamPreferences: vi.fn(),
+      sync: vi.fn(),
     },
     isRegistered: vi.fn().mockResolvedValue(false),
     register: vi.fn(),
@@ -493,6 +497,119 @@ describe('XmtpMessagingSession behavior', () => {
     expect(sdkMocks.create.mock.calls[0]?.[1]).not.toHaveProperty('gatewayHost')
     expect(fakeClient.register).toHaveBeenCalledOnce()
     await session.close()
+  })
+
+  it('builds push state from consented conversations including stitched DMs', async () => {
+    const installationId = 'ef'.repeat(32)
+    const firstGroupId = '12'.repeat(16)
+    const secondGroupId = '34'.repeat(16)
+    const firstConversation = dm({
+      hmacKeys: vi.fn().mockResolvedValue(new Map([
+        [firstGroupId, [{ epoch: 1n, key: new Uint8Array([1, 2]) }]],
+      ])),
+    })
+    const stitchedConversation = dm({
+      hmacKeys: vi.fn().mockResolvedValue(new Map([
+        [firstGroupId, [{ epoch: 1n, key: new Uint8Array([1, 2]) }]],
+        [secondGroupId, [{ epoch: 2n, key: new Uint8Array([3, 4]) }]],
+      ])),
+    })
+    const fakeClient = client(dm())
+    Object.assign(fakeClient, {
+      env: 'production',
+      inboxId: 'ab'.repeat(32),
+      installationId,
+      installationIdBytes: new Uint8Array(32).fill(0xef),
+      signWithInstallationKey: vi.fn(),
+    })
+    Object.assign(fakeClient.conversations, {
+      list: vi.fn().mockResolvedValue([firstConversation, stitchedConversation]),
+      topic: `/xmtp/mls/1/w-${installationId}/proto`,
+    })
+    Object.assign(fakeClient.preferences, {
+      sync: vi.fn().mockResolvedValue(undefined),
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const snapshot = await session.pushSnapshot()
+
+    expect(fakeClient.conversations.list).toHaveBeenCalledWith({
+      consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+      includeDuplicateDms: true,
+    })
+    expect(fakeClient.preferences.sync).toHaveBeenCalledOnce()
+    expect(snapshot.topics).toEqual([
+      {
+        hmacKeys: [{ epoch: 1, key: 'AQI' }],
+        topic: `/xmtp/mls/1/g-${firstGroupId}/proto`,
+      },
+      {
+        hmacKeys: [{ epoch: 2, key: 'AwQ' }],
+        topic: `/xmtp/mls/1/g-${secondGroupId}/proto`,
+      },
+      {
+        hmacKeys: [],
+        topic: `/xmtp/mls/1/w-${installationId}/proto`,
+      },
+    ])
+  })
+
+  it('watches HMAC and consent preference changes only while alerts are enabled', async () => {
+    let onValue: ((updates: Array<{ type: string }>) => void) | undefined
+    const stream = {
+      end: vi.fn().mockResolvedValue(undefined),
+      isDone: false,
+    }
+    const fakeClient = client(dm())
+    Object.assign(fakeClient.preferences, {
+      streamPreferences: vi.fn().mockImplementation(async (options: {
+        onValue: (updates: Array<{ type: string }>) => void
+      }) => {
+        onValue = options.onValue
+        return stream
+      }),
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+    const changed = vi.fn()
+
+    await session.startPushTopicStream(changed)
+    onValue?.([{ type: 'OtherUpdate' }])
+    expect(changed).not.toHaveBeenCalled()
+    onValue?.([{ type: 'HmacKeyUpdate' }])
+    onValue?.([{ type: 'ConsentUpdate' }])
+    expect(changed).toHaveBeenCalledTimes(2)
+
+    await session.stopPushTopicStream()
+    expect(stream.end).toHaveBeenCalledOnce()
+  })
+
+  it('ends a preference stream that opens after alerts were disabled', async () => {
+    let resolveStream!: (value: { end: ReturnType<typeof vi.fn>; isDone: boolean }) => void
+    const pendingStream = new Promise<{
+      end: ReturnType<typeof vi.fn>
+      isDone: boolean
+    }>((resolve) => {
+      resolveStream = resolve
+    })
+    const stream = {
+      end: vi.fn().mockResolvedValue(undefined),
+      isDone: false,
+    }
+    const fakeClient = client(dm())
+    Object.assign(fakeClient.preferences, {
+      streamPreferences: vi.fn().mockReturnValue(pendingStream),
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    const starting = session.startPushTopicStream(vi.fn())
+    await session.stopPushTopicStream()
+    resolveStream(stream)
+    await starting
+
+    expect(stream.end).toHaveBeenCalledOnce()
   })
 
   it('sends one typed Convos request to the exact creator inbox with push intent', async () => {

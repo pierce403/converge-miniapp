@@ -23,6 +23,10 @@ import type {
 } from './types'
 import type { ParsedConvosInvite } from '../../lib/convos/invite'
 import { ConvosInviteError } from '../../lib/convos/error'
+import {
+  disableXmtpAlertRegistration,
+  syncXmtpAlertRegistration,
+} from '../../lib/xmtp/alertRegistration'
 
 export type ConnectionPhase =
   | 'idle'
@@ -66,6 +70,7 @@ const initialConnection: ConnectionState = {
 type UseXmtpMessagingOptions = {
   autoConnect?: boolean
   inboxTarget?: InboxTarget | null
+  notificationFid?: number
 }
 
 export type InboxBindingResult = {
@@ -84,6 +89,7 @@ type InboxSwitchOptions = {
 export function useXmtpMessaging({
   autoConnect = false,
   inboxTarget = null,
+  notificationFid,
 }: UseXmtpMessagingOptions = {}) {
   const mountedRef = useRef(true)
   const connectionAttemptRef = useRef(0)
@@ -113,6 +119,11 @@ export function useXmtpMessaging({
   const inboxRequestRef = useRef(0)
   const loadedMessageWindowRef = useRef(0)
   const noticeRevisionRef = useRef(0)
+  const alertSyncPromiseRef = useRef<Promise<void> | null>(null)
+  const alertSyncDirtyRef = useRef(false)
+  const alertSyncCallbackRef = useRef<() => Promise<void>>(async () => undefined)
+  const alertsEnabledRef = useRef(false)
+  const notificationFidRef = useRef(notificationFid)
 
   const [connection, setConnection] = useState<ConnectionState>(initialConnection)
   const [address, setAddress] = useState<`0x${string}` | null>(null)
@@ -153,6 +164,65 @@ export function useXmtpMessaging({
   const updateNotice = useCallback((next: string | null) => {
     noticeRevisionRef.current += 1
     setNotice(next)
+  }, [])
+
+  const syncAlerts = useCallback(async () => {
+    alertsEnabledRef.current = true
+    alertSyncDirtyRef.current = true
+    if (alertSyncPromiseRef.current) {
+      return await alertSyncPromiseRef.current
+    }
+    const sync = (async () => {
+      while (alertsEnabledRef.current && alertSyncDirtyRef.current) {
+        alertSyncDirtyRef.current = false
+        const session = sessionRef.current
+        const fid = notificationFidRef.current
+        if (!session || !fid) return
+        try {
+          await session.startPushTopicStream(() => {
+            if (!alertsEnabledRef.current) return
+            alertSyncDirtyRef.current = true
+            void alertSyncCallbackRef.current().catch(() => undefined)
+          })
+          await syncXmtpAlertRegistration(session, fid)
+        } catch (error) {
+          if (alertsEnabledRef.current && sessionRef.current !== session) {
+            alertSyncDirtyRef.current = true
+            continue
+          }
+          throw error
+        }
+        if (sessionRef.current !== session || notificationFidRef.current !== fid) {
+          alertSyncDirtyRef.current = true
+        }
+      }
+    })()
+    alertSyncPromiseRef.current = sync
+    try {
+      await sync
+    } finally {
+      if (alertSyncPromiseRef.current === sync) alertSyncPromiseRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    alertSyncCallbackRef.current = syncAlerts
+  }, [syncAlerts])
+
+  useEffect(() => {
+    notificationFidRef.current = notificationFid
+    if (alertsEnabledRef.current) {
+      alertSyncDirtyRef.current = true
+      void alertSyncCallbackRef.current().catch(() => undefined)
+    }
+  }, [notificationFid])
+
+  const disableAlerts = useCallback(async () => {
+    alertsEnabledRef.current = false
+    alertSyncDirtyRef.current = false
+    await sessionRef.current?.stopPushTopicStream()
+    await alertSyncPromiseRef.current?.catch(() => undefined)
+    await disableXmtpAlertRegistration()
   }, [])
 
   const upsertMessage = useCallback((message: MessageItem) => {
@@ -284,6 +354,7 @@ export function useXmtpMessaging({
         applyConvosAccessSnapshot(session.convosAccessSnapshot)
         if (offline) setStreamHealth('offline')
         updateNotice(null)
+        if (alertsEnabledRef.current) void syncAlerts().catch(() => undefined)
       }
     } catch (error) {
       if (
@@ -300,7 +371,7 @@ export function useXmtpMessaging({
         if (mountedRef.current) setRefreshing(false)
       }
     }
-  }, [applyConvosAccessSnapshot, updateNotice])
+  }, [applyConvosAccessSnapshot, syncAlerts, updateNotice])
 
   const scheduleInboxRefresh = useCallback(() => {
     if (inboxRefreshTimerRef.current !== null) return
@@ -1535,6 +1606,7 @@ export function useXmtpMessaging({
     convosAccessRequest,
     conversations,
     createDm,
+    disableAlerts,
     disconnect,
     environment,
     loadingConversation,
@@ -1559,6 +1631,7 @@ export function useXmtpMessaging({
     setView,
     streamHealth,
     storageDurability,
+    syncAlerts,
     view,
     walletKind,
   }

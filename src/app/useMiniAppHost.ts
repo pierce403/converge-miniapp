@@ -4,9 +4,16 @@ type MiniAppSdk = (typeof import('@farcaster/miniapp-sdk'))['sdk']
 type MiniAppContext = Awaited<MiniAppSdk['context']>
 type MiniAppHostCapability = Awaited<ReturnType<MiniAppSdk['getCapabilities']>>[number]
 
+type MiniAppHostContext = {
+  client: Pick<MiniAppContext['client'], 'added' | 'platformType' | 'safeAreaInsets'> & {
+    notificationsEnabled: boolean
+  }
+  user: Pick<MiniAppContext['user'], 'displayName' | 'fid' | 'pfpUrl' | 'username'>
+}
+
 export type MiniAppHostState = {
   capabilities: readonly MiniAppHostCapability[]
-  context: MiniAppContext | null
+  context: MiniAppHostContext | null
   error: string | null
   status: 'detecting' | 'embedded' | 'standalone' | 'error'
 }
@@ -38,7 +45,7 @@ export function useMiniAppHost(): MiniAppHostState {
         const contextPromise = sdk.context
         await sdk.actions.ready()
 
-        const [context, capabilities] = await Promise.all([
+        const [rawContext, capabilities] = await Promise.all([
           contextPromise,
           sdk.getCapabilities(),
         ])
@@ -46,7 +53,7 @@ export function useMiniAppHost(): MiniAppHostState {
         if (!cancelled) {
           setState({
             capabilities: [...capabilities],
-            context,
+            context: sanitizeContext(rawContext),
             error: null,
             status: 'embedded',
           })
@@ -68,6 +75,31 @@ export function useMiniAppHost(): MiniAppHostState {
   }, [])
 
   return state
+}
+
+function sanitizeContext(context: MiniAppContext): MiniAppHostContext {
+  return {
+    client: {
+      added: context.client.added,
+      notificationsEnabled: Boolean(context.client.notificationDetails),
+      ...(context.client.platformType === undefined
+        ? {}
+        : { platformType: context.client.platformType }),
+      ...(context.client.safeAreaInsets === undefined
+        ? {}
+        : { safeAreaInsets: { ...context.client.safeAreaInsets } }),
+    },
+    user: {
+      fid: context.user.fid,
+      ...(context.user.displayName === undefined
+        ? {}
+        : { displayName: context.user.displayName }),
+      ...(context.user.pfpUrl === undefined ? {} : { pfpUrl: context.user.pfpUrl }),
+      ...(context.user.username === undefined
+        ? {}
+        : { username: context.user.username }),
+    },
+  }
 }
 
 function readableHostError(error: unknown): string {

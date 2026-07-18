@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MessagingApp } from './MessagingApp'
 
 const mocks = vi.hoisted(() => ({
+  alerts: vi.fn(),
   ens: vi.fn(),
   miniAppBack: vi.fn(),
   messaging: vi.fn(),
@@ -39,12 +40,17 @@ vi.mock('../../app/useMiniAppBack', () => ({
   useMiniAppBack: mocks.miniAppBack,
 }))
 
+vi.mock('../notifications/useFarcasterAlerts', () => ({
+  useFarcasterAlerts: mocks.alerts,
+}))
+
 const user = { fid: 403, username: 'pierce' }
 
 describe('MessagingApp storage and installation states', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
+    mocks.alerts.mockReturnValue(readyAlerts())
     mocks.messaging.mockReturnValue(readyMessaging())
     mocks.ens.mockReturnValue(readyEns())
     mocks.recipientResolution.mockReturnValue(readyRecipientResolution())
@@ -67,6 +73,7 @@ describe('MessagingApp storage and installation states', () => {
     expect(mocks.messaging).toHaveBeenCalledWith({
       autoConnect: true,
       inboxTarget: null,
+      notificationFid: user.fid,
     })
     expect(screen.getByRole('heading', { name: 'Opening your inbox' })).toBeVisible()
     expect(screen.queryByRole('button', { name: /open private inbox/i })).not.toBeInTheDocument()
@@ -84,6 +91,7 @@ describe('MessagingApp storage and installation states', () => {
     expect(mocks.messaging).toHaveBeenCalledWith({
       autoConnect: false,
       inboxTarget: null,
+      notificationFid: user.fid,
     })
     expect(screen.getByRole('heading', {
       name: 'This Farcaster client cannot open XMTP',
@@ -189,6 +197,94 @@ describe('MessagingApp storage and installation states', () => {
     expect(screen.queryByRole('button', { name: 'Disconnect XMTP inbox' })).not.toBeInTheDocument()
     expect(screen.getByText('Local message privacy')).toBeInTheDocument()
     expect(screen.getByText(/browser message storage is local but not encrypted at rest/i)).toBeInTheDocument()
+  })
+
+  it('passes only host alert booleans into one-time inbox assistance', () => {
+    mocks.alerts.mockReturnValue(readyAlerts({
+      added: true,
+      available: true,
+      promptVisible: true,
+      supported: true,
+    }))
+
+    render(
+      <MessagingApp
+        canAddMiniApp
+        canUseBack={false}
+        canUseWallet
+        initiallyMiniAppAdded
+        initiallyNotificationsEnabled={false}
+        user={user}
+      />,
+    )
+
+    expect(mocks.alerts).toHaveBeenCalledWith({
+      canAddMiniApp: true,
+      canPrompt: true,
+      fid: user.fid,
+      initiallyAdded: true,
+      initiallyNotificationsEnabled: false,
+    })
+    expect(screen.getByRole('button', { name: 'How to enable' })).toBeVisible()
+    expect(screen.queryByText(/token|delivery url/i)).not.toBeInTheDocument()
+  })
+
+  it('registers the open XMTP installation only after native alerts are enabled', async () => {
+    const syncAlerts = vi.fn().mockResolvedValue(undefined)
+    mocks.alerts.mockReturnValue(readyAlerts({
+      available: true,
+      notificationsEnabled: true,
+    }))
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      syncAlerts,
+    })
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    await waitFor(() => expect(syncAlerts).toHaveBeenCalledOnce())
+  })
+
+  it('does not invoke authenticated cleanup merely because alerts start off', async () => {
+    const disableAlerts = vi.fn().mockResolvedValue(undefined)
+    const syncAlerts = vi.fn().mockResolvedValue(undefined)
+    mocks.alerts.mockReturnValue(readyAlerts({
+      available: true,
+      notificationsEnabled: false,
+    }))
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      disableAlerts,
+      syncAlerts,
+    })
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    await waitFor(() => expect(disableAlerts).not.toHaveBeenCalled())
+    expect(syncAlerts).not.toHaveBeenCalled()
+  })
+
+  it('revokes XMTP alert material after host permission changes from on to off', async () => {
+    const disableAlerts = vi.fn().mockResolvedValue(undefined)
+    const syncAlerts = vi.fn().mockResolvedValue(undefined)
+    let notificationsEnabled = true
+    mocks.alerts.mockImplementation(() => readyAlerts({
+      available: true,
+      notificationsEnabled,
+    }))
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      disableAlerts,
+      syncAlerts,
+    })
+
+    const view = render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+    await waitFor(() => expect(syncAlerts).toHaveBeenCalledOnce())
+
+    notificationsEnabled = false
+    view.rerender(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    await waitFor(() => expect(disableAlerts).toHaveBeenCalledOnce())
   })
 
   it('opens the dedicated Convos invite surface from the inbox', () => {
@@ -618,6 +714,7 @@ describe('MessagingApp storage and installation states', () => {
     expect(mocks.messaging).toHaveBeenCalledWith({
       autoConnect: false,
       inboxTarget: null,
+      notificationFid: user.fid,
     })
     expect(screen.getByRole('heading', {
       name: 'Choose how to recover safely',
@@ -652,6 +749,7 @@ describe('MessagingApp storage and installation states', () => {
         name: 'deanpierce.eth',
         sourceAddress: '0x1111111111111111111111111111111111111111',
       }),
+      notificationFid: user.fid,
     })
     fireEvent.click(screen.getByLabelText('Identity and privacy'))
     expect(screen.getByRole('heading', { name: 'Farcaster wallet' })).toBeVisible()
@@ -775,6 +873,7 @@ describe('MessagingApp storage and installation states', () => {
     expect(mocks.messaging).toHaveBeenLastCalledWith({
       autoConnect: true,
       inboxTarget: null,
+      notificationFid: user.fid,
     })
     expect(screen.getByRole('heading', { name: 'pierce' })).toBeVisible()
     expect(reloadDocument).not.toHaveBeenCalled()
@@ -808,6 +907,7 @@ describe('MessagingApp storage and installation states', () => {
     expect(mocks.messaging).toHaveBeenCalledWith({
       autoConnect: false,
       inboxTarget: null,
+      notificationFid: user.fid,
     })
     expect(screen.getByRole('heading', {
       name: 'Choose how to recover safely',
@@ -837,12 +937,14 @@ describe('MessagingApp storage and installation states', () => {
     expect(mocks.messaging).toHaveBeenLastCalledWith({
       autoConnect: false,
       inboxTarget: null,
+      notificationFid: user.fid,
     })
     fireEvent.click(screen.getByRole('button', { name: 'Use Farcaster inbox' }))
 
     expect(mocks.messaging).toHaveBeenLastCalledWith({
       autoConnect: true,
       inboxTarget: null,
+      notificationFid: user.fid,
     })
     expect(screen.getByRole('heading', { name: 'pierce' })).toBeVisible()
     expect(reloadDocument).not.toHaveBeenCalled()
@@ -981,6 +1083,7 @@ function readyMessaging() {
     connection: { error: null, phase: 'ready' },
     conversations: [],
     createDm: vi.fn(),
+    disableAlerts: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn(),
     environment: 'dev',
     hasOlderMessages: false,
@@ -1007,8 +1110,26 @@ function readyMessaging() {
     setView: vi.fn(),
     storageDurability: 'persistent',
     streamHealth: 'live',
+    syncAlerts: vi.fn().mockResolvedValue(undefined),
     view: 'inbox',
     walletKind: 'EOA',
+  }
+}
+
+function readyAlerts(overrides: Record<string, unknown> = {}) {
+  return {
+    added: false,
+    available: false,
+    dismissPrompt: vi.fn(),
+    error: null,
+    notificationsEnabled: false,
+    pending: false,
+    promptVisible: false,
+    requestAlerts: vi.fn(),
+    settingsHelpVisible: false,
+    showSettingsHelp: vi.fn(),
+    supported: false,
+    ...overrides,
   }
 }
 

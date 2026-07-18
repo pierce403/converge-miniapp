@@ -34,8 +34,11 @@ export default function App() {
 
       {host.status === 'embedded' && host.context ? (
         <MessagingApp
+          canAddMiniApp={host.capabilities.includes('actions.addMiniApp')}
           canUseBack={host.capabilities.includes('back')}
           canUseWallet={host.capabilities.includes('wallet.getEthereumProvider')}
+          initiallyMiniAppAdded={host.context.client.added}
+          initiallyNotificationsEnabled={host.context.client.notificationsEnabled}
           key={host.context.user.fid}
           user={host.context.user}
         />
