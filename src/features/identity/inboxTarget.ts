@@ -2,8 +2,7 @@ import { getAddress, type Address } from 'viem'
 import { normalize } from 'viem/ens'
 
 const INBOX_TARGET_STORAGE_PREFIX = 'converge-miniapp:ens-inbox-target:'
-const INBOX_TARGET_VERSION = 3
-const LEGACY_INBOX_TARGET_VERSION = 2
+const INBOX_TARGET_VERSION = 4
 const ENS_NAME_LIMIT_BYTES = 255
 const INBOX_ID_LIMIT_BYTES = 512
 const MAX_CHAIN_ID = (1n << 256n) - 1n
@@ -15,26 +14,20 @@ type InboxTargetBase = {
   sourceAddress: Address
 }
 
-export type InboxTargetSignerSource = 'farcaster' | 'walletconnect'
 export type InboxTargetWalletKind = 'EOA' | 'SCW'
 
 /**
- * A selected XMTP inbox. Legacy v2 Farcaster records have no saved wallet
- * metadata, so readers expose that absence explicitly instead of guessing.
+ * A confirmed XMTP identity binding. `address` owns the ENS name/inbox while
+ * `sourceAddress` is the Farcaster wallet that was reassigned into that inbox.
+ * Future sessions always authenticate with the Farcaster wallet.
  */
 export type InboxTarget = InboxTargetBase & {
-  signerSource: InboxTargetSignerSource
-  walletKind: InboxTargetWalletKind | null
-  chainId: string | null
-}
-
-/** New writes must include the signer metadata needed to restore it safely. */
-export type PersistableInboxTarget = InboxTargetBase & {
-  signerSource: InboxTargetSignerSource
   walletKind: InboxTargetWalletKind
-  /** A positive chain ID. It is persisted as a canonical decimal string. */
   chainId: string
 }
+
+/** New writes must include the Farcaster signer metadata needed to restore it safely. */
+export type PersistableInboxTarget = InboxTarget
 
 export type InboxTargetState =
   | { status: 'none'; target: null }
@@ -126,14 +119,12 @@ function createRecord(target: PersistableInboxTarget): InboxTargetRecord | null 
   const chainId = normalizeChainId(target.chainId)
   if (
     !base ||
-    !isSignerSource(target.signerSource) ||
     !isWalletKind(target.walletKind) ||
     !chainId
   ) return null
 
   return {
     ...base,
-    signerSource: target.signerSource,
     walletKind: target.walletKind,
     chainId,
     version: INBOX_TARGET_VERSION,
@@ -165,9 +156,6 @@ function normalizeBase(target: InboxTargetBase): InboxTargetBase | null {
 
 function parseRecord(value: unknown): InboxTarget | null {
   if (!isPlainRecord(value)) return null
-  if (value.version === LEGACY_INBOX_TARGET_VERSION) {
-    return parseLegacyRecord(value)
-  }
   if (!hasExactKeys(
     value,
     [
@@ -175,7 +163,6 @@ function parseRecord(value: unknown): InboxTarget | null {
       'chainId',
       'inboxId',
       'name',
-      'signerSource',
       'sourceAddress',
       'version',
       'walletKind',
@@ -187,7 +174,6 @@ function parseRecord(value: unknown): InboxTarget | null {
     typeof value.inboxId !== 'string' ||
     typeof value.name !== 'string' ||
     typeof value.sourceAddress !== 'string' ||
-    typeof value.signerSource !== 'string' ||
     typeof value.walletKind !== 'string' ||
     typeof value.chainId !== 'string'
   ) return null
@@ -197,7 +183,6 @@ function parseRecord(value: unknown): InboxTarget | null {
     inboxId: value.inboxId,
     name: value.name,
     sourceAddress: value.sourceAddress as Address,
-    signerSource: value.signerSource as InboxTargetSignerSource,
     walletKind: value.walletKind as InboxTargetWalletKind,
     chainId: value.chainId,
   })
@@ -208,51 +193,10 @@ function parseRecord(value: unknown): InboxTarget | null {
     record.inboxId !== value.inboxId ||
     record.name !== value.name ||
     record.sourceAddress !== value.sourceAddress ||
-    record.signerSource !== value.signerSource ||
     record.walletKind !== value.walletKind ||
     record.chainId !== value.chainId
   ) return null
   return withoutVersion(record)
-}
-
-function parseLegacyRecord(
-  value: Record<string, unknown>,
-): InboxTarget | null {
-  if (!hasExactKeys(
-    value,
-    ['address', 'inboxId', 'name', 'sourceAddress', 'version'],
-  )) return null
-  if (
-    typeof value.address !== 'string' ||
-    typeof value.inboxId !== 'string' ||
-    typeof value.name !== 'string' ||
-    typeof value.sourceAddress !== 'string'
-  ) return null
-
-  const base = normalizeBase({
-    address: value.address as Address,
-    inboxId: value.inboxId,
-    name: value.name,
-    sourceAddress: value.sourceAddress as Address,
-  })
-  if (!base) return null
-  if (
-    base.address !== value.address ||
-    base.inboxId !== value.inboxId ||
-    base.name !== value.name ||
-    base.sourceAddress !== value.sourceAddress
-  ) return null
-
-  return {
-    ...base,
-    signerSource: 'farcaster',
-    walletKind: null,
-    chainId: null,
-  }
-}
-
-function isSignerSource(value: unknown): value is InboxTargetSignerSource {
-  return value === 'farcaster' || value === 'walletconnect'
 }
 
 function isWalletKind(value: unknown): value is InboxTargetWalletKind {
@@ -338,7 +282,6 @@ function withoutVersion(record: InboxTargetRecord): InboxTarget {
     chainId: record.chainId,
     inboxId: record.inboxId,
     name: record.name,
-    signerSource: record.signerSource,
     sourceAddress: record.sourceAddress,
     walletKind: record.walletKind,
   }

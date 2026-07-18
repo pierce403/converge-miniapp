@@ -179,6 +179,39 @@ test('ready messaging does not duplicate the mobile host top inset', async ({ pa
   })
 })
 
+test('mobile setup states start below the header without a second host inset', async ({ page }) => {
+  await page.goto('/')
+
+  const layout = await page.evaluate(async () => {
+    const shell = document.querySelector<HTMLElement>('.app-shell')
+    const main = document.querySelector<HTMLElement>('.app-main')
+    if (!shell || !main) throw new Error('App shell did not render')
+
+    shell.dataset.hostPlatform = 'mobile'
+    shell.style.setProperty('--host-safe-top', '0px')
+    const statePanel = document.createElement('section')
+    statePanel.className = 'state-panel'
+    statePanel.innerHTML = '<h1>Confirm inbox access</h1><p>Waiting for your wallet.</p>'
+    main.replaceChildren(statePanel)
+
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+
+    return {
+      mainPaddingTop: getComputedStyle(main).paddingTop,
+      panelOffset: Math.round(
+        statePanel.getBoundingClientRect().top - main.getBoundingClientRect().top,
+      ),
+      shellPaddingTop: getComputedStyle(shell).paddingTop,
+    }
+  })
+
+  expect(layout).toEqual({
+    mainPaddingTop: '22px',
+    panelOffset: 22,
+    shellPaddingTop: '0px',
+  })
+})
+
 test('Worker health is versioned and a noncanonical-host manifest fails closed', async ({ request }) => {
   const health = await request.get('/api/health')
   expect(health.status()).toBe(200)

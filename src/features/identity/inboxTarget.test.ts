@@ -16,7 +16,6 @@ const target = {
   chainId: '8453',
   inboxId: 'target-inbox-id',
   name: 'deanpierce.eth',
-  signerSource: 'walletconnect',
   sourceAddress: getAddress('0xde709f2102306220921060314715629080e2fb77'),
   walletKind: 'EOA',
 } satisfies PersistableInboxTarget
@@ -32,7 +31,6 @@ describe('inbox target storage', () => {
       address: address.toLowerCase() as Address,
       inboxId: target.inboxId,
       name: '  DEANPIERCE.eth  ',
-      signerSource: 'walletconnect',
       sourceAddress: target.sourceAddress.toLowerCase() as Address,
       walletKind: 'EOA',
       chainId: '0x2105',
@@ -43,15 +41,14 @@ describe('inbox target storage', () => {
       chainId: target.chainId,
       inboxId: target.inboxId,
       name: target.name,
-      signerSource: target.signerSource,
       sourceAddress: target.sourceAddress,
-      version: 3,
+      version: 4,
       walletKind: target.walletKind,
     })
     expect(readInboxTarget(fid)).toEqual({ status: 'valid', target })
   })
 
-  it('reads an exact legacy v2 record as a Farcaster signer with unknown metadata', () => {
+  it('rejects legacy selectors because they do not prove an identity binding', () => {
     const legacy = {
       address: target.address,
       inboxId: target.inboxId,
@@ -62,18 +59,7 @@ describe('inbox target storage', () => {
     const serialized = JSON.stringify(legacy)
     window.localStorage.setItem(key, serialized)
 
-    expect(readInboxTarget(fid)).toEqual({
-      status: 'valid',
-      target: {
-        address: target.address,
-        chainId: null,
-        inboxId: target.inboxId,
-        name: target.name,
-        signerSource: 'farcaster',
-        sourceAddress: target.sourceAddress,
-        walletKind: null,
-      },
-    })
+    expect(readInboxTarget(fid)).toEqual({ status: 'invalid', target: null })
     expect(window.localStorage.getItem(key)).toBe(serialized)
   })
 
@@ -90,9 +76,8 @@ describe('inbox target storage', () => {
       chainId: target.chainId,
       inboxId: target.inboxId,
       name: target.name,
-      signerSource: target.signerSource,
       sourceAddress: target.sourceAddress,
-      version: 3,
+      version: 4,
       walletKind: target.walletKind,
     })
   })
@@ -113,51 +98,46 @@ describe('inbox target storage', () => {
     ['invalid JSON', '{'],
     ['wrong version', JSON.stringify({ ...target, version: 1 })],
     ['missing version', JSON.stringify(target)],
-    ['extra fields', JSON.stringify({ ...target, privateKey: 'nope', version: 3 })],
-    ['WalletConnect URI', JSON.stringify({ ...target, uri: 'wc:secret', version: 3 })],
-    ['WalletConnect topic', JSON.stringify({ ...target, topic: 'secret', version: 3 })],
-    ['unnormalized name', JSON.stringify({ ...target, name: 'DEANPIERCE.eth', version: 3 })],
-    ['invalid address', JSON.stringify({ ...target, address: 'not-an-address', version: 3 })],
+    ['legacy WalletConnect selector', JSON.stringify({ ...target, signerSource: 'walletconnect', version: 3 })],
+    ['extra fields', JSON.stringify({ ...target, privateKey: 'nope', version: 4 })],
+    ['WalletConnect URI', JSON.stringify({ ...target, uri: 'wc:secret', version: 4 })],
+    ['WalletConnect topic', JSON.stringify({ ...target, topic: 'secret', version: 4 })],
+    ['unnormalized name', JSON.stringify({ ...target, name: 'DEANPIERCE.eth', version: 4 })],
+    ['invalid address', JSON.stringify({ ...target, address: 'not-an-address', version: 4 })],
     ['non-checksummed address', JSON.stringify({
       ...target,
       address: address.toLowerCase(),
-      version: 3,
+      version: 4,
     })],
-    ['empty inbox ID', JSON.stringify({ ...target, inboxId: '', version: 3 })],
+    ['empty inbox ID', JSON.stringify({ ...target, inboxId: '', version: 4 })],
     ['oversized inbox ID', JSON.stringify({
       ...target,
       inboxId: 'i'.repeat(513),
-      version: 3,
+      version: 4,
     })],
     ['same source and target', JSON.stringify({
       ...target,
       sourceAddress: target.address,
-      version: 3,
-    })],
-    ['invalid signer source', JSON.stringify({
-      ...target,
-      signerSource: 'injected',
-      version: 3,
+      version: 4,
     })],
     ['invalid wallet kind', JSON.stringify({
       ...target,
       walletKind: 'hardware',
-      version: 3,
+      version: 4,
     })],
     ['missing wallet kind', JSON.stringify({
       address: target.address,
       chainId: target.chainId,
       inboxId: target.inboxId,
       name: target.name,
-      signerSource: target.signerSource,
       sourceAddress: target.sourceAddress,
-      version: 3,
+      version: 4,
     })],
-    ['zero chain ID', JSON.stringify({ ...target, chainId: '0', version: 3 })],
+    ['zero chain ID', JSON.stringify({ ...target, chainId: '0', version: 4 })],
     ['noncanonical chain ID', JSON.stringify({
       ...target,
       chainId: '0x2105',
-      version: 3,
+      version: 4,
     })],
   ])('blocks on a stored record with %s', (_label, serialized) => {
     window.localStorage.setItem(key, serialized)

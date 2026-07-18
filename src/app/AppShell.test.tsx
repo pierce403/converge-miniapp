@@ -22,7 +22,7 @@ describe('AppShell', () => {
     } as unknown as MiniAppHostState
   }
 
-  it('passes host safe-area values through without guessing viewport geometry', () => {
+  it('does not duplicate the mobile host top inset in any shell state', () => {
     render(<AppShell host={host()}><span>content</span></AppShell>)
 
     const shell = screen.getByText('content').closest('.app-shell')
@@ -31,7 +31,7 @@ describe('AppShell', () => {
       '--host-safe-left': '2px',
       '--host-messaging-safe-top': '0px',
       '--host-safe-right': '3px',
-      '--host-safe-top': '72px',
+      '--host-safe-top': '0px',
     })
   })
 

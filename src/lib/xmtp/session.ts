@@ -11,6 +11,7 @@ import {
   LogLevel,
   ReactionAction,
   SortDirection,
+  toSafeSigner,
   isActions,
   isAttachment,
   isGroupUpdated,
@@ -192,6 +193,13 @@ export class XmtpInboxTargetMismatchError extends Error {
   }
 }
 
+export class XmtpIdentityBindingVerificationError extends Error {
+  constructor() {
+    super('XMTP did not confirm the Farcaster identity on the target inbox.')
+    this.name = 'XmtpIdentityBindingVerificationError'
+  }
+}
+
 export class XmtpGatewayConfigurationError extends Error {
   constructor(environment: XmtpEnv) {
     super(`XMTP ${environment} requires an authenticated payer Gateway.`)
@@ -339,6 +347,40 @@ export class XmtpMessagingSession {
     return await this.client.fetchInboxIdByIdentifier(
       ethereumIdentifier(address),
     ) ?? null
+  }
+
+  /**
+   * Reassigns an existing Ethereum identity into this inbox. browser-sdk 7.0.0
+   * incorrectly rejects already-associated identities in unsafe_addAccount(),
+   * so use the SDK's equivalent request/sign/apply workflow and verify the
+   * resulting address-log and inbox state from the network before returning.
+   */
+  async bindIdentity(signer: Signer, address: `0x${string}`): Promise<void> {
+    const identifier = await signer.getIdentifier()
+    if (
+      identifier.identifierKind !== IdentifierKind.Ethereum ||
+      identifier.identifier.toLowerCase() !== address.toLowerCase()
+    ) throw new XmtpIdentityBindingVerificationError()
+
+    const { signatureText, signatureRequestId } =
+      await this.client.unsafe_addAccountSignatureText(identifier, true)
+    const signature = await signer.signMessage(signatureText)
+    await this.client.unsafe_applySignatureRequest(
+      await toSafeSigner(signer, signature),
+      signatureRequestId,
+    )
+
+    const [resolvedInboxId, inboxState] = await Promise.all([
+      this.client.fetchInboxIdByIdentifier(identifier),
+      this.client.preferences.fetchInboxState(),
+    ])
+    const identityPresent = inboxState.accountIdentifiers.some((candidate) => (
+      candidate.identifierKind === identifier.identifierKind &&
+      candidate.identifier.toLowerCase() === identifier.identifier.toLowerCase()
+    ))
+    if (resolvedInboxId !== this.inboxId || !identityPresent) {
+      throw new XmtpIdentityBindingVerificationError()
+    }
   }
 
   async requestHistorySync(): Promise<boolean> {

@@ -26,7 +26,6 @@ type InboxScreenProps = {
   ensIdentity: EnsIdentityState
   ensTargetNameVerified?: boolean | undefined
   environment: string
-  externalSigner?: boolean | undefined
   onJoinConvos: () => void
   onNewDm: () => void
   onOpen: (conversationId: string) => void
@@ -35,7 +34,6 @@ type InboxScreenProps = {
   onRefreshEns: () => void
   onReviewEnsSwitch?: ((returnFocus: HTMLElement | null) => void) | undefined
   onRetryLiveUpdates: () => void
-  onUseFarcasterInbox?: (() => void) | undefined
   onUseEns: () => void
   participantIdentityFor: (address: string | null | undefined) => ParticipantIdentity | null
   profile: {
@@ -56,7 +54,6 @@ export function InboxScreen({
   ensIdentity,
   ensTargetNameVerified = false,
   environment,
-  externalSigner = false,
   onJoinConvos,
   onNewDm,
   onOpen,
@@ -65,7 +62,6 @@ export function InboxScreen({
   onRefreshEns,
   onReviewEnsSwitch,
   onRetryLiveUpdates,
-  onUseFarcasterInbox,
   onUseEns,
   participantIdentityFor,
   profile,
@@ -117,7 +113,7 @@ export function InboxScreen({
           <section className="identity-menu__panel" aria-labelledby="identity-menu-title">
             <p className="eyebrow">Connected identity</p>
             <h2 id="identity-menu-title">
-              {externalSigner ? 'External ENS wallet' : 'Farcaster wallet'}
+              Farcaster wallet
             </h2>
             <code>{address}</code>
             <p>{environment}</p>
@@ -132,25 +128,11 @@ export function InboxScreen({
               } : undefined}
               onUse={onUseEns}
               targetNameVerified={ensTargetNameVerified}
-              externalSigner={externalSigner}
             />
-            {onUseFarcasterInbox ? (
-              <div className="identity-menu__ens">
-                <strong>Saved ENS inbox</strong>
-                <span>
-                  {externalSigner
-                    ? 'Converge Mini will reopen this inbox on this device while its exact external signer and Farcaster source account remain available.'
-                    : 'Converge Mini will reopen this inbox on this device while Farcaster continues to expose its exact signer.'}
-                </span>
-                <button type="button" onClick={onUseFarcasterInbox}>
-                  Use Farcaster inbox
-                </button>
-                {recoveryError ? (
-                  <span className="identity-menu__warning" role="alert">
-                    {recoveryError}
-                  </span>
-                ) : null}
-              </div>
+            {recoveryError ? (
+              <span className="identity-menu__warning" role="alert">
+                {recoveryError}
+              </span>
             ) : null}
             <div className="identity-menu__privacy">
               <strong>Local message privacy</strong>
@@ -279,7 +261,6 @@ export function InboxScreen({
 
 type EnsMenuIdentityProps = {
   identity: EnsIdentityState
-  externalSigner: boolean
   offline: boolean
   onClearPreference: () => void
   onRefresh: () => void
@@ -290,7 +271,6 @@ type EnsMenuIdentityProps = {
 
 function EnsMenuIdentity({
   identity,
-  externalSigner,
   offline,
   onClearPreference,
   onRefresh,
@@ -337,7 +317,7 @@ function EnsMenuIdentity({
         <>
           <span>
             {identity.relationship === 'active-address'
-              ? `This name resolves to the ${externalSigner ? 'external wallet' : 'Farcaster wallet'} already opening XMTP.`
+              ? 'This name resolves to the Farcaster wallet already opening XMTP.'
               : 'This address is already associated with the active XMTP inbox.'}
           </span>
           {identity.preference === 'accepted' || targetNameVerified ? (
@@ -356,7 +336,7 @@ function EnsMenuIdentity({
                 This name has a separate XMTP inbox. Messages cannot move or merge.
               </span>
               {onReview ? (
-                <button type="button" onClick={onReview}>Review inbox switch</button>
+                <button type="button" onClick={onReview}>Review identity binding</button>
               ) : null}
             </>
           ) : (

@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type {
-  Eip1193Provider,
-  WalletConnection,
-} from '../../lib/xmtp/signer'
+import type { WalletConnection } from '../../lib/xmtp/signer'
 import type { InboxTarget } from '../identity/inboxTarget'
 import type { XmtpLease } from '../../lib/xmtp/lease'
 import type {
@@ -46,8 +43,6 @@ export type ConnectionPhase =
   | 'target-mismatch'
   | 'target-source-mismatch'
   | 'target-unavailable'
-  | 'external-wallet-unavailable'
-  | 'external-wallet-configuration'
   | 'error'
 
 export type MessagingView = 'inbox' | 'new-dm' | 'join-convos' | 'conversation'
@@ -73,7 +68,7 @@ type UseXmtpMessagingOptions = {
   inboxTarget?: InboxTarget | null
 }
 
-export type InboxSwitchPreflight = {
+export type InboxBindingResult = {
   address: `0x${string}`
   chainId: string
   inboxId: string
@@ -81,6 +76,7 @@ export type InboxSwitchPreflight = {
 }
 
 type InboxSwitchOptions = {
+  onCommitting?: (() => void) | undefined
   onPairingUri?: (uri: string) => void
   signal?: AbortSignal
 }
@@ -120,8 +116,6 @@ export function useXmtpMessaging({
 
   const [connection, setConnection] = useState<ConnectionState>(initialConnection)
   const [address, setAddress] = useState<`0x${string}` | null>(null)
-  const [externalWalletPairingUri, setExternalWalletPairingUri] =
-    useState<string | null>(null)
   const [walletKind, setWalletKind] = useState<'EOA' | 'SCW' | null>(null)
   const [environment, setEnvironment] = useState('')
   const [storageDurability, setStorageDurability] = useState<StorageDurability | null>(null)
@@ -366,7 +360,6 @@ export function useXmtpMessaging({
     activeRef.current = null
     setConnection(initialConnection)
     setAddress(null)
-    setExternalWalletPairingUri(null)
     setWalletKind(null)
     setEnvironment('')
     setStorageDurability(null)
@@ -384,9 +377,7 @@ export function useXmtpMessaging({
     updateNotice(null)
   }, [releaseResources, updateConvosAccessRequest, updateNotice])
 
-  const connectWithWalletPrompt = useCallback(async (
-    promptExternalWallet: boolean,
-  ) => {
+  const connectWithWalletPrompt = useCallback(async () => {
     if (connectingRef.current || sessionRef.current) return
     if (poisonedLeaseRef.current) {
       setConnection({
@@ -402,7 +393,6 @@ export function useXmtpMessaging({
     let clientCreationFailed = false
     let failureStage: XmtpOperationStage = 'preflight'
     setConnection({ error: null, phase: 'storage' })
-    setExternalWalletPairingUri(null)
     setStorageDurability(null)
     updateConvosAccessRequest(null)
     updateNotice(null)
@@ -417,9 +407,7 @@ export function useXmtpMessaging({
         { prepareXmtpStorage },
         {
           connectHostWallet,
-          HostWalletSourceMismatchError,
           parseEip1193ChainId,
-          verifyHostWalletSource,
         },
         { XmtpClientInitializationError, XmtpMessagingSession },
       ] =
@@ -452,61 +440,23 @@ export function useXmtpMessaging({
 
       setConnection({ error: null, phase: 'wallet' })
       failureStage = 'wallet'
-      let sourceProvider: Eip1193Provider | null = null
-      let wallet: WalletConnection
-      if (inboxTarget?.signerSource === 'walletconnect') {
-        const source = await verifyHostWalletSource(inboxTarget.sourceAddress)
-        sourceProvider = source.provider
-        const { connectWalletConnectWallet } = await import(
-          '../../lib/xmtp/walletConnect'
-        )
-        wallet = await connectWalletConnectWallet(inboxTarget.address, {
-          onDisplayUri: promptExternalWallet
-            ? (uri) => {
-                if (isCurrent()) setExternalWalletPairingUri(uri)
-              }
-            : undefined,
-          prompt: promptExternalWallet,
-        })
-        assertPersistedWalletMetadata(inboxTarget, wallet)
-        let currentSourceAccounts: unknown
-        try {
-          currentSourceAccounts = await sourceProvider.request({
-            method: 'eth_accounts',
-          })
-        } catch (error) {
-          throw new HostWalletSourceMismatchError(inboxTarget.sourceAddress, {
-            cause: error,
-          })
-        }
-        if (!preferredWalletAccountMatches(
-          currentSourceAccounts,
-          inboxTarget.sourceAddress,
-        )) {
-          throw new HostWalletSourceMismatchError(inboxTarget.sourceAddress)
-        }
-      } else {
-        wallet = inboxTarget
-          ? await connectHostWallet(inboxTarget.address, inboxTarget.sourceAddress)
-          : await connectHostWallet()
-      }
+      const wallet = inboxTarget
+        ? await connectHostWallet(inboxTarget.sourceAddress, inboxTarget.sourceAddress)
+        : await connectHostWallet()
+      if (inboxTarget) assertPersistedWalletMetadata(inboxTarget, wallet)
       if (!isCurrent()) {
         await lease.release()
         return
       }
       walletRef.current = wallet
-      setExternalWalletPairingUri(null)
       setAddress(wallet.address)
       setWalletKind(wallet.kind)
 
       const provider = wallet.provider
-      const externalTarget = inboxTarget?.signerSource === 'walletconnect'
       let walletInvalidated = false
       const invalidateWallet = (
         message: string,
-        phase: ConnectionPhase = externalTarget
-          ? 'external-wallet-unavailable'
-          : 'error',
+        phase: ConnectionPhase = 'error',
       ) => {
         if (walletInvalidated || walletRef.current !== wallet) return
         walletInvalidated = true
@@ -531,46 +481,28 @@ export function useXmtpMessaging({
         updateNotice(null)
         void releaseResources()
       }
-      const expectedPreferredTarget = externalTarget
-        ? undefined
-        : inboxTarget?.sourceAddress
+      const expectedPreferredTarget = inboxTarget?.sourceAddress
       const onAccountsChanged = (accounts: readonly string[]) => {
         if (!walletAccountIsAvailable(
           accounts,
           wallet.address,
           expectedPreferredTarget,
-          externalTarget,
         )) {
-          invalidateWallet(
-            externalTarget
-              ? 'Your external wallet account changed. Reconnect the wallet that owns the saved ENS address.'
-              : 'Your Farcaster wallet account changed. Reconnect to open the matching XMTP inbox.',
-          )
+          invalidateWallet('Your Farcaster wallet account changed. Reconnect to open the matching XMTP inbox.')
         }
       }
       const onChainChanged = (chainId: string) => {
+        if (wallet.kind !== 'SCW') return
         try {
           if (parseEip1193ChainId(chainId) !== wallet.chainId) {
-            invalidateWallet(
-              externalTarget
-                ? 'Your external wallet network changed. Reconnect so XMTP can verify the saved signer.'
-                : 'Your Farcaster wallet network changed. Reconnect so XMTP can verify the active signer.',
-            )
+            invalidateWallet('Your Farcaster wallet network changed. Reconnect so XMTP can verify the active signer.')
           }
         } catch {
-          invalidateWallet(
-            externalTarget
-              ? 'The external wallet reported an invalid network. Reconnect to continue safely.'
-              : 'The Farcaster wallet reported an invalid network. Reconnect to continue safely.',
-          )
+          invalidateWallet('The Farcaster wallet reported an invalid network. Reconnect to continue safely.')
         }
       }
       const onDisconnect = () => {
-        invalidateWallet(
-          externalTarget
-            ? 'Your external wallet disconnected. Reconnect the wallet that owns the saved ENS address.'
-            : 'Your Farcaster wallet disconnected. Reconnect to open the matching XMTP inbox.',
-        )
+        invalidateWallet('Your Farcaster wallet disconnected. Reconnect to open the matching XMTP inbox.')
       }
       provider.on('accountsChanged', onAccountsChanged)
       provider.on('chainChanged', onChainChanged)
@@ -581,14 +513,12 @@ export function useXmtpMessaging({
         try {
           [accounts, chainId] = await Promise.all([
             provider.request({ method: 'eth_accounts' }),
-            provider.request({ method: 'eth_chainId' }),
+            wallet.kind === 'SCW'
+              ? provider.request({ method: 'eth_chainId' })
+              : Promise.resolve(wallet.chainId),
           ])
         } catch {
-          invalidateWallet(
-            externalTarget
-              ? 'Converge Mini could not reverify the external wallet after the app resumed. Reconnect it to continue safely.'
-              : 'Converge Mini could not reverify the Farcaster wallet after the app resumed. Reconnect it to continue safely.',
-          )
+          invalidateWallet('Converge Mini could not reverify the Farcaster wallet after the app resumed. Reconnect it to continue safely.')
           return false
         }
 
@@ -596,87 +526,29 @@ export function useXmtpMessaging({
           accounts,
           wallet.address,
           expectedPreferredTarget,
-          externalTarget,
         )) {
-          invalidateWallet(
-            externalTarget
-              ? 'Your external wallet account changed while the app was away. Reconnect the wallet that owns the saved ENS address.'
-              : 'Your Farcaster wallet account changed while the app was away. Reconnect to open the matching XMTP inbox.',
-          )
+          invalidateWallet('Your Farcaster wallet account changed while the app was away. Reconnect to open the matching XMTP inbox.')
           return false
         }
 
-        try {
-          if (parseEip1193ChainId(chainId) !== wallet.chainId) {
-            invalidateWallet(
-              externalTarget
-                ? 'Your external wallet network changed while the app was away. Reconnect so XMTP can verify the saved signer.'
-                : 'Your Farcaster wallet network changed while the app was away. Reconnect so XMTP can verify the active signer.',
-            )
-            return false
-          }
-        } catch {
-          invalidateWallet(
-            externalTarget
-              ? 'The external wallet reported an invalid network after the app resumed. Reconnect to continue safely.'
-              : 'The Farcaster wallet reported an invalid network after the app resumed. Reconnect to continue safely.',
-          )
-          return false
-        }
-
-        if (sourceProvider && inboxTarget) {
-          let sourceAccounts: unknown
+        if (wallet.kind === 'SCW') {
           try {
-            sourceAccounts = await sourceProvider.request({ method: 'eth_accounts' })
+            if (parseEip1193ChainId(chainId) !== wallet.chainId) {
+              invalidateWallet('Your Farcaster wallet network changed while the app was away. Reconnect so XMTP can verify the active signer.')
+              return false
+            }
           } catch {
-            invalidateWallet(
-              'Converge Mini could not reverify the Farcaster source account after the app resumed. The saved external inbox was closed.',
-              'target-source-mismatch',
-            )
-            return false
-          }
-          if (!preferredWalletAccountMatches(
-            sourceAccounts,
-            inboxTarget.sourceAddress,
-          )) {
-            invalidateWallet(
-              'The preferred Farcaster account changed while the app was away. The saved external inbox was closed.',
-              'target-source-mismatch',
-            )
+            invalidateWallet('The Farcaster wallet reported an invalid network after the app resumed. Reconnect to continue safely.')
             return false
           }
         }
 
         return true
       }
-      let removeSourceListeners: (() => void) | null = null
-      if (sourceProvider && inboxTarget) {
-        const onSourceAccountsChanged = (accounts: readonly string[]) => {
-          if (!preferredWalletAccountMatches(accounts, inboxTarget.sourceAddress)) {
-            invalidateWallet(
-              'The preferred Farcaster account changed. The saved external inbox was closed.',
-              'target-source-mismatch',
-            )
-          }
-        }
-        const onSourceDisconnect = () => {
-          invalidateWallet(
-            'The Farcaster source account disconnected. Reconnect it before opening the saved external inbox.',
-            'target-source-mismatch',
-          )
-        }
-        sourceProvider.on('accountsChanged', onSourceAccountsChanged)
-        sourceProvider.on('disconnect', onSourceDisconnect)
-        removeSourceListeners = () => {
-          sourceProvider.removeListener('accountsChanged', onSourceAccountsChanged)
-          sourceProvider.removeListener('disconnect', onSourceDisconnect)
-        }
-      }
       removeWalletListenerRef.current = () => {
         provider.removeListener('accountsChanged', onAccountsChanged)
         provider.removeListener('chainChanged', onChainChanged)
         provider.removeListener('disconnect', onDisconnect)
-        removeSourceListeners?.()
       }
 
       setConnection({ error: null, phase: 'xmtp' })
@@ -822,7 +694,6 @@ export function useXmtpMessaging({
         }
       }
     } catch (error) {
-      if (isCurrent() && mountedRef.current) setExternalWalletPairingUri(null)
       const shouldReport = isCurrent()
       if (clientCreationFailed) {
         const unsafeLease = leaseRef.current
@@ -867,37 +738,31 @@ export function useXmtpMessaging({
     }
   }, [applyConvosAccessSnapshot, inboxTarget, releaseResources, startMessageStream, updateConvosAccessRequest, updateNotice])
 
-  const connect = useCallback(
-    () => connectWithWalletPrompt(false),
-    [connectWithWalletPrompt],
-  )
-  const connectExternalWallet = useCallback(
-    () => connectWithWalletPrompt(true),
-    [connectWithWalletPrompt],
-  )
+  const connect = useCallback(() => connectWithWalletPrompt(), [connectWithWalletPrompt])
 
-  const prepareInboxSwitch = useCallback(async (
+  const bindEnsInbox = useCallback(async (
     candidateAddress: `0x${string}`,
     options: InboxSwitchOptions = {},
-  ): Promise<InboxSwitchPreflight> => {
-    const session = sessionRef.current
-    if (!session || connection.phase !== 'ready') {
-      throw new Error('Open the current XMTP inbox before switching.')
+  ): Promise<InboxBindingResult> => {
+    const sourceSession = sessionRef.current
+    const sourceWallet = walletRef.current
+    if (!sourceSession || !sourceWallet || connection.phase !== 'ready') {
+      throw new Error('Open the current XMTP inbox before binding an identity.')
     }
-    if (candidateAddress.toLowerCase() === session.address.toLowerCase()) {
+    if (candidateAddress.toLowerCase() === sourceSession.address.toLowerCase()) {
       throw new Error('That address already opens the current inbox.')
     }
 
     const generation = operationGenerationRef.current
-    const targetInboxId = await session.findInboxId(candidateAddress)
+    const targetInboxId = await sourceSession.findInboxId(candidateAddress)
     if (
-      sessionRef.current !== session ||
+      sessionRef.current !== sourceSession ||
       operationGenerationRef.current !== generation
     ) throw new Error('The current inbox changed during the safety check.')
     if (!targetInboxId) {
       throw new Error('That ENS address does not have an existing XMTP inbox to join.')
     }
-    if (targetInboxId === session.inboxId) {
+    if (targetInboxId === sourceSession.inboxId) {
       throw new Error('That ENS address is already part of the current XMTP inbox.')
     }
 
@@ -909,21 +774,86 @@ export function useXmtpMessaging({
       prompt: true,
       signal: options.signal,
     })
-    if (
-      sessionRef.current !== session ||
-      operationGenerationRef.current !== generation
-    ) throw new Error('The current inbox changed during the wallet check.')
-    if (targetWallet.address.toLowerCase() !== candidateAddress.toLowerCase()) {
-      throw new Error('The external wallet returned a different Ethereum account.')
-    }
+    let committed = false
+    let targetLease: XmtpLease | null = null
+    let targetSession: XmtpMessagingSession | null = null
+    try {
+      if (
+        sessionRef.current !== sourceSession ||
+        operationGenerationRef.current !== generation
+      ) throw new Error('The current inbox changed during the wallet check.')
+      if (targetWallet.address.toLowerCase() !== candidateAddress.toLowerCase()) {
+        throw new Error('The external wallet returned a different Ethereum account.')
+      }
+      if (options.signal?.aborted) {
+        throw new DOMException('The identity binding was cancelled.', 'AbortError')
+      }
 
-    return {
-      address: targetWallet.address,
-      chainId: targetWallet.chainId.toString(10),
-      inboxId: targetInboxId,
-      walletKind: targetWallet.kind,
+      // Everything above is reversible. From this callback onward, the dialog
+      // and host back handler must remain mounted until XMTP confirms or fails.
+      options.onCommitting?.()
+      if (options.signal?.aborted) {
+        throw new DOMException('The identity binding was cancelled.', 'AbortError')
+      }
+      committed = true
+
+      // The browser SDK permits only one OPFS-backed client in this document.
+      // Close inbox A before opening B; successful completion intentionally ends
+      // with one document reload so the normal Farcaster session opens B's DB.
+      await releaseResources()
+
+      const [{ acquireXmtpLease }, { XmtpMessagingSession }] = await Promise.all([
+        import('../../lib/xmtp/lease'),
+        import('../../lib/xmtp/session'),
+      ])
+      targetLease = await acquireXmtpLease()
+      if (!targetLease) {
+        throw new Error('XMTP storage is still closing. Reload before trying the binding again.')
+      }
+      targetSession = await XmtpMessagingSession.create(
+        targetWallet.signer,
+        targetWallet.address,
+        targetInboxId,
+      )
+      await targetSession.bindIdentity(sourceWallet.signer, sourceWallet.address)
+
+      return {
+        address: targetWallet.address,
+        chainId: sourceWallet.chainId.toString(10),
+        inboxId: targetInboxId,
+        walletKind: sourceWallet.kind,
+      }
+    } catch (error) {
+      if (!committed) throw error
+      if (
+        error && typeof error === 'object' &&
+        'name' in error && error.name === 'XmtpClientInitializationError' &&
+        targetLease
+      ) {
+        poisonedLeaseRef.current = targetLease
+        targetLease = null
+      }
+      if (
+        error && typeof error === 'object' &&
+        'name' in error && error.name === 'XmtpIdentityBindingVerificationError'
+      ) {
+        throw Object.assign(
+          new Error('XMTP could not confirm whether the Farcaster identity binding completed. Reload Converge Mini and verify the inbox before trying again.'),
+          { code: 'ens-binding-ambiguous' },
+        )
+      }
+      throw Object.assign(
+        new Error('The one-time binding stopped after the current XMTP client closed. Reload Converge Mini before retrying; the ENS owner wallet will not be used for routine sign-in.', { cause: error }),
+        { code: 'ens-binding-failed' },
+      )
+    } finally {
+      await targetSession?.close().catch(() => undefined)
+      await targetLease?.release().catch(() => undefined)
+      await import('../../lib/xmtp/walletConnect')
+        .then(({ disconnectWalletConnect }) => disconnectWalletConnect())
+        .catch(() => undefined)
     }
-  }, [connection.phase])
+  }, [connection.phase, releaseResources])
 
   const inspectIdentityRelationship = useCallback(async (
     candidateAddress: `0x${string}`,
@@ -1601,19 +1531,17 @@ export function useXmtpMessaging({
     backToInbox,
     canMessageAddress,
     connect,
-    connectExternalWallet,
     connection,
     convosAccessRequest,
     conversations,
     createDm,
     disconnect,
     environment,
-    externalWalletPairingUri,
     loadingConversation,
     loadingOlder,
     hasOlderMessages,
     inspectIdentityRelationship,
-    prepareInboxSwitch,
+    bindEnsInbox,
     loadOlderMessages,
     messages,
     notice,
@@ -1675,28 +1603,16 @@ function walletAccountIsAvailable(
   accounts: unknown,
   address: `0x${string}`,
   expectedSourceAddress?: `0x${string}`,
-  allowAnyTargetAccount = false,
 ): boolean {
   if (!Array.isArray(accounts)) return false
   if (expectedSourceAddress && (
     typeof accounts[0] !== 'string' ||
     accounts[0].toLowerCase() !== expectedSourceAddress.toLowerCase()
   )) return false
-  const candidates = expectedSourceAddress || allowAnyTargetAccount
-    ? accounts
-    : accounts.slice(0, 1)
+  const candidates = expectedSourceAddress ? accounts : accounts.slice(0, 1)
   return candidates.some((account: unknown) => (
     typeof account === 'string' && account.toLowerCase() === address.toLowerCase()
   ))
-}
-
-function preferredWalletAccountMatches(
-  accounts: unknown,
-  address: `0x${string}`,
-): boolean {
-  return Array.isArray(accounts) &&
-    typeof accounts[0] === 'string' &&
-    accounts[0].toLowerCase() === address.toLowerCase()
 }
 
 function assertPersistedWalletMetadata(
@@ -1704,15 +1620,12 @@ function assertPersistedWalletMetadata(
   wallet: WalletConnection,
 ): void {
   if (
-    target.signerSource !== 'walletconnect' ||
-    target.chainId === null ||
-    target.walletKind === null ||
-    wallet.chainId.toString(10) !== target.chainId ||
-    wallet.kind !== target.walletKind
+    wallet.kind !== target.walletKind ||
+    (wallet.kind === 'SCW' && wallet.chainId.toString(10) !== target.chainId)
   ) {
     throw Object.assign(
-      new Error('The external wallet signer no longer matches the saved ENS signer.'),
-      { code: 'walletconnect-signer-mismatch' },
+      new Error('The Farcaster wallet signer no longer matches the saved binding.'),
+      { code: 'host-wallet-metadata-mismatch' },
     )
   }
 }
@@ -1720,27 +1633,13 @@ function assertPersistedWalletMetadata(
 function inboxTargetFailure(
   error: unknown,
 ):
-  | 'external-wallet-configuration'
-  | 'external-wallet-unavailable'
   | 'target-mismatch'
   | 'target-source-mismatch'
   | 'target-unavailable'
   | null {
   if (!error || typeof error !== 'object') return null
-  if ('code' in error && error.code === 'walletconnect-not-configured') {
-    return 'external-wallet-configuration'
-  }
-  if (
-    'code' in error &&
-    (
-      error.code === 'walletconnect-session-unavailable' ||
-      error.code === 'walletconnect-target-unavailable' ||
-      error.code === 'walletconnect-cancelled' ||
-      error.code === 'walletconnect-connection-failed'
-    )
-  ) return 'external-wallet-unavailable'
-  if ('code' in error && error.code === 'walletconnect-signer-mismatch') {
-    return 'target-mismatch'
+  if ('code' in error && error.code === 'host-wallet-metadata-mismatch') {
+    return 'target-source-mismatch'
   }
   if ('code' in error && error.code === 'host-wallet-target-unavailable') {
     return 'target-unavailable'
@@ -1765,20 +1664,12 @@ function isUnsafeInitializationFailure(error: unknown): boolean {
 
 function inboxTargetFailureMessage(
   failure:
-    | 'external-wallet-configuration'
-    | 'external-wallet-unavailable'
     | 'target-mismatch'
     | 'target-source-mismatch'
     | 'target-unavailable',
 ): string {
-  if (failure === 'external-wallet-configuration') {
-    return 'This deployment is missing its public WalletConnect project ID.'
-  }
-  if (failure === 'external-wallet-unavailable') {
-    return 'Reconnect the external wallet that owns the saved ENS address.'
-  }
   if (failure === 'target-unavailable') {
-    return 'Farcaster does not expose the exact saved ENS address as a signing wallet.'
+    return 'Farcaster does not expose the wallet identity saved for this inbox.'
   }
   if (failure === 'target-source-mismatch') {
     return 'The saved inbox selection does not match the preferred Farcaster account.'

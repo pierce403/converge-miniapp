@@ -39,7 +39,7 @@ export type WalletConnectErrorCode =
   | 'walletconnect-connection-failed'
 
 export type WalletConnectWalletOptions = {
-  /** Open a new WalletConnect pairing when a restorable session is unavailable. */
+  /** Open the one-time WalletConnect pairing needed for ENS identity binding. */
   prompt?: boolean | undefined
   /** Receives the ephemeral URI while a new pairing is pending. */
   onDisplayUri?: ((uri: string) => void) | undefined
@@ -118,7 +118,7 @@ function appMetadata() {
 
   return {
     name: 'Converge Mini',
-    description: 'Connect an external wallet to an XMTP inbox.',
+    description: 'Authorize a one-time ENS inbox binding.',
     url: origin,
     icons: [`${origin}/icon-1024.png`],
   }
@@ -280,9 +280,9 @@ function normalizeFailure(error: unknown, targetAddress: Address): Error {
 }
 
 /**
- * Restores or pairs the external wallet that exposes an exact ENS-resolved
- * account, then creates its XMTP signer. WalletConnect owns session persistence;
- * Converge Mini never stores a pairing URI or topic.
+ * Pairs the external wallet that exposes an exact ENS-resolved account, then
+ * creates the one-time signer used during identity binding. WalletConnect may
+ * retain a provider session transiently; callers disconnect it after binding.
  */
 export async function connectWalletConnectWallet(
   requestedAddress: Address,
@@ -345,7 +345,7 @@ export async function connectWalletConnectWallet(
   }
 }
 
-/** Disconnects the persisted external-wallet session without initializing one. */
+/** Disconnects the transient external-wallet session without initializing one. */
 export async function disconnectWalletConnect(): Promise<void> {
   newestOperation = ++operationSequence
   if (!providerPromise) return

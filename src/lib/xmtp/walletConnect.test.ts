@@ -138,7 +138,7 @@ describe('WalletConnect XMTP adapter', () => {
       telemetryEnabled: false,
       metadata: {
         name: 'Converge Mini',
-        description: 'Connect an external wallet to an XMTP inbox.',
+        description: 'Authorize a one-time ENS inbox binding.',
         url: window.location.origin,
         icons: [`${window.location.origin}/icon-1024.png`],
       },

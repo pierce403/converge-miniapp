@@ -1429,6 +1429,11 @@ img { max-width: 100%; }
   outline-offset: 3px;
 }
 
+.app-shell[data-host-platform="mobile"] .state-panel {
+  align-self: start;
+  margin: 0 auto;
+}
+
 @media (max-width: 380px) {
   .app-header { min-height: 62px; padding-inline: 12px; }
   .brand-mark { width: 38px; height: 38px; }

@@ -18,19 +18,23 @@ type SafeAreaStyle = CSSProperties & {
 
 export function AppShell({ children, host }: AppShellProps) {
   const insets = host.context?.client.safeAreaInsets
-  const messagingHostTop = host.context?.client.platformType === 'mobile'
+  const hostTop = host.context?.client.platformType === 'mobile'
     ? 0
     : (insets?.top ?? 0)
   const style: SafeAreaStyle = {
     '--host-safe-right': `${insets?.right ?? 0}px`,
     '--host-safe-bottom': `${insets?.bottom ?? 0}px`,
     '--host-safe-left': `${insets?.left ?? 0}px`,
-    '--host-messaging-safe-top': `${messagingHostTop}px`,
-    '--host-safe-top': `${insets?.top ?? 0}px`,
+    '--host-messaging-safe-top': `${hostTop}px`,
+    '--host-safe-top': `${hostTop}px`,
   }
 
   return (
-    <div className="app-shell" style={style}>
+    <div
+      className="app-shell"
+      data-host-platform={host.context?.client.platformType}
+      style={style}
+    >
       <header className="app-header">
         <div className="brand" aria-label="Converge Mini">
           <BrandMark />

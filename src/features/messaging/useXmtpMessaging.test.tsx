@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   connectHostWallet: vi.fn(),
   connectWalletConnectWallet: vi.fn(),
   createSession: vi.fn(),
+  disconnectWalletConnect: vi.fn(),
   parseConvosInvite: vi.fn(),
   prepareStorage: vi.fn(),
   verifyHostWalletSource: vi.fn(),
@@ -45,7 +46,7 @@ vi.mock('../../lib/xmtp/signer', () => ({
 
 vi.mock('../../lib/xmtp/walletConnect', () => ({
   connectWalletConnectWallet: mocks.connectWalletConnectWallet,
-  disconnectWalletConnect: vi.fn(),
+  disconnectWalletConnect: mocks.disconnectWalletConnect,
 }))
 
 vi.mock('../../lib/xmtp/storage', () => ({
@@ -163,6 +164,7 @@ function message(id: string, text: string, sentAt: string): MessageItem {
 function createSession(overrides: Record<string, unknown> = {}) {
   return {
     address,
+    bindIdentity: vi.fn().mockResolvedValue(undefined),
     canMessageAddress: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
     convosAccessSnapshot: null,
@@ -186,7 +188,7 @@ function createSession(overrides: Record<string, unknown> = {}) {
 
 describe('useXmtpMessaging', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
     mocks.parseConvosInvite.mockImplementation((slug: string) => ({
       ...convosInvite(),
       slug,
@@ -252,27 +254,26 @@ describe('useXmtpMessaging', () => {
     expect(mocks.createSession).toHaveBeenCalledOnce()
   })
 
-  it('opens only a remembered exact-address inbox and verifies its inbox ID', async () => {
+  it('opens a bound ENS inbox with only the Farcaster source signer', async () => {
     const targetAddress = '0x2222222222222222222222222222222222222222' as const
     const target = {
       address: targetAddress,
       inboxId: 'target-inbox',
       name: 'deanpierce.eth',
       sourceAddress: address,
-      signerSource: 'farcaster' as const,
-      walletKind: null,
-      chainId: null,
+      walletKind: 'EOA' as const,
+      chainId: '10',
     }
     const session = createSession({
-      address: targetAddress,
+      address,
       inboxId: target.inboxId,
     })
     mocks.connectHostWallet.mockResolvedValueOnce({
-      address: targetAddress,
+      address,
       chainId: 10n,
       kind: 'EOA',
       provider,
-      signer: { target: true },
+      signer: { farcaster: true },
     })
     mocks.createSession.mockResolvedValue(session)
 
@@ -283,199 +284,131 @@ describe('useXmtpMessaging', () => {
 
     await waitFor(() => expect(result.current.connection.phase).toBe('ready'))
     expect(mocks.connectHostWallet).toHaveBeenCalledOnce()
-    expect(mocks.connectHostWallet).toHaveBeenCalledWith(targetAddress, address)
+    expect(mocks.connectHostWallet).toHaveBeenCalledWith(address, address)
     expect(mocks.createSession).toHaveBeenCalledWith(
-      { target: true },
-      targetAddress,
+      { farcaster: true },
+      address,
       target.inboxId,
     )
-    expect(result.current.address).toBe(targetAddress)
+    expect(result.current.address).toBe(address)
+    expect(mocks.connectWalletConnectWallet).not.toHaveBeenCalled()
   })
 
-  it('restores a saved external signer only after verifying its Farcaster source', async () => {
+  it('never restores WalletConnect for a confirmed binding', async () => {
     const targetAddress = '0x2222222222222222222222222222222222222222' as const
     const target = {
       address: targetAddress,
-      chainId: '1',
+      chainId: '10',
       inboxId: 'target-inbox',
       name: 'deanpierce.eth',
-      signerSource: 'walletconnect' as const,
       sourceAddress: address,
       walletKind: 'EOA' as const,
     }
-    const targetWallet = {
-      address: targetAddress,
-      chainId: 1n,
-      kind: 'EOA' as const,
-      provider: externalProvider,
-      signer: { external: true },
-    }
     const session = createSession({
-      address: targetAddress,
+      address,
       inboxId: target.inboxId,
     })
-    mocks.connectWalletConnectWallet.mockResolvedValueOnce(targetWallet)
     mocks.createSession.mockResolvedValue(session)
 
     const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
     await act(async () => result.current.connect())
 
     expect(result.current.connection.phase).toBe('ready')
-    expect(mocks.verifyHostWalletSource).toHaveBeenCalledWith(address)
-    expect(mocks.connectHostWallet).not.toHaveBeenCalled()
-    expect(mocks.connectWalletConnectWallet).toHaveBeenCalledWith(
-      targetAddress,
-      { onDisplayUri: undefined, prompt: false },
-    )
+    expect(mocks.connectHostWallet).toHaveBeenCalledWith(address, address)
+    expect(mocks.connectWalletConnectWallet).not.toHaveBeenCalled()
     expect(mocks.createSession).toHaveBeenCalledWith(
-      targetWallet.signer,
-      targetAddress,
+      {},
+      address,
       target.inboxId,
     )
   })
 
-  it('fails closed when the Farcaster source changes during external pairing', async () => {
+  it('does not lock an EOA binding to the chain used during setup', async () => {
     const targetAddress = '0x2222222222222222222222222222222222222222' as const
     const target = {
       address: targetAddress,
-      chainId: '1',
+      chainId: '8453',
       inboxId: 'target-inbox',
       name: 'deanpierce.eth',
-      signerSource: 'walletconnect' as const,
       sourceAddress: address,
       walletKind: 'EOA' as const,
     }
-    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
-      address: targetAddress,
-      chainId: 1n,
-      kind: 'EOA',
-      provider: externalProvider,
-      signer: { external: true },
-    })
-    sourceProvider.request.mockResolvedValueOnce([
-      '0x3333333333333333333333333333333333333333',
-    ])
-
+    const session = createSession({ address, inboxId: target.inboxId })
+    mocks.createSession.mockResolvedValueOnce(session)
     const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
-    await act(async () => result.current.connectExternalWallet())
+    await act(async () => result.current.connect())
+
+    expect(result.current.connection.phase).toBe('ready')
+    expect(mocks.createSession).toHaveBeenCalledOnce()
+  })
+
+  it('fails closed when the bound Farcaster smart-wallet chain changes', async () => {
+    const target = {
+      address: '0x2222222222222222222222222222222222222222' as const,
+      chainId: '8453',
+      inboxId: 'target-inbox',
+      name: 'deanpierce.eth',
+      sourceAddress: address,
+      walletKind: 'SCW' as const,
+    }
+    mocks.connectHostWallet.mockResolvedValueOnce({
+      address,
+      chainId: 10n,
+      kind: 'SCW',
+      provider,
+      signer: { farcaster: true },
+    })
+    const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
+    await act(async () => result.current.connect())
 
     expect(result.current.connection.phase).toBe('target-source-mismatch')
     expect(mocks.createSession).not.toHaveBeenCalled()
   })
 
-  it('rejects external signer metadata that changed since selection', async () => {
+  it('rejects Farcaster wallet-kind metadata that changed since binding', async () => {
     const targetAddress = '0x2222222222222222222222222222222222222222' as const
     const target = {
       address: targetAddress,
-      chainId: '1',
+      chainId: '10',
       inboxId: 'target-inbox',
       name: 'deanpierce.eth',
-      signerSource: 'walletconnect' as const,
       sourceAddress: address,
       walletKind: 'EOA' as const,
     }
-    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
-      address: targetAddress,
-      chainId: 8453n,
+    mocks.connectHostWallet.mockResolvedValueOnce({
+      address,
+      chainId: 10n,
       kind: 'SCW',
-      provider: externalProvider,
-      signer: { external: true },
+      provider,
+      signer: { farcaster: true },
     })
 
     const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
     await act(async () => result.current.connect())
 
-    expect(result.current.connection.phase).toBe('target-mismatch')
+    expect(result.current.connection.phase).toBe('target-source-mismatch')
     expect(mocks.createSession).not.toHaveBeenCalled()
   })
 
-  it('surfaces a QR URI while explicitly reconnecting a missing external session', async () => {
+  it('closes a bound inbox if the Farcaster source account changes', async () => {
     const targetAddress = '0x2222222222222222222222222222222222222222' as const
     const target = {
       address: targetAddress,
-      chainId: '1',
       inboxId: 'target-inbox',
       name: 'deanpierce.eth',
-      signerSource: 'walletconnect' as const,
       sourceAddress: address,
       walletKind: 'EOA' as const,
+      chainId: '10',
     }
-    mocks.connectWalletConnectWallet.mockRejectedValueOnce(Object.assign(
-      new Error('missing session'),
-      { code: 'walletconnect-session-unavailable' },
-    ))
-    const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
-
-    await act(async () => result.current.connect())
-    expect(result.current.connection.phase).toBe('external-wallet-unavailable')
-    expect(mocks.createSession).not.toHaveBeenCalled()
-
-    const approval = deferred<{
-      address: typeof targetAddress
-      chainId: bigint
-      kind: 'EOA'
-      provider: typeof externalProvider
-      signer: { external: boolean }
-    }>()
-    mocks.connectWalletConnectWallet.mockImplementationOnce(async (
-      _targetAddress: string,
-      options: { onDisplayUri?: (uri: string) => void },
-    ) => {
-      options.onDisplayUri?.('wc:ephemeral-reconnect')
-      return approval.promise
-    })
-    const session = createSession({ address: targetAddress, inboxId: target.inboxId })
-    mocks.createSession.mockResolvedValue(session)
-
-    let reconnect!: Promise<void>
-    act(() => {
-      reconnect = result.current.connectExternalWallet()
-    })
-    await waitFor(() => expect(result.current.externalWalletPairingUri).toBe(
-      'wc:ephemeral-reconnect',
-    ))
-    await act(async () => {
-      approval.resolve({
-        address: targetAddress,
-        chainId: 1n,
-        kind: 'EOA',
-        provider: externalProvider,
-        signer: { external: true },
-      })
-      await reconnect
-    })
-
-    expect(result.current.externalWalletPairingUri).toBeNull()
-    expect(result.current.connection.phase).toBe('ready')
-    expect(mocks.connectWalletConnectWallet).toHaveBeenLastCalledWith(
-      targetAddress,
-      expect.objectContaining({
-        onDisplayUri: expect.any(Function),
-        prompt: true,
-      }),
-    )
-  })
-
-  it('stops a remembered target if the preferred source changes while target stays exposed', async () => {
-    const targetAddress = '0x2222222222222222222222222222222222222222' as const
-    const target = {
-      address: targetAddress,
-      inboxId: 'target-inbox',
-      name: 'deanpierce.eth',
-      sourceAddress: address,
-      signerSource: 'farcaster' as const,
-      walletKind: null,
-      chainId: null,
-    }
-    const session = createSession({ address: targetAddress, inboxId: target.inboxId })
+    const session = createSession({ address, inboxId: target.inboxId })
     const lease = { release: vi.fn().mockResolvedValue(undefined) }
     mocks.acquireXmtpLease.mockResolvedValue(lease)
     mocks.connectHostWallet.mockResolvedValueOnce({
-      address: targetAddress,
+      address,
       chainId: 10n,
       kind: 'EOA',
       provider,
-      signer: { target: true },
+      signer: { farcaster: true },
     })
     mocks.createSession.mockResolvedValue(session)
     const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
@@ -508,7 +441,7 @@ describe('useXmtpMessaging', () => {
     })
     mocks.connectWalletConnectWallet.mockRejectedValueOnce(unavailable)
 
-    await expect(result.current.prepareInboxSwitch(
+    await expect(result.current.bindEnsInbox(
       '0x2222222222222222222222222222222222222222',
     )).rejects.toBe(unavailable)
 
@@ -525,13 +458,25 @@ describe('useXmtpMessaging', () => {
     expect(result.current.conversations).toEqual([cachedConversation])
   })
 
-  it('preflights an existing ENS inbox with the exact external signer metadata', async () => {
+  it('binds the Farcaster signer once, then closes the external target session', async () => {
     const targetAddress = '0x2222222222222222222222222222222222222222' as const
-    const session = createSession()
-    mocks.createSession.mockResolvedValue(session)
+    const sourceSession = createSession()
+    const targetSession = createSession({
+      address: targetAddress,
+      inboxId: 'target-inbox',
+    })
+    const sourceLease = { release: vi.fn().mockResolvedValue(undefined) }
+    const targetLease = { release: vi.fn().mockResolvedValue(undefined) }
+    mocks.acquireXmtpLease
+      .mockResolvedValueOnce(sourceLease)
+      .mockResolvedValueOnce(targetLease)
+    mocks.createSession
+      .mockResolvedValueOnce(sourceSession)
+      .mockResolvedValueOnce(targetSession)
     const { result } = renderHook(() => useXmtpMessaging())
     await act(async () => result.current.connect())
     const onPairingUri = vi.fn()
+    const onCommitting = vi.fn()
     const controller = new AbortController()
     mocks.connectWalletConnectWallet.mockResolvedValueOnce({
       address: targetAddress,
@@ -541,14 +486,15 @@ describe('useXmtpMessaging', () => {
       signer: { external: true },
     })
 
-    await expect(result.current.prepareInboxSwitch(targetAddress, {
+    await expect(result.current.bindEnsInbox(targetAddress, {
+      onCommitting,
       onPairingUri,
       signal: controller.signal,
     })).resolves.toEqual({
       address: targetAddress,
-      chainId: '8453',
+      chainId: '10',
       inboxId: 'target-inbox',
-      walletKind: 'SCW',
+      walletKind: 'EOA',
     })
 
     expect(mocks.connectWalletConnectWallet).toHaveBeenCalledWith(
@@ -559,7 +505,82 @@ describe('useXmtpMessaging', () => {
         signal: controller.signal,
       },
     )
-    expect(session.close).not.toHaveBeenCalled()
+    expect(sourceSession.close).toHaveBeenCalledOnce()
+    expect(onCommitting).toHaveBeenCalledOnce()
+    expect(onCommitting.mock.invocationCallOrder[0]).toBeLessThan(
+      sourceSession.close.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    )
+    expect(sourceLease.release).toHaveBeenCalledOnce()
+    expect(targetSession.bindIdentity).toHaveBeenCalledWith({}, address)
+    expect(targetSession.close).toHaveBeenCalledOnce()
+    expect(targetLease.release).toHaveBeenCalledOnce()
+    expect(mocks.disconnectWalletConnect).toHaveBeenCalledOnce()
+    expect(result.current.connection.phase).toBe('ready')
+  })
+
+  it('disconnects a paired ENS wallet if it returns the wrong account', async () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222' as const
+    const sourceSession = createSession()
+    const sourceLease = { release: vi.fn().mockResolvedValue(undefined) }
+    mocks.acquireXmtpLease.mockResolvedValueOnce(sourceLease)
+    mocks.createSession.mockResolvedValueOnce(sourceSession)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
+      address: '0x3333333333333333333333333333333333333333',
+      chainId: 1n,
+      kind: 'EOA',
+      provider: externalProvider,
+      signer: { external: true },
+    })
+
+    await expect(result.current.bindEnsInbox(targetAddress)).rejects.toThrow(
+      'different Ethereum account',
+    )
+
+    expect(mocks.disconnectWalletConnect).toHaveBeenCalledOnce()
+    expect(sourceSession.close).not.toHaveBeenCalled()
+    expect(sourceLease.release).not.toHaveBeenCalled()
+    expect(result.current.connection.phase).toBe('ready')
+  })
+
+  it('fails closed and cleans up when XMTP cannot verify the binding', async () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222' as const
+    const sourceSession = createSession()
+    const verificationError = new Error('not confirmed')
+    verificationError.name = 'XmtpIdentityBindingVerificationError'
+    const targetSession = createSession({
+      address: targetAddress,
+      bindIdentity: vi.fn().mockRejectedValue(verificationError),
+      inboxId: 'target-inbox',
+    })
+    const sourceLease = { release: vi.fn().mockResolvedValue(undefined) }
+    const targetLease = { release: vi.fn().mockResolvedValue(undefined) }
+    mocks.acquireXmtpLease
+      .mockResolvedValueOnce(sourceLease)
+      .mockResolvedValueOnce(targetLease)
+    mocks.createSession
+      .mockResolvedValueOnce(sourceSession)
+      .mockResolvedValueOnce(targetSession)
+    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
+      address: targetAddress,
+      chainId: 1n,
+      kind: 'EOA',
+      provider: externalProvider,
+      signer: { external: true },
+    })
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    await expect(result.current.bindEnsInbox(targetAddress, {
+      onCommitting: vi.fn(),
+    })).rejects.toMatchObject({ code: 'ens-binding-ambiguous' })
+
+    expect(sourceSession.close).toHaveBeenCalledOnce()
+    expect(sourceLease.release).toHaveBeenCalledOnce()
+    expect(targetSession.close).toHaveBeenCalledOnce()
+    expect(targetLease.release).toHaveBeenCalledOnce()
+    expect(mocks.disconnectWalletConnect).toHaveBeenCalledOnce()
     expect(result.current.connection.phase).toBe('ready')
   })
 
@@ -569,9 +590,8 @@ describe('useXmtpMessaging', () => {
       inboxId: 'target-inbox',
       name: 'deanpierce.eth',
       sourceAddress: address,
-      signerSource: 'farcaster' as const,
-      walletKind: null,
-      chainId: null,
+      walletKind: 'EOA' as const,
+      chainId: '10',
     }
     mocks.connectHostWallet.mockRejectedValueOnce(Object.assign(
       new Error('The Farcaster wallet does not expose the requested Ethereum account.'),
@@ -584,7 +604,7 @@ describe('useXmtpMessaging', () => {
     expect(result.current.connection.phase).toBe('target-unavailable')
     expect(mocks.connectHostWallet).toHaveBeenCalledOnce()
     expect(mocks.connectHostWallet).toHaveBeenCalledWith(
-      target.address,
+      target.sourceAddress,
       target.sourceAddress,
     )
     expect(mocks.createSession).not.toHaveBeenCalled()
@@ -596,9 +616,8 @@ describe('useXmtpMessaging', () => {
       inboxId: 'target-inbox',
       name: 'deanpierce.eth',
       sourceAddress: '0x3333333333333333333333333333333333333333' as const,
-      signerSource: 'farcaster' as const,
-      walletKind: null,
-      chainId: null,
+      walletKind: 'EOA' as const,
+      chainId: '10',
     }
     mocks.connectHostWallet.mockRejectedValueOnce(Object.assign(
       new Error('private provider account details'),
@@ -611,7 +630,7 @@ describe('useXmtpMessaging', () => {
     expect(result.current.connection.phase).toBe('target-source-mismatch')
     expect(mocks.connectHostWallet).toHaveBeenCalledOnce()
     expect(mocks.connectHostWallet).toHaveBeenCalledWith(
-      target.address,
+      target.sourceAddress,
       target.sourceAddress,
     )
     expect(mocks.createSession).not.toHaveBeenCalled()
@@ -624,16 +643,15 @@ describe('useXmtpMessaging', () => {
       inboxId: 'target-inbox',
       name: 'deanpierce.eth',
       sourceAddress: address,
-      signerSource: 'farcaster' as const,
-      walletKind: null,
-      chainId: null,
+      walletKind: 'EOA' as const,
+      chainId: '10',
     }
     mocks.connectHostWallet.mockResolvedValueOnce({
-      address: targetAddress,
+      address,
       chainId: 10n,
       kind: 'EOA',
       provider,
-      signer: { target: true },
+      signer: { farcaster: true },
     })
     const mismatch = new Error('private inbox IDs must not be shown')
     mismatch.name = 'XmtpInboxTargetMismatchError'
@@ -1710,7 +1728,7 @@ describe('useXmtpMessaging', () => {
 
     await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
     expect(provider.request).toHaveBeenCalledWith({ method: 'eth_accounts' })
-    expect(provider.request).toHaveBeenCalledWith({ method: 'eth_chainId' })
+    expect(provider.request).not.toHaveBeenCalledWith({ method: 'eth_chainId' })
   })
 
   it('defers online recovery while the document is hidden', async () => {
@@ -1735,78 +1753,32 @@ describe('useXmtpMessaging', () => {
     })
   })
 
-  it('closes a saved external inbox when its wallet cannot be reverified', async () => {
+  it('reverifies only the Farcaster signer for a bound ENS inbox', async () => {
     const targetAddress = '0x2222222222222222222222222222222222222222' as const
     const target = {
       address: targetAddress,
-      chainId: '1',
+      chainId: '10',
       inboxId: 'target-inbox',
       name: 'deanpierce.eth',
-      signerSource: 'walletconnect' as const,
       sourceAddress: address,
       walletKind: 'EOA' as const,
     }
     const session = createSession({
-      address: targetAddress,
+      address,
       inboxId: target.inboxId,
-    })
-    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
-      address: targetAddress,
-      chainId: 1n,
-      kind: 'EOA',
-      provider: externalProvider,
-      signer: { external: true },
     })
     mocks.createSession.mockResolvedValue(session)
     const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
     await act(async () => result.current.connect())
     expect(result.current.connection.phase).toBe('ready')
-    externalProvider.request.mockRejectedValue(new Error('session unavailable'))
+    provider.request.mockRejectedValue(new Error('host unavailable'))
 
     act(() => window.dispatchEvent(new Event('focus')))
 
-    await waitFor(() => expect(result.current.connection.phase).toBe(
-      'external-wallet-unavailable',
-    ))
+    await waitFor(() => expect(result.current.connection.phase).toBe('error'))
     expect(result.current.connection.error).toMatch(/could not reverify/i)
     await waitFor(() => expect(session.close).toHaveBeenCalledOnce())
-  })
-
-  it('closes a saved external inbox when its Farcaster source cannot be reverified', async () => {
-    const targetAddress = '0x2222222222222222222222222222222222222222' as const
-    const target = {
-      address: targetAddress,
-      chainId: '1',
-      inboxId: 'target-inbox',
-      name: 'deanpierce.eth',
-      signerSource: 'walletconnect' as const,
-      sourceAddress: address,
-      walletKind: 'EOA' as const,
-    }
-    const session = createSession({
-      address: targetAddress,
-      inboxId: target.inboxId,
-    })
-    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
-      address: targetAddress,
-      chainId: 1n,
-      kind: 'EOA',
-      provider: externalProvider,
-      signer: { external: true },
-    })
-    mocks.createSession.mockResolvedValue(session)
-    const { result } = renderHook(() => useXmtpMessaging({ inboxTarget: target }))
-    await act(async () => result.current.connect())
-    expect(result.current.connection.phase).toBe('ready')
-    sourceProvider.request.mockRejectedValue(new Error('host unavailable'))
-
-    act(() => window.dispatchEvent(new Event('focus')))
-
-    await waitFor(() => expect(result.current.connection.phase).toBe(
-      'target-source-mismatch',
-    ))
-    expect(result.current.connection.error).toMatch(/could not reverify/i)
-    await waitFor(() => expect(session.close).toHaveBeenCalledOnce())
+    expect(mocks.connectWalletConnectWallet).not.toHaveBeenCalled()
   })
 
   it('closes the old inbox when the wallet changed while the app was suspended', async () => {

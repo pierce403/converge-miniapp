@@ -11,14 +11,16 @@ type EnsInboxSwitchDialogProps = {
     candidate: EnsCandidate,
     signal: AbortSignal,
     onPairingUri: (uri: string) => void,
+    onCommitting: () => void,
   ) => Promise<void>
   onRestarting: () => void
 }
 
-type DialogPhase = 'review' | 'checking' | 'error' | 'restarting'
+type DialogPhase = 'review' | 'checking' | 'binding' | 'error' | 'restarting'
 type SwitchErrorPresentation = {
   cancelLabel?: string
   message: string
+  reload?: boolean
   retryable: boolean
 }
 
@@ -29,6 +31,7 @@ export function EnsInboxSwitchDialog({
   onRestarting,
 }: EnsInboxSwitchDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
+  const committedRef = useRef(false)
   const operationRef = useRef<AbortController | null>(null)
   const [error, setError] = useState<SwitchErrorPresentation | null>(null)
   const [pairingUri, setPairingUri] = useState<string | null>(null)
@@ -48,7 +51,7 @@ export function EnsInboxSwitchDialog({
   }, [])
 
   const cancel = () => {
-    if (phase === 'restarting') return
+    if (committedRef.current || phase === 'restarting') return
     operationRef.current?.abort()
     operationRef.current = null
     onCancel()
@@ -64,11 +67,21 @@ export function EnsInboxSwitchDialog({
     let restart = false
 
     try {
-      await onConfirm(candidate, operation.signal, (uri) => {
-        if (!operation.signal.aborted && operationRef.current === operation) {
-          setPairingUri(uri)
-        }
-      })
+      await onConfirm(
+        candidate,
+        operation.signal,
+        (uri) => {
+          if (!operation.signal.aborted && operationRef.current === operation) {
+            setPairingUri(uri)
+          }
+        },
+        () => {
+          if (operation.signal.aborted || operationRef.current !== operation) return
+          committedRef.current = true
+          setPairingUri(null)
+          setPhase('binding')
+        },
+      )
       restart = !operation.signal.aborted
     } catch (caught) {
       if (!operation.signal.aborted) {
@@ -93,26 +106,29 @@ export function EnsInboxSwitchDialog({
       className="ens-offer ens-inbox-switch"
       onCancel={(event) => {
         event.preventDefault()
-        if (phase !== 'restarting') cancel()
+        cancel()
       }}
       ref={dialogRef}
     >
       <section className="ens-offer__card ens-inbox-switch__card">
-        <p className="eyebrow">Existing ENS inbox</p>
+        <p className="eyebrow">One-time identity binding</p>
         <h2 id="ens-switch-title">
           {pairingUri
             ? `Connect the wallet for ${candidate.name}`
-            : `Leave this inbox and join ${candidate.name}?`}
+            : `Bind your Farcaster wallet to ${candidate.name}?`}
         </h2>
         <div id="ens-switch-description" className="ens-inbox-switch__copy">
           <p>
-            You’re abandoning this inbox in Converge Mini and joining the existing XMTP inbox for <strong>{candidate.name}</strong>.
+            This permanently reassigns your Farcaster wallet key to the existing XMTP inbox for <strong>{candidate.name}</strong>.
           </p>
           <p>
-            This inbox and its messages are not deleted. The inboxes stay separate: nothing moves or merges, and older history in the inbox you join is recovered only when XMTP can provide it.
+            The inboxes do not merge. Your Farcaster wallet will lose normal access to its old XMTP inbox, and those old messages will not move into {candidate.name}.
           </p>
           <p>
-            Connect an external wallet that exposes the exact address below. WalletConnect will ask for the connection first; XMTP may then request a signature. Neither step is a transaction or costs gas.
+            The ENS owner wallet is used only once to grant this installation access. Your Farcaster wallet then signs the binding and becomes the everyday signer; future launches will not reconnect this external wallet. Neither signature is a transaction or costs gas.
+          </p>
+          <p>
+            After XMTP confirms the binding, Converge Mini reloads once to open the target inbox with your Farcaster wallet.
           </p>
           <code>{candidate.address}</code>
         </div>
@@ -125,12 +141,17 @@ export function EnsInboxSwitchDialog({
           <p className="ens-inbox-switch__status" role="status" aria-live="polite">
             {pairingUri
               ? 'Waiting for the exact ENS address to approve WalletConnect…'
-              : 'Rechecking the ENS name and existing target inbox…'}
+              : 'Rechecking the ENS name, then binding the Farcaster wallet…'}
+          </p>
+        ) : null}
+        {phase === 'binding' ? (
+          <p className="ens-inbox-switch__status" role="status" aria-live="polite">
+            Binding the Farcaster wallet to {candidate.name}… Keep this window open.
           </p>
         ) : null}
         {phase === 'restarting' ? (
           <p className="ens-inbox-switch__status" role="status" aria-live="polite">
-            Restarting Converge Mini to open {candidate.name}…
+            Binding confirmed. Reopening {candidate.name} with the Farcaster wallet…
           </p>
         ) : null}
         {phase === 'error' && error ? (
@@ -142,16 +163,21 @@ export function EnsInboxSwitchDialog({
             <Button busy={false} onClick={() => void confirm()}>
               {phase === 'error'
                 ? 'Check again'
-                : `Connect wallet and join ${candidate.name}`}
+                : `Bind Farcaster wallet to ${candidate.name}`}
             </Button>
           ) : null}
-          {phase !== 'restarting' ? (
-            <Button autoFocus disabled={false} variant="ghost" onClick={cancel}>
+          {phase === 'review' || phase === 'checking' || phase === 'error' ? (
+            <Button
+              autoFocus
+              disabled={false}
+              variant="ghost"
+              onClick={error?.reload ? onRestarting : cancel}
+            >
               {phase === 'error' && error
                 ? error.cancelLabel ?? (
                     error.retryable ? 'Keep this inbox' : 'Review updated identity'
                   )
-                : 'Keep this inbox'}
+                : phase === 'checking' ? 'Cancel connection' : 'Keep this inbox'}
             </Button>
           ) : null}
         </div>
@@ -179,11 +205,26 @@ function readSwitchError(
     error &&
     typeof error === 'object' &&
     'code' in error &&
+    (error.code === 'ens-binding-ambiguous' || error.code === 'ens-binding-failed')
+  ) {
+    return {
+      cancelLabel: 'Reload and verify',
+      message: error instanceof Error
+        ? error.message
+        : 'The binding stopped after XMTP began switching inboxes. Reload and verify the Farcaster inbox before retrying.',
+      reload: true,
+      retryable: false,
+    }
+  }
+  if (
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
     error.code === 'walletconnect-not-configured'
   ) {
     return {
       cancelLabel: 'Keep this inbox',
-      message: 'External-wallet connections are not configured for this deployment yet. Your current inbox is unchanged.',
+      message: 'WalletConnect is not configured for one-time ENS binding on this deployment. Your current inbox is unchanged.',
       retryable: false,
     }
   }
