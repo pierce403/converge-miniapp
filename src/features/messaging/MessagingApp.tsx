@@ -49,6 +49,12 @@ type MessagingAppProps = {
 
 const reloadCurrentDocument = () => window.location.reload()
 
+// The local nested-view back buttons are always present. Keep routine Farcaster
+// native back toggles disabled until canonical hosts prove that changing their
+// visibility does not disturb the webview. ENS binding is the exception: its
+// irreversible boundary needs the host back callback to keep the dialog alive.
+const ROUTINE_NATIVE_HOST_BACK_ENABLED = false
+
 class EnsInboxSwitchFailure extends Error {
   readonly code: string
 
@@ -339,10 +345,13 @@ export function MessagingApp({
     targetRecoveryError ? `${description} ${targetRecoveryError}` : description
   ), [targetRecoveryError])
   const handleHostBack = ensSwitchCandidate ? closeEnsSwitch : backToInbox
+  const requiresEnsSwitchBackGuard = ensSwitchCandidate !== null
   useMiniAppBack(
-    canUseBack,
+    canUseBack && (
+      requiresEnsSwitchBackGuard || ROUTINE_NATIVE_HOST_BACK_ENABLED
+    ),
     messaging.connection.phase === 'ready' && (
-      ensSwitchCandidate !== null || messaging.view !== 'inbox'
+      requiresEnsSwitchBackGuard || messaging.view !== 'inbox'
     ),
     handleHostBack,
   )

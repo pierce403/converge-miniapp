@@ -69,6 +69,7 @@ const initialConnection: ConnectionState = {
 
 const RESUME_WALLET_RETRY_DELAYS_MS = [0, 100, 300] as const
 const RESUME_WALLET_REQUEST_TIMEOUT_MS = 2_000
+const PROVIDER_EVENT_WALLET_RECHECK_DELAY_MS = 750
 
 type UseXmtpMessagingOptions = {
   autoConnect?: boolean
@@ -538,6 +539,7 @@ export function useXmtpMessaging({
 
       const provider = wallet.provider
       let walletInvalidated = false
+      let providerEventWalletTimer: number | null = null
       const invalidateWallet = (
         message: string,
         phase: ConnectionPhase = 'error',
@@ -566,14 +568,44 @@ export function useXmtpMessaging({
         void releaseResources()
       }
       const expectedPreferredTarget = inboxTarget?.sourceAddress
+      const cancelProviderEventWalletRecheck = () => {
+        if (providerEventWalletTimer === null) return
+        window.clearTimeout(providerEventWalletTimer)
+        providerEventWalletTimer = null
+      }
+      const scheduleProviderEventWalletRecheck = () => {
+        if (walletInvalidated || providerEventWalletTimer !== null) return
+        const scheduledEpoch = backgroundEpochRef.current
+        providerEventWalletTimer = window.setTimeout(() => {
+          providerEventWalletTimer = null
+          if (
+            walletInvalidated ||
+            walletRef.current !== wallet ||
+            backgroundEpochRef.current !== scheduledEpoch
+          ) return
+          void validateWalletRef.current?.()
+        }, PROVIDER_EVENT_WALLET_RECHECK_DELAY_MS)
+      }
       const onAccountsChanged = (accounts: readonly string[]) => {
-        if (!walletAccountIsAvailable(
+        if (walletAccountIsAvailable(
           accounts,
           wallet.address,
           expectedPreferredTarget,
         )) {
-          invalidateWallet('Your Farcaster wallet account changed. Reconnect to open the matching XMTP inbox.')
+          cancelProviderEventWalletRecheck()
+          return
         }
+
+        // Embedded hosts can briefly report no accounts while native chrome,
+        // Quick Auth, or another host-owned overlay is taking focus. A concrete
+        // different account is authoritative and still closes immediately. An
+        // empty list gets a bounded wallet-only recheck without refreshing XMTP.
+        const hasConcreteAccount = accounts.some((account) => account.length > 0)
+        if (hasConcreteAccount || pendingSessionFactoryRef.current) {
+          invalidateWallet('Your Farcaster wallet account changed. Reconnect to open the matching XMTP inbox.')
+          return
+        }
+        scheduleProviderEventWalletRecheck()
       }
       const onChainChanged = (chainId: string) => {
         if (wallet.kind !== 'SCW') return
@@ -586,7 +618,15 @@ export function useXmtpMessaging({
         }
       }
       const onDisconnect = () => {
-        invalidateWallet('Your Farcaster wallet disconnected. Reconnect to open the matching XMTP inbox.')
+        // The Farcaster RPC bridge can emit a transient disconnect while a
+        // host-owned overlay changes. Do not destroy an already-open XMTP
+        // session from that visible first-use churn; use a delayed wallet-only
+        // recheck without resuming inbox or stream work.
+        if (pendingSessionFactoryRef.current) {
+          invalidateWallet('Your Farcaster wallet disconnected. Reconnect to open the matching XMTP inbox.')
+          return
+        }
+        scheduleProviderEventWalletRecheck()
       }
       provider.on('accountsChanged', onAccountsChanged)
       provider.on('chainChanged', onChainChanged)
@@ -661,6 +701,7 @@ export function useXmtpMessaging({
         return false
       }
       removeWalletListenerRef.current = () => {
+        cancelProviderEventWalletRecheck()
         provider.removeListener('accountsChanged', onAccountsChanged)
         provider.removeListener('chainChanged', onChainChanged)
         provider.removeListener('disconnect', onDisconnect)
@@ -1682,14 +1723,11 @@ export function useXmtpMessaging({
         }
       }
     }
-    const markBackgrounded = () => {
+    const markConfirmedBackground = () => {
+      confirmedBackgroundRef.current = true
       backgroundEpochRef.current += 1
       foregroundEventPendingRef.current = false
       foregroundRefreshNeededRef.current = true
-    }
-    const markConfirmedBackground = () => {
-      confirmedBackgroundRef.current = true
-      markBackgrounded()
     }
     const onForeground = () => {
       if (
@@ -1734,7 +1772,6 @@ export function useXmtpMessaging({
     foregroundRefreshCallbackRef.current = onForeground
     visibleRefreshCallbackRef.current = () => void refreshVisibleState()
     document.addEventListener('visibilitychange', onVisibilityChange)
-    window.addEventListener('blur', markBackgrounded)
     window.addEventListener('focus', onForeground)
     window.addEventListener('online', onOnline)
     window.addEventListener('offline', onOffline)
@@ -1742,7 +1779,6 @@ export function useXmtpMessaging({
     window.addEventListener('pageshow', onPageShow)
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
-      window.removeEventListener('blur', markBackgrounded)
       window.removeEventListener('focus', onForeground)
       window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)

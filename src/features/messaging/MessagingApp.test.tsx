@@ -376,7 +376,7 @@ describe('MessagingApp storage and installation states', () => {
 
     const rendered = render(
       <MessagingApp
-        canUseBack={false}
+        canUseBack
         canUseWallet
         reloadDocument={reloadDocument}
         user={user}
@@ -394,6 +394,11 @@ describe('MessagingApp storage and installation states', () => {
     expect(rendered.container.querySelector('.messaging-app')).toBe(originalAppNode)
     expect(lifecycle).toEqual({ cleanups: 0, mounts: 1 })
     expect(reloadDocument).not.toHaveBeenCalled()
+    expect(mocks.miniAppBack).toHaveBeenLastCalledWith(
+      false,
+      true,
+      expect.any(Function),
+    )
 
     rendered.unmount()
     expect(lifecycle.cleanups).toBe(1)
@@ -680,6 +685,11 @@ describe('MessagingApp storage and installation states', () => {
     ))
     expect(screen.queryByRole('button', { name: /cancel|keep this inbox/i }))
       .not.toBeInTheDocument()
+    expect(mocks.miniAppBack).toHaveBeenLastCalledWith(
+      true,
+      true,
+      expect.any(Function),
+    )
     const hostBack = mocks.miniAppBack.mock.calls.at(-1)?.[2] as (() => void)
     act(() => hostBack())
     expect(screen.getByRole('dialog')).toBeVisible()

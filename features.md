@@ -2,7 +2,7 @@
 
 > Working title: **Converge Mini**
 > Status: implementation in progress
-> Last reviewed: 2026-07-18
+> Last reviewed: 2026-07-20
 > Canonical scope: this file
 > Canonical production origin: `https://miniapp.converge.cv`
 
@@ -342,7 +342,7 @@ Success condition: the optional label flow never moves identity state; the expli
 
 #### Host integration
 
-- Use capability-gated host back navigation for nested views and retain a conventional in-app control as a visible fallback when host calls fail or are unavailable.
+- Use capability-gated host back interception for irreversible ENS binding. Keep routine nested-view navigation on conventional in-app controls until canonical hosts prove that native back-state toggles do not disturb the webview.
 - Respect safe-area insets from context/CSS for header and composer.
 - Listen for relevant host events and remove listeners on teardown.
 - Pause or close live work when the page becomes hidden if required for stability; resync when foregrounded.
@@ -1245,7 +1245,7 @@ Implemented locally on 2026-07-14:
 
 Extended locally on 2026-07-14:
 
-- capability-gated Farcaster host back is shown only for the New DM and conversation views, owns no duplicate browser-history adapter, and is hidden with its callback cleared on teardown;
+- capability-gated Farcaster host back was originally shown for New DM and conversation views without a duplicate browser-history adapter; canonical-host first-use testing superseded that behavior below;
 - the visible in-app arrow remains intentionally available as a reliable accessibility and host-failure fallback;
 - visible `visibilitychange`, `focus`, `pageshow`, and `online` recovery paths coalesce, while hidden documents defer network work until foreground; and
 - foreground recovery re-reads wallet account and chain without prompting, tears down a mismatched XMTP identity, and prevents a pending DM creation from reopening after the user navigates back.
@@ -1354,10 +1354,16 @@ Extended locally on 2026-07-14:
 Lifecycle hardening added on 2026-07-20:
 
 - the first tap that focuses an embedded webview is no longer treated as a background/resume cycle, so opening a conversation does not race a redundant inbox refresh;
-- genuine blur/visibility/page-show resumes still revalidate the Farcaster wallet, but bounded retries absorb a temporarily unavailable host provider while a confirmed account or smart-wallet-chain change still closes the old inbox;
+- only confirmed hidden/visible, page-hide/persisted-page-show, and online recovery transitions perform full wallet-and-inbox recovery; visible blur/focus from host chrome is not an app suspension, while bounded retries absorb a temporarily unavailable provider and a confirmed account or smart-wallet-chain change still closes the old inbox;
 - inbox, conversation, alert-snapshot, history, Convos-access, and stream gap-recovery syncs are serialized per XMTP client while cached conversation content remains readable immediately; stream retries disable the SDK's implicit sync and request one queued gap recovery instead;
 - session close rejects active and queued sync callers immediately, while a two-minute stuck-sync watchdog terminates the Worker, releases the app session through one terminal callback, and requires a safe reconnect instead of leaving the queue permanently blocked; and
 - a seeded inbox conversation stays selected with retry guidance if its first network sync fails instead of bouncing back to the inbox and resembling a document reload. Automated coverage proves first-focus and overlapping-resume conversation entry keep the same React mount, wallet connection, and XMTP session.
+
+First-interaction follow-up added on 2026-07-20:
+
+- an exact deferred conversation-entry regression proved that a visible host blur/focus was starting a second inbox load after XMTP was already ready;
+- visible empty-account and provider-disconnect churn from host-owned overlays no longer destroys an open XMTP session immediately; a bounded wallet-only recheck still closes a persistently lost wallet, while a concrete different account closes immediately and the next confirmed resume rechecks the exact Farcaster wallet; and
+- the Farcaster native back-state toggle is disabled for routine nested views pending canonical-host proof because its first `updateBackState` roundtrip is shared by Conversation, New DM, and Join Convos and can disturb the embedded webview. The always-visible local back controls remain their supported navigation path; capability-gated host back remains mounted for the ENS-binding dialog so it cannot dismiss the irreversible operation.
 
 Canonical-host persistence, storage eviction, cancellable SDK retry timers, embedded keyboard resize, and two-client dev-network receive evidence remain. Browser SDK 7 exposes neither insertion timestamps on decoded messages nor an archive-import completion event, so history loading can remain honest and gap-safe through a growing contiguous window but cannot claim an immutable insertion-time snapshot.
 
