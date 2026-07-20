@@ -1362,8 +1362,9 @@ Lifecycle hardening added on 2026-07-20:
 First-interaction follow-up added on 2026-07-20:
 
 - an exact deferred conversation-entry regression proved that a visible host blur/focus was starting a second inbox load after XMTP was already ready;
-- visible empty-account and provider-disconnect churn from host-owned overlays no longer destroys an open XMTP session immediately; a bounded wallet-only recheck still closes a persistently lost wallet, while a concrete different account closes immediately and the next confirmed resume rechecks the exact Farcaster wallet; and
+- visible empty-account and provider-disconnect churn from host-owned overlays no longer destroys an open XMTP session immediately; a bounded wallet-only recheck still closes a persistently lost wallet, while a concrete different account closes immediately and the next confirmed resume rechecks the exact Farcaster wallet;
 - the Farcaster native back-state toggle is disabled for routine nested views pending canonical-host proof because its first `updateBackState` roundtrip is shared by Conversation, New DM, and Join Convos and can disturb the embedded webview. The always-visible local back controls remain their supported navigation path; capability-gated host back remains mounted for the ENS-binding dialog so it cannot dismiss the irreversible operation.
+- synthetic mobile layout E2E probes now wait for the completed standalone bootstrap before retaining shell nodes across an animation frame, preventing slower CI runners from measuring React's detached initial shell.
 
 Canonical-host persistence, storage eviction, cancellable SDK retry timers, embedded keyboard resize, and two-client dev-network receive evidence remain. Browser SDK 7 exposes neither insertion timestamps on decoded messages nor an archive-import completion event, so history loading can remain honest and gap-safe through a growing contiguous window but cannot claim an immutable insertion-time snapshot.
 

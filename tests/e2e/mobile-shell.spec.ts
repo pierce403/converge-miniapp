@@ -140,6 +140,9 @@ test('the public app shell reopens offline after one online visit', async ({ con
 
 test('ready messaging does not duplicate the mobile host top inset', async ({ page }) => {
   await page.goto('/')
+  await expect(page.getByRole('heading', {
+    name: 'Private messages, right where the conversation starts.',
+  })).toBeVisible()
 
   const layout = await page.evaluate(async () => {
     const shell = document.querySelector<HTMLElement>('.app-shell')
@@ -181,6 +184,12 @@ test('ready messaging does not duplicate the mobile host top inset', async ({ pa
 
 test('mobile setup states start below the header without a second host inset', async ({ page }) => {
   await page.goto('/')
+  // Mini App detection updates the shell after the document load event. Wait
+  // for the stable standalone state before holding DOM references across a
+  // frame; otherwise a slower runner can measure React's detached first shell.
+  await expect(page.getByRole('heading', {
+    name: 'Private messages, right where the conversation starts.',
+  })).toBeVisible()
 
   const layout = await page.evaluate(async () => {
     const shell = document.querySelector<HTMLElement>('.app-shell')
