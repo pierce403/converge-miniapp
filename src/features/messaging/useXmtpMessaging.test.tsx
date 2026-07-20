@@ -331,6 +331,7 @@ describe('useXmtpMessaging', () => {
       { farcaster: true },
       address,
       target.inboxId,
+      expect.any(Function),
     )
     expect(result.current.address).toBe(address)
     expect(mocks.connectWalletConnectWallet).not.toHaveBeenCalled()
@@ -362,6 +363,7 @@ describe('useXmtpMessaging', () => {
       {},
       address,
       target.inboxId,
+      expect.any(Function),
     )
   })
 
@@ -838,6 +840,30 @@ describe('useXmtpMessaging', () => {
     expect(result.current.storageDurability).toBe('best-effort')
   })
 
+  it('tears down a session that reports a terminal synchronization timeout', async () => {
+    const session = createSession()
+    let reportTerminal: ((error: Error) => void) | undefined
+    mocks.createSession.mockImplementation((
+      _signer: unknown,
+      _address: unknown,
+      _inboxId: unknown,
+      onTerminal?: (error: Error) => void,
+    ) => {
+      reportTerminal = onTerminal
+      return Promise.resolve(session)
+    })
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    act(() => reportTerminal?.(new Error('XMTP synchronization timed out.')))
+
+    await waitFor(() => expect(session.close).toHaveBeenCalledOnce())
+    expect(result.current.connection.phase).toBe('error')
+    expect(result.current.connection.error).toMatch(/stopped responding/i)
+    expect(result.current.address).toBeNull()
+    expect(result.current.conversations).toEqual([])
+  })
+
   it('releases the lease and stops on the active-installation limit', async () => {
     const lease = { release: vi.fn().mockResolvedValue(undefined) }
     mocks.acquireXmtpLease.mockResolvedValue(lease)
@@ -973,6 +999,111 @@ describe('useXmtpMessaging', () => {
       'saved-offline',
       'refreshed-online',
     ])
+  })
+
+  it('does not treat the first webview focus as a resume while opening a conversation', async () => {
+    const initialInbox = deferred<ConversationSummary[]>()
+    const cachedInboxRead = deferred<void>()
+    const savedMessage = message('message-1', 'Saved message', '2026-07-14T12:00:00Z')
+    const session = createSession({
+      loadInbox: vi.fn((onCached?: (items: ConversationSummary[]) => void) => {
+        onCached?.([cachedConversation])
+        cachedInboxRead.resolve()
+        return initialInbox.promise
+      }),
+      loadConversation: vi.fn().mockResolvedValue({
+        conversation: activeConversation,
+        hasOlder: false,
+        messages: [savedMessage],
+        scannedMessageCount: 1,
+      }),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    let connection!: Promise<void>
+    await act(async () => {
+      connection = result.current.connect()
+      await cachedInboxRead.promise
+    })
+    expect(result.current.connection.phase).toBe('ready')
+
+    act(() => {
+      window.dispatchEvent(new Event('blur'))
+      window.dispatchEvent(new Event('focus'))
+    })
+    await act(async () => result.current.openConversation(activeConversation.id))
+
+    expect(result.current.view).toBe('conversation')
+    expect(result.current.messages).toEqual([savedMessage])
+    expect(session.loadInbox).toHaveBeenCalledOnce()
+    expect(session.loadConversation).toHaveBeenCalledOnce()
+    expect(provider.request).not.toHaveBeenCalledWith({ method: 'eth_accounts' })
+    expect(mocks.connectHostWallet).toHaveBeenCalledOnce()
+    expect(mocks.createSession).toHaveBeenCalledOnce()
+    expect(session.close).not.toHaveBeenCalled()
+
+    await act(async () => {
+      initialInbox.resolve([cachedConversation])
+      await connection
+    })
+    expect(result.current.view).toBe('conversation')
+    expect(result.current.messages).toEqual([savedMessage])
+  })
+
+  it('keeps the first conversation open while a resume inbox refresh settles', async () => {
+    const resumeInbox = deferred<ConversationSummary[]>()
+    const savedMessage = message('message-1', 'Saved message', '2026-07-14T12:00:00Z')
+    const session = createSession({
+      loadConversation: vi.fn().mockResolvedValue({
+        conversation: activeConversation,
+        hasOlder: false,
+        messages: [savedMessage],
+        scannedMessageCount: 1,
+      }),
+    })
+    session.loadInbox
+      .mockResolvedValueOnce([cachedConversation])
+      .mockReturnValueOnce(resumeInbox.promise)
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+    act(() => {
+      window.dispatchEvent(new Event('blur'))
+      window.dispatchEvent(new Event('focus'))
+    })
+    await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
+
+    await act(async () => result.current.openConversation(activeConversation.id))
+    expect(result.current.view).toBe('conversation')
+    expect(result.current.messages).toEqual([savedMessage])
+
+    await act(async () => resumeInbox.resolve([cachedConversation]))
+
+    expect(result.current.view).toBe('conversation')
+    expect(result.current.activeConversation).toEqual(activeConversation)
+    expect(result.current.messages).toEqual([savedMessage])
+    expect(session.loadConversation).toHaveBeenCalledOnce()
+    expect(session.close).not.toHaveBeenCalled()
+  })
+
+  it('keeps the selected conversation open when its first sync fails', async () => {
+    const session = createSession({
+      loadConversation: vi.fn().mockRejectedValue(new Error('temporary sync conflict')),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+    await act(async () => result.current.openConversation(activeConversation.id))
+
+    expect(result.current.view).toBe('conversation')
+    expect(result.current.activeConversation).toEqual(activeConversation)
+    expect(result.current.loadingConversation).toBe(false)
+    expect(result.current.streamHealth).toBe('failed')
+    expect(result.current.notice).toMatch(/saved inbox entry remains open/i)
+    expect(session.close).not.toHaveBeenCalled()
   })
 
   it('uses only the local inbox when an already-created session begins offline', async () => {
@@ -1760,17 +1891,366 @@ describe('useXmtpMessaging', () => {
     })
   })
 
-  it.each(['focus', 'pageshow'])('refreshes visible state on window %s', async (eventName) => {
+  it('does not refresh on window focus until the webview was backgrounded', async () => {
     const session = createSession()
     mocks.createSession.mockResolvedValue(session)
     const { result } = renderHook(() => useXmtpMessaging())
     await act(async () => result.current.connect())
 
-    act(() => window.dispatchEvent(new Event(eventName)))
+    act(() => window.dispatchEvent(new Event('focus')))
+    await act(async () => Promise.resolve())
+
+    expect(session.loadInbox).toHaveBeenCalledOnce()
+    expect(provider.request).not.toHaveBeenCalledWith({ method: 'eth_accounts' })
+  })
+
+  it('preserves a real background event while the XMTP client is still opening', async () => {
+    const creating = deferred<ReturnType<typeof createSession>>()
+    const session = createSession()
+    mocks.createSession.mockReturnValue(creating.promise)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    let connection!: Promise<void>
+    act(() => {
+      connection = result.current.connect()
+    })
+    await waitFor(() => expect(result.current.connection.phase).toBe('xmtp'))
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'hidden',
+    })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {
+      creating.resolve(session)
+      await connection
+    })
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+
+    await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
+    expect(provider.request).toHaveBeenCalledWith({ method: 'eth_accounts' })
+    expect(result.current.connection.phase).toBe('ready')
+    expect(session.close).not.toHaveBeenCalled()
+  })
+
+  it('revalidates a hidden and visible cycle that completes during setup', async () => {
+    const creating = deferred<ReturnType<typeof createSession>>()
+    const session = createSession()
+    mocks.createSession.mockReturnValue(creating.promise)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    let connection!: Promise<void>
+    act(() => {
+      connection = result.current.connect()
+    })
+    await waitFor(() => expect(result.current.connection.phase).toBe('xmtp'))
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'hidden',
+    })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+
+    await act(async () => {
+      creating.resolve(session)
+      await connection
+    })
+
+    await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
+    expect(provider.request).toHaveBeenCalledWith({ method: 'eth_accounts' })
+    expect(result.current.connection.phase).toBe('ready')
+    expect(session.close).not.toHaveBeenCalled()
+  })
+
+  it('drains an online recovery that arrives while offline setup is pending', async () => {
+    const savedInbox = deferred<ConversationSummary[]>()
+    const session = createSession({
+      readInbox: vi.fn().mockReturnValueOnce(savedInbox.promise),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: false,
+    })
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    let connection!: Promise<void>
+    act(() => {
+      connection = result.current.connect()
+    })
+    await waitFor(() => expect(session.readInbox).toHaveBeenCalledOnce())
+
+    Object.defineProperty(navigator, 'onLine', {
+      configurable: true,
+      value: true,
+    })
+    act(() => window.dispatchEvent(new Event('online')))
+    await act(async () => {
+      savedInbox.resolve([cachedConversation])
+      await connection
+    })
+
+    await waitFor(() => expect(session.loadInbox).toHaveBeenCalledOnce())
+    await waitFor(() => expect(session.startMessageStream).toHaveBeenCalledOnce())
+    expect(result.current.connection.phase).toBe('ready')
+    expect(provider.request).not.toHaveBeenCalledWith({ method: 'eth_accounts' })
+  })
+
+  it.each([
+    ['blur and focus', () => {
+      window.dispatchEvent(new Event('blur'))
+      window.dispatchEvent(new Event('focus'))
+    }],
+    ['persisted pageshow', () => {
+      const event = new Event('pageshow')
+      Object.defineProperty(event, 'persisted', { value: true })
+      window.dispatchEvent(event)
+    }],
+  ] as const)('refreshes visible state after window %s', async (_name, resume) => {
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    act(() => resume())
 
     await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
     expect(provider.request).toHaveBeenCalledWith({ method: 'eth_accounts' })
     expect(provider.request).not.toHaveBeenCalledWith({ method: 'eth_chainId' })
+  })
+
+  it('ignores a non-persisted pageshow from initial navigation', async () => {
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    const event = new Event('pageshow')
+    Object.defineProperty(event, 'persisted', { value: false })
+    act(() => window.dispatchEvent(event))
+    await act(async () => Promise.resolve())
+
+    expect(session.loadInbox).toHaveBeenCalledOnce()
+    expect(provider.request).not.toHaveBeenCalledWith({ method: 'eth_accounts' })
+  })
+
+  it('retries a transient Farcaster provider failure after a real resume', async () => {
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    provider.request
+      .mockRejectedValueOnce(new Error('host overlay still closing'))
+      .mockResolvedValueOnce([address])
+
+    act(() => {
+      window.dispatchEvent(new Event('blur'))
+      window.dispatchEvent(new Event('focus'))
+    })
+
+    await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
+    expect(provider.request).toHaveBeenCalledTimes(2)
+    expect(result.current.connection.phase).toBe('ready')
+    expect(session.close).not.toHaveBeenCalled()
+    expect(mocks.createSession).toHaveBeenCalledOnce()
+  })
+
+  it('times out a stalled Farcaster provider instead of locking resume recovery', async () => {
+    vi.useFakeTimers()
+    try {
+      const session = createSession()
+      mocks.createSession.mockResolvedValue(session)
+      const { result } = renderHook(() => useXmtpMessaging())
+      await act(async () => result.current.connect())
+      provider.request.mockReturnValue(new Promise<never>(() => undefined))
+
+      act(() => {
+        window.dispatchEvent(new Event('blur'))
+        window.dispatchEvent(new Event('focus'))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000)
+      })
+
+      expect(provider.request).toHaveBeenCalledTimes(3)
+      expect(result.current.connection.phase).toBe('error')
+      expect(result.current.connection.error).toMatch(/could not reverify/i)
+      expect(session.close).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drains a second resume that arrives during wallet validation', async () => {
+    const firstValidation = deferred<unknown>()
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    provider.request
+      .mockReturnValueOnce(firstValidation.promise)
+      .mockResolvedValue([address])
+
+    act(() => {
+      window.dispatchEvent(new Event('blur'))
+      window.dispatchEvent(new Event('focus'))
+    })
+    await waitFor(() => expect(provider.request).toHaveBeenCalledOnce())
+
+    act(() => {
+      window.dispatchEvent(new Event('blur'))
+      window.dispatchEvent(new Event('focus'))
+    })
+    await act(async () => firstValidation.resolve([address]))
+
+    await waitFor(() => expect(provider.request).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
+    expect(result.current.connection.phase).toBe('ready')
+    expect(session.close).not.toHaveBeenCalled()
+  })
+
+  it('waits for a new foreground event when the app blurs during validation', async () => {
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    vi.useFakeTimers()
+    try {
+      provider.request
+        .mockReturnValueOnce(new Promise<never>(() => undefined))
+        .mockResolvedValue([address])
+      act(() => {
+        window.dispatchEvent(new Event('blur'))
+        window.dispatchEvent(new Event('focus'))
+      })
+      expect(provider.request).toHaveBeenCalledOnce()
+
+      act(() => window.dispatchEvent(new Event('blur')))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000)
+      })
+
+      expect(provider.request).toHaveBeenCalledOnce()
+      expect(session.loadInbox).toHaveBeenCalledOnce()
+      expect(result.current.connection.phase).toBe('ready')
+      expect(session.close).not.toHaveBeenCalled()
+
+      await act(async () => {
+        window.dispatchEvent(new Event('focus'))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(provider.request).toHaveBeenCalledTimes(2)
+      expect(session.loadInbox).toHaveBeenCalledTimes(2)
+      expect(result.current.connection.phase).toBe('ready')
+      expect(session.close).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels a queued resume drain when another blur arrives first', async () => {
+    const firstValidation = deferred<unknown>()
+    const session = createSession()
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    vi.useFakeTimers()
+    try {
+      provider.request
+        .mockReturnValueOnce(firstValidation.promise)
+        .mockResolvedValue([address])
+      act(() => {
+        window.dispatchEvent(new Event('blur'))
+        window.dispatchEvent(new Event('focus'))
+      })
+      expect(provider.request).toHaveBeenCalledOnce()
+
+      act(() => {
+        window.dispatchEvent(new Event('blur'))
+        window.dispatchEvent(new Event('focus'))
+      })
+      await act(async () => firstValidation.resolve([address]))
+
+      act(() => window.dispatchEvent(new Event('blur')))
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync()
+      })
+      expect(provider.request).toHaveBeenCalledOnce()
+      expect(session.loadInbox).toHaveBeenCalledOnce()
+      expect(session.close).not.toHaveBeenCalled()
+
+      await act(async () => {
+        window.dispatchEvent(new Event('focus'))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(provider.request).toHaveBeenCalledTimes(2)
+      expect(session.loadInbox).toHaveBeenCalledTimes(2)
+      expect(result.current.connection.phase).toBe('ready')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ignores an old wallet validation after a new session reconnects', async () => {
+    const oldValidation = deferred<unknown>()
+    const firstSession = createSession()
+    const secondSession = createSession()
+    const firstWallet = {
+      address,
+      chainId: 10n,
+      kind: 'EOA' as const,
+      provider,
+      signer: {},
+    }
+    const secondWallet = { ...firstWallet, signer: {} }
+    mocks.connectHostWallet
+      .mockResolvedValueOnce(firstWallet)
+      .mockResolvedValueOnce(secondWallet)
+    mocks.createSession
+      .mockResolvedValueOnce(firstSession)
+      .mockResolvedValueOnce(secondSession)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    await act(async () => result.current.connect())
+    provider.request
+      .mockReturnValueOnce(oldValidation.promise)
+      .mockResolvedValue([address])
+    act(() => {
+      window.dispatchEvent(new Event('blur'))
+      window.dispatchEvent(new Event('focus'))
+    })
+    await waitFor(() => expect(provider.request).toHaveBeenCalledOnce())
+
+    await act(async () => result.current.disconnect())
+    await act(async () => result.current.connect())
+    act(() => {
+      window.dispatchEvent(new Event('blur'))
+      window.dispatchEvent(new Event('focus'))
+    })
+    await waitFor(() => expect(secondSession.loadInbox).toHaveBeenCalledTimes(2))
+
+    await act(async () => oldValidation.resolve([address]))
+
+    expect(provider.request).toHaveBeenCalledTimes(2)
+    expect(secondSession.loadInbox).toHaveBeenCalledTimes(2)
+    expect(result.current.connection.phase).toBe('ready')
+    expect(secondSession.close).not.toHaveBeenCalled()
   })
 
   it('defers online recovery while the document is hidden', async () => {
@@ -1815,11 +2295,15 @@ describe('useXmtpMessaging', () => {
     expect(result.current.connection.phase).toBe('ready')
     provider.request.mockRejectedValue(new Error('host unavailable'))
 
-    act(() => window.dispatchEvent(new Event('focus')))
+    act(() => {
+      window.dispatchEvent(new Event('blur'))
+      window.dispatchEvent(new Event('focus'))
+    })
 
     await waitFor(() => expect(result.current.connection.phase).toBe('error'))
     expect(result.current.connection.error).toMatch(/could not reverify/i)
     await waitFor(() => expect(session.close).toHaveBeenCalledOnce())
+    expect(provider.request).toHaveBeenCalledTimes(3)
     expect(mocks.connectWalletConnectWallet).not.toHaveBeenCalled()
   })
 
@@ -1834,11 +2318,15 @@ describe('useXmtpMessaging', () => {
         : '0xa')
     ))
 
-    act(() => window.dispatchEvent(new Event('focus')))
+    act(() => {
+      window.dispatchEvent(new Event('blur'))
+      window.dispatchEvent(new Event('focus'))
+    })
 
     await waitFor(() => expect(result.current.connection.phase).toBe('error'))
     expect(result.current.connection.error).toMatch(/account changed while the app was away/)
     await waitFor(() => expect(session.close).toHaveBeenCalledOnce())
+    expect(provider.request).toHaveBeenCalledOnce()
   })
 })
 

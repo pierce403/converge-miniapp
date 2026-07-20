@@ -1351,7 +1351,15 @@ Extended locally on 2026-07-14:
 - the active conversation and inbox resync on foreground/online, while one retained SDK proxy owns retry/restart behavior and explicit refresh plus callback-generation guards prevent duplicate or stale stream work; and
 - initial history is excluded from live-region announcements, incoming messages do not steal scroll position, and a “New messages” affordance returns intentionally to the latest message.
 
-Canonical-host persistence, storage eviction, cancellable SDK retry timers/terminal-state signaling, embedded keyboard resize, and two-client dev-network receive evidence remain. Browser SDK 7 exposes neither insertion timestamps on decoded messages nor an archive-import completion event, so history loading can remain honest and gap-safe through a growing contiguous window but cannot claim an immutable insertion-time snapshot.
+Lifecycle hardening added on 2026-07-20:
+
+- the first tap that focuses an embedded webview is no longer treated as a background/resume cycle, so opening a conversation does not race a redundant inbox refresh;
+- genuine blur/visibility/page-show resumes still revalidate the Farcaster wallet, but bounded retries absorb a temporarily unavailable host provider while a confirmed account or smart-wallet-chain change still closes the old inbox;
+- inbox, conversation, alert-snapshot, history, Convos-access, and stream gap-recovery syncs are serialized per XMTP client while cached conversation content remains readable immediately; stream retries disable the SDK's implicit sync and request one queued gap recovery instead;
+- session close rejects active and queued sync callers immediately, while a two-minute stuck-sync watchdog terminates the Worker, releases the app session through one terminal callback, and requires a safe reconnect instead of leaving the queue permanently blocked; and
+- a seeded inbox conversation stays selected with retry guidance if its first network sync fails instead of bouncing back to the inbox and resembling a document reload. Automated coverage proves first-focus and overlapping-resume conversation entry keep the same React mount, wallet connection, and XMTP session.
+
+Canonical-host persistence, storage eviction, cancellable SDK retry timers, embedded keyboard resize, and two-client dev-network receive evidence remain. Browser SDK 7 exposes neither insertion timestamps on decoded messages nor an archive-import completion event, so history loading can remain honest and gap-safe through a growing contiguous window but cannot claim an immutable insertion-time snapshot.
 
 Deliverables:
 

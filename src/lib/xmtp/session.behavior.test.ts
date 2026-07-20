@@ -157,6 +157,16 @@ function concatBytes(...values: Uint8Array<ArrayBufferLike>[]) {
   return output
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, reject, resolve }
+}
+
 function encodeVarint(value: bigint | number) {
   let remaining = BigInt(value)
   const bytes: number[] = []
@@ -555,8 +565,273 @@ describe('XmtpMessagingSession behavior', () => {
     ])
   })
 
+  it('serializes inbox and conversation syncs while exposing cached messages', async () => {
+    const inboxSyncStarted = deferred<void>()
+    const finishInboxSync = deferred<void>()
+    const cachedConversationRead = deferred<void>()
+    const conversation = dm({
+      messages: vi.fn().mockResolvedValue([
+        message({
+          id: 'cached-message',
+          sentAt: '2026-07-14T12:00:00Z',
+          status: DeliveryStatus.Published,
+        }),
+      ]),
+      sync: vi.fn().mockResolvedValue(undefined),
+    })
+    const fakeClient = client(conversation)
+    fakeClient.conversations.sync.mockImplementationOnce(() => {
+      inboxSyncStarted.resolve()
+      return finishInboxSync.promise
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    const loadingInbox = session.loadInbox()
+    await inboxSyncStarted.promise
+    const loadingConversation = session.loadConversation(
+      conversation.id,
+      () => cachedConversationRead.resolve(),
+    )
+    await cachedConversationRead.promise
+
+    expect(conversation.sync).not.toHaveBeenCalled()
+    finishInboxSync.resolve()
+    await Promise.all([loadingInbox, loadingConversation])
+
+    expect(conversation.sync).toHaveBeenCalledOnce()
+    expect(fakeClient.conversations.sync).toHaveBeenCalledOnce()
+  })
+
+  it('does not let alert snapshot sync overlap a conversation sync', async () => {
+    const alertSyncStarted = deferred<void>()
+    const finishAlertSync = deferred<void>()
+    const cachedConversationRead = deferred<void>()
+    const installationId = 'ef'.repeat(32)
+    const conversation = dm({
+      sync: vi.fn().mockResolvedValue(undefined),
+    })
+    const fakeClient = client(conversation)
+    Object.assign(fakeClient, {
+      inboxId: 'ab'.repeat(32),
+      installationId,
+      installationIdBytes: new Uint8Array(32).fill(0xef),
+    })
+    Object.assign(fakeClient.conversations, {
+      topic: `/xmtp/mls/1/w-${installationId}/proto`,
+    })
+    fakeClient.conversations.sync.mockImplementationOnce(() => {
+      alertSyncStarted.resolve()
+      return finishAlertSync.promise
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    const snapshot = session.pushSnapshot()
+    await alertSyncStarted.promise
+    const openingConversation = session.loadConversation(
+      conversation.id,
+      () => cachedConversationRead.resolve(),
+    )
+    await cachedConversationRead.promise
+
+    expect(conversation.sync).not.toHaveBeenCalled()
+    finishAlertSync.resolve()
+    await Promise.all([snapshot, openingConversation])
+
+    expect(conversation.sync).toHaveBeenCalledOnce()
+  })
+
+  it('queues the Convos access preflight sync behind inbox synchronization', async () => {
+    const inboxSyncStarted = deferred<void>()
+    const finishInboxSync = deferred<void>()
+    const conversation = dm({
+      id: 'creator-transport-dm',
+      send: vi.fn().mockResolvedValue('join-request-message'),
+    })
+    const fakeClient = client(conversation)
+    fakeClient.conversations.sync
+      .mockImplementationOnce(() => {
+        inboxSyncStarted.resolve()
+        return finishInboxSync.promise
+      })
+      .mockResolvedValueOnce(undefined)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    const loadingInbox = session.loadInbox()
+    await inboxSyncStarted.promise
+    const requestingAccess = session.requestConvosAccess(convosInvite())
+    await Promise.resolve()
+
+    expect(fakeClient.conversations.sync).toHaveBeenCalledOnce()
+    expect(fakeClient.conversations.getDmByInboxId).not.toHaveBeenCalled()
+
+    finishInboxSync.resolve()
+    await Promise.all([loadingInbox, requestingAccess])
+
+    expect(fakeClient.conversations.sync).toHaveBeenCalledTimes(2)
+    expect(fakeClient.conversations.getDmByInboxId).toHaveBeenCalledWith(
+      'creator-inbox',
+    )
+  })
+
+  it('queues new-installation history requests and never starts them after close', async () => {
+    const inboxSyncStarted = deferred<void>()
+    const finishInboxSync = deferred<void>()
+    const fakeClient = client(dm())
+    fakeClient.conversations.sync.mockImplementationOnce(() => {
+      inboxSyncStarted.resolve()
+      return finishInboxSync.promise
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    const loadingInbox = session.loadInbox()
+    await inboxSyncStarted.promise
+    const requestingHistory = session.requestHistorySync()
+    await Promise.resolve()
+    expect(fakeClient.sendSyncRequest).not.toHaveBeenCalled()
+
+    finishInboxSync.resolve()
+    await Promise.all([loadingInbox, requestingHistory])
+    expect(fakeClient.sendSyncRequest).toHaveBeenCalledOnce()
+
+    await session.close()
+    await expect(session.requestHistorySync()).rejects.toThrow(/session is closed/i)
+    expect(fakeClient.sendSyncRequest).toHaveBeenCalledOnce()
+  })
+
+  it('rejects active and queued syncs promptly when the session closes', async () => {
+    const syncStarted = deferred<void>()
+    const stalledSync = deferred<void>()
+    const cachedConversationRead = deferred<void>()
+    const conversation = dm()
+    const fakeClient = client(conversation)
+    fakeClient.conversations.sync.mockImplementationOnce(() => {
+      syncStarted.resolve()
+      return stalledSync.promise
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    const loadingInbox = session.loadInbox()
+    await syncStarted.promise
+    const loadingConversation = session.loadConversation(
+      conversation.id,
+      () => cachedConversationRead.resolve(),
+    )
+    await cachedConversationRead.promise
+    const inboxRejected = expect(loadingInbox).rejects.toThrow(/session is closed/i)
+    const conversationRejected = expect(loadingConversation).rejects.toThrow(
+      /session is closed/i,
+    )
+
+    await session.close()
+    await Promise.all([inboxRejected, conversationRejected])
+
+    expect(conversation.sync).not.toHaveBeenCalled()
+    expect(fakeClient.close).toHaveBeenCalledOnce()
+  })
+
+  it('poisons a stalled sync instead of leaving later work queued forever', async () => {
+    vi.useFakeTimers()
+    try {
+      const syncStarted = deferred<void>()
+      const cachedConversationRead = deferred<void>()
+      const conversation = dm()
+      const fakeClient = client(conversation)
+      fakeClient.conversations.sync.mockImplementationOnce(() => {
+        syncStarted.resolve()
+        return new Promise<never>(() => undefined)
+      })
+      sdkMocks.create.mockResolvedValue(fakeClient)
+      const onTerminal = vi.fn()
+      const session = await XmtpMessagingSession.create(
+        signer,
+        address,
+        undefined,
+        onTerminal,
+      )
+
+      const loadingInbox = session.loadInbox()
+      await syncStarted.promise
+      const loadingConversation = session.loadConversation(
+        conversation.id,
+        () => cachedConversationRead.resolve(),
+      )
+      await cachedConversationRead.promise
+      const inboxRejected = expect(loadingInbox).rejects.toThrow(/timed out/i)
+      const conversationRejected = expect(loadingConversation).rejects.toThrow(/timed out/i)
+
+      await vi.advanceTimersByTimeAsync(120_000)
+      await Promise.all([inboxRejected, conversationRejected])
+
+      expect(conversation.sync).not.toHaveBeenCalled()
+      expect(fakeClient.close).toHaveBeenCalledOnce()
+      expect(onTerminal).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'XmtpSyncTimeoutError',
+      }))
+      await expect(session.loadInbox()).rejects.toThrow(/timed out/i)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not continue a push snapshot after its active sync settles late', async () => {
+    const syncStarted = deferred<void>()
+    const finishSync = deferred<void>()
+    const fakeClient = client(dm())
+    fakeClient.conversations.sync.mockImplementationOnce(() => {
+      syncStarted.resolve()
+      return finishSync.promise
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    const snapshot = session.pushSnapshot()
+    await syncStarted.promise
+    const snapshotRejected = expect(snapshot).rejects.toThrow(/session is closed/i)
+    await session.close()
+    await snapshotRejected
+
+    finishSync.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(fakeClient.preferences.sync).not.toHaveBeenCalled()
+    expect(fakeClient.conversations.list).not.toHaveBeenCalled()
+  })
+
+  it('does not send a Convos request when its lookup settles after close', async () => {
+    const lookup = deferred<Dm | undefined>()
+    const conversation = dm({
+      id: 'creator-transport-dm',
+      send: vi.fn().mockResolvedValue('join-request-message'),
+    })
+    const fakeClient = client(conversation)
+    fakeClient.conversations.getDmByInboxId.mockReturnValue(lookup.promise)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    const requesting = session.requestConvosAccess(convosInvite())
+    await vi.waitFor(() => {
+      expect(fakeClient.conversations.getDmByInboxId).toHaveBeenCalledOnce()
+    })
+    const requestRejected = expect(requesting).rejects.toThrow(/session is closed/i)
+    await session.close()
+    await requestRejected
+
+    lookup.resolve(conversation)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(conversation.send).not.toHaveBeenCalled()
+  })
+
   it('watches HMAC and consent preference changes only while alerts are enabled', async () => {
     let onValue: ((updates: Array<{ type: string }>) => void) | undefined
+    let onRestart: (() => void) | undefined
     const stream = {
       end: vi.fn().mockResolvedValue(undefined),
       isDone: false,
@@ -564,8 +839,10 @@ describe('XmtpMessagingSession behavior', () => {
     const fakeClient = client(dm())
     Object.assign(fakeClient.preferences, {
       streamPreferences: vi.fn().mockImplementation(async (options: {
+        onRestart: () => void
         onValue: (updates: Array<{ type: string }>) => void
       }) => {
+        onRestart = options.onRestart
         onValue = options.onValue
         return stream
       }),
@@ -580,8 +857,12 @@ describe('XmtpMessagingSession behavior', () => {
     onValue?.([{ type: 'HmacKeyUpdate' }])
     onValue?.([{ type: 'ConsentUpdate' }])
     expect(changed).toHaveBeenCalledTimes(2)
+    onRestart?.()
+    expect(changed).toHaveBeenCalledTimes(3)
 
     await session.stopPushTopicStream()
+    onRestart?.()
+    expect(changed).toHaveBeenCalledTimes(3)
     expect(stream.end).toHaveBeenCalledOnce()
   })
 
@@ -1290,7 +1571,11 @@ describe('XmtpMessagingSession behavior', () => {
     expect(fakeClient.conversations.streamAllMessages).toHaveBeenCalledWith(
       expect.objectContaining({
         consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+        disableSync: true,
       }),
+    )
+    expect(fakeClient.conversations.streamGroups).toHaveBeenCalledWith(
+      expect.objectContaining({ disableSync: true }),
     )
   })
 
@@ -2180,7 +2465,8 @@ describe('XmtpMessagingSession behavior', () => {
     await session.startMessageStream(vi.fn(), onHealth)
     expect(fakeClient.conversations.streamAllMessages).toHaveBeenCalledOnce()
     callbacks?.onRestart?.()
-    expect(onHealth).toHaveBeenLastCalledWith('live')
+    await vi.waitFor(() => expect(onHealth).toHaveBeenLastCalledWith('live'))
+    expect(fakeClient.conversations.sync).toHaveBeenCalledOnce()
   })
 
   it('reports live only after both message and group streams have recovered', async () => {
@@ -2207,14 +2493,14 @@ describe('XmtpMessagingSession behavior', () => {
     expect(onHealth).toHaveBeenLastCalledWith('retrying')
 
     messageCallbacks?.onRestart?.()
-    expect(onHealth).toHaveBeenLastCalledWith('live')
+    await vi.waitFor(() => expect(onHealth).toHaveBeenLastCalledWith('live'))
 
     groupCallbacks?.onFail?.()
     messageCallbacks?.onRestart?.()
-    expect(onHealth).toHaveBeenLastCalledWith('retrying')
+    await vi.waitFor(() => expect(onHealth).toHaveBeenLastCalledWith('retrying'))
 
     groupCallbacks?.onRestart?.()
-    expect(onHealth).toHaveBeenLastCalledWith('live')
+    await vi.waitFor(() => expect(onHealth).toHaveBeenLastCalledWith('live'))
   })
 
   it('replaces an exhausted stream proxy during foreground recovery', async () => {
@@ -2387,12 +2673,14 @@ describe('XmtpMessagingSession behavior', () => {
 
     const session = await XmtpMessagingSession.create(signer, address)
     const starting = session.startMessageStream(vi.fn(), vi.fn())
+    const startRejected = expect(starting).rejects.toThrow(/session is closed/i)
 
     await expect(session.close()).resolves.toBeUndefined()
+    await startRejected
     expect(fakeClient.close).toHaveBeenCalledOnce()
 
     resolveStream(stream)
-    await starting
+    await vi.waitFor(() => expect(stream.end).toHaveBeenCalledOnce())
     expect(stream.end).toHaveBeenCalledOnce()
   })
 

@@ -86,6 +86,7 @@ const VISIBLE_CONSENT_STATES = [ConsentState.Allowed]
 const INBOX_LIMIT = 50n
 const MESSAGE_PAGE_SIZE = 50n
 const CLIENT_INITIALIZATION_TIMEOUT_MS = 30_000
+const SYNC_OPERATION_TIMEOUT_MS = 120_000
 const NON_TIMELINE_CONTENT_TYPES = [ContentType.Reaction, ContentType.ReadReceipt]
 const SUPPORTED_ENVS: readonly XmtpEnv[] = [
   'local',
@@ -213,6 +214,20 @@ export class XmtpGatewayConfigurationError extends Error {
   }
 }
 
+export class XmtpSyncTimeoutError extends Error {
+  constructor() {
+    super('XMTP synchronization timed out. Reconnect the inbox before retrying.')
+    this.name = 'XmtpSyncTimeoutError'
+  }
+}
+
+class XmtpSessionClosedError extends Error {
+  constructor() {
+    super('This XMTP session is closed. Reconnect the inbox before retrying.')
+    this.name = 'XmtpSessionClosedError'
+  }
+}
+
 export class XmtpMessagingSession {
   readonly address: `0x${string}`
   readonly client: AppClient
@@ -223,6 +238,7 @@ export class XmtpMessagingSession {
   #messageStreamHealth: Extract<StreamHealth, 'live' | 'retrying'> = 'retrying'
   #groupStreamHealth: Extract<StreamHealth, 'live' | 'retrying'> = 'retrying'
   #messageStreamStart: Promise<void> | null = null
+  #streamRecovery: Promise<void> | null = null
   #reactionRefreshVersions = new Map<string, number>()
   #dismissedConvosRequestIds = new Set<string>()
   #dismissedConvosRequestCutoffNs: bigint | null = null
@@ -233,21 +249,80 @@ export class XmtpMessagingSession {
   #convosReconcile: Promise<void> | null = null
   #pushStreamGeneration = 0
   #streamGeneration = 0
+  #syncQueue: Promise<void> = Promise.resolve()
+  #terminalError: Error | null = null
+  #terminalSignal: Promise<Error>
+  #resolveTerminal!: (error: Error) => void
+  #onTerminal: ((error: Error) => void) | undefined
 
   private constructor(
     client: AppClient,
     address: `0x${string}`,
     isNewInstallation: boolean,
+    onTerminal?: (error: Error) => void,
   ) {
     this.client = client
     this.address = address
     this.isNewInstallation = isNewInstallation
+    this.#onTerminal = onTerminal
+    this.#terminalSignal = new Promise((resolve) => {
+      this.#resolveTerminal = resolve
+    })
+  }
+
+  #serializeSync<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.#terminalError) return Promise.reject(this.#terminalError)
+    const result = this.#syncQueue.then(async () => {
+      if (this.#terminalError) throw this.#terminalError
+
+      let timeoutId: number | undefined
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timeoutId = window.setTimeout(() => {
+          const error = new XmtpSyncTimeoutError()
+          void this.#terminate(error)
+          reject(error)
+        }, SYNC_OPERATION_TIMEOUT_MS)
+      })
+      const running = Promise.resolve().then(operation)
+      try {
+        return await Promise.race([running, this.#terminalRejection<T>(), timeout])
+      } finally {
+        if (timeoutId !== undefined) window.clearTimeout(timeoutId)
+      }
+    })
+    this.#syncQueue = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
+  #throwIfTerminal(): void {
+    if (this.#terminalError) throw this.#terminalError
+  }
+
+  #terminalRejection<T>(): Promise<T> {
+    return this.#terminalSignal.then((error) => {
+      throw error
+    })
+  }
+
+  async #untilTerminal<T>(operation: Promise<T>): Promise<T> {
+    this.#throwIfTerminal()
+    return await Promise.race([operation, this.#terminalRejection<T>()])
+  }
+
+  async #runUntilTerminal<T>(operation: () => Promise<T>): Promise<T> {
+    this.#throwIfTerminal()
+    const running = Promise.resolve().then(operation)
+    return await Promise.race([running, this.#terminalRejection<T>()])
   }
 
   static async create(
     signer: Signer,
     address: `0x${string}`,
     expectedInboxId?: string,
+    onTerminal?: (error: Error) => void,
   ) {
     const options = clientOptions()
     let client: AppClient
@@ -278,7 +353,12 @@ export class XmtpMessagingSession {
       }
       const isNewInstallation = !(await client.isRegistered())
       await client.register()
-      return new XmtpMessagingSession(client, address, isNewInstallation)
+      return new XmtpMessagingSession(
+        client,
+        address,
+        isNewInstallation,
+        onTerminal,
+      )
     } catch (error) {
       client.close()
       throw error
@@ -295,39 +375,44 @@ export class XmtpMessagingSession {
   }
 
   async pushSnapshot(): Promise<XmtpPushSnapshot> {
-    await this.client.conversations.sync()
-    await this.client.preferences.sync()
-    const conversations = await this.client.conversations.list({
-      consentStates: [ConsentState.Allowed, ConsentState.Unknown],
-      includeDuplicateDms: true,
-    })
-    const snapshots = await Promise.all(
-      conversations.map((conversation) => conversation.hmacKeys()),
-    )
-    const merged = new Map<string, Awaited<ReturnType<AppConversation['hmacKeys']>> extends Map<string, infer Keys> ? Keys : never>()
-    for (const snapshot of snapshots) {
-      for (const [groupId, keys] of snapshot) {
-        const existing = merged.get(groupId) ?? []
-        const seen = new Set(existing.map((entry) => (
-          `${entry.epoch.toString()}:${bytesToBase64Url(entry.key)}`
-        )))
-        for (const key of keys) {
-          const fingerprint = `${key.epoch.toString()}:${bytesToBase64Url(key.key)}`
-          if (seen.has(fingerprint)) continue
-          existing.push(key)
-          seen.add(fingerprint)
+    return this.#serializeSync(async () => {
+      await this.client.conversations.sync()
+      this.#throwIfTerminal()
+      await this.client.preferences.sync()
+      this.#throwIfTerminal()
+      const conversations = await this.client.conversations.list({
+        consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+        includeDuplicateDms: true,
+      })
+      this.#throwIfTerminal()
+      const snapshots = await Promise.all(
+        conversations.map((conversation) => conversation.hmacKeys()),
+      )
+      const merged = new Map<string, Awaited<ReturnType<AppConversation['hmacKeys']>> extends Map<string, infer Keys> ? Keys : never>()
+      for (const snapshot of snapshots) {
+        for (const [groupId, keys] of snapshot) {
+          const existing = merged.get(groupId) ?? []
+          const seen = new Set(existing.map((entry) => (
+            `${entry.epoch.toString()}:${bytesToBase64Url(entry.key)}`
+          )))
+          for (const key of keys) {
+            const fingerprint = `${key.epoch.toString()}:${bytesToBase64Url(key.key)}`
+            if (seen.has(fingerprint)) continue
+            existing.push(key)
+            seen.add(fingerprint)
+          }
+          merged.set(groupId, existing)
         }
-        merged.set(groupId, existing)
       }
-    }
-    return await buildXmtpPushSnapshot({
-      conversations: {
-        hmacKeys: async () => merged,
-        topic: this.client.conversations.topic,
-      },
-      inboxId: this.client.inboxId,
-      installationId: this.client.installationId,
-      installationIdBytes: this.client.installationIdBytes,
+      return await buildXmtpPushSnapshot({
+        conversations: {
+          hmacKeys: async () => merged,
+          topic: this.client.conversations.topic,
+        },
+        inboxId: this.client.inboxId,
+        installationId: this.client.installationId,
+        installationIdBytes: this.client.installationIdBytes,
+      })
     })
   }
 
@@ -341,10 +426,17 @@ export class XmtpMessagingSession {
   }
 
   async startPushTopicStream(onChange: () => void): Promise<void> {
+    this.#throwIfTerminal()
     if (this.#pushPreferenceStream && !this.#pushPreferenceStream.isDone) return
     const generation = this.#pushStreamGeneration
-    const stream = await this.client.preferences.streamPreferences({
+    const opening = this.client.preferences.streamPreferences({
       disableSync: true,
+      onRestart: () => {
+        if (
+          !this.#terminalError &&
+          generation === this.#pushStreamGeneration
+        ) onChange()
+      },
       onValue: (updates) => {
         if (
           generation === this.#pushStreamGeneration &&
@@ -354,6 +446,10 @@ export class XmtpMessagingSession {
         ) onChange()
       },
     })
+    void opening.then((stream) => {
+      if (this.#terminalError && !stream.isDone) return stream.end()
+    }).catch(() => undefined)
+    const stream = await this.#untilTerminal(opening)
     if (generation !== this.#pushStreamGeneration) {
       if (!stream.isDone) await stream.end()
       return
@@ -467,22 +563,28 @@ export class XmtpMessagingSession {
 
   async requestHistorySync(): Promise<boolean> {
     if (!this.isNewInstallation) return false
-    await this.client.sendSyncRequest()
+    await this.#serializeSync(() => this.client.sendSyncRequest())
     return true
   }
 
   async loadInbox(
     onCached?: (conversations: ConversationSummary[]) => void,
   ): Promise<ConversationSummary[]> {
-    if (onCached) onCached(await this.readInbox())
-    await this.client.conversations.sync()
-    await this.#reconcileConvosGroups(true, true)
-    await this.client.conversations.syncAll(VISIBLE_CONSENT_STATES)
+    if (onCached) onCached(await this.#untilTerminal(this.readInbox()))
+    return this.#serializeSync(async () => {
+      await this.client.conversations.sync()
+      this.#throwIfTerminal()
+      await this.#reconcileConvosGroups(true, true)
+      this.#throwIfTerminal()
+      await this.client.conversations.syncAll(VISIBLE_CONSENT_STATES)
+      this.#throwIfTerminal()
 
-    return this.readInbox()
+      return this.readInbox()
+    })
   }
 
   async readInbox(): Promise<ConversationSummary[]> {
+    this.#throwIfTerminal()
     await this.#reconcileConvosGroups(false, false)
     const conversations = await this.client.conversations.listDms({
       consentStates: VISIBLE_CONSENT_STATES,
@@ -570,12 +672,18 @@ export class XmtpMessagingSession {
     onCached?: (loaded: ConversationLoad) => void,
     messageLimit = Number(MESSAGE_PAGE_SIZE),
   ): Promise<ConversationLoad> {
-    const cached = await this.readConversation(conversationId, messageLimit)
+    const cached = await this.#untilTerminal(
+      this.readConversation(conversationId, messageLimit),
+    )
     onCached?.(cached)
 
-    const conversation = await this.getConversation(conversationId)
-    await conversation.sync()
-    return this.readConversation(conversationId, messageLimit)
+    return this.#serializeSync(async () => {
+      const conversation = await this.getConversation(conversationId)
+      this.#throwIfTerminal()
+      await conversation.sync()
+      this.#throwIfTerminal()
+      return this.readConversation(conversationId, messageLimit)
+    })
   }
 
   /** Reads one conversation only from the already-open local XMTP database. */
@@ -583,6 +691,7 @@ export class XmtpMessagingSession {
     conversationId: string,
     messageLimit = Number(MESSAGE_PAGE_SIZE),
   ): Promise<ConversationLoad> {
+    this.#throwIfTerminal()
     const conversation = await this.getConversation(conversationId)
     let activeConversation: ActiveConversation
     if (conversation instanceof Dm) {
@@ -653,25 +762,31 @@ export class XmtpMessagingSession {
   async requestConvosAccess(
     invite: ParsedConvosInvite,
   ): Promise<ConvosAccessRequestResult> {
-    if (invite.creatorInboxId.toLowerCase() === this.inboxId.toLowerCase()) {
-      throw new Error('This Convos invite points back to the inbox already open here.')
-    }
-    await this.client.conversations.sync()
-    const existing = await this.client.conversations.getDmByInboxId(
-      invite.creatorInboxId,
-    ) as AppDm | undefined
-    const conversation =
-      existing ??
-      (await this.client.conversations.createDm(invite.creatorInboxId))
-    const encoded = convosJoinRequestCodec.encode({ inviteSlug: invite.slug })
-    const messageId = await conversation.send(encoded, {
-      shouldPush: true,
+    return this.#runUntilTerminal(async () => {
+      if (invite.creatorInboxId.toLowerCase() === this.inboxId.toLowerCase()) {
+        throw new Error('This Convos invite points back to the inbox already open here.')
+      }
+      await this.#serializeSync(() => this.client.conversations.sync())
+      this.#throwIfTerminal()
+      const existing = await this.client.conversations.getDmByInboxId(
+        invite.creatorInboxId,
+      ) as AppDm | undefined
+      this.#throwIfTerminal()
+      const conversation = existing ?? await this.client.conversations.createDm(
+        invite.creatorInboxId,
+      )
+      this.#throwIfTerminal()
+      const encoded = convosJoinRequestCodec.encode({ inviteSlug: invite.slug })
+      const messageId = await conversation.send(encoded, {
+        shouldPush: true,
+      })
+      this.#throwIfTerminal()
+      this.#recoveredConvosRequests = null
+      // A resolved non-optimistic send is the published boundary. Do not turn
+      // a lagging local read-back into a duplicate request; retain the stable
+      // ID returned by the SDK and let the normal sync path observe it.
+      return { conversationId: conversation.id, messageId }
     })
-    this.#recoveredConvosRequests = null
-    // A resolved non-optimistic send is the published boundary. Do not turn a
-    // lagging local read-back into a duplicate request; retain the stable ID
-    // returned by the SDK and let the normal sync path observe it.
-    return { conversationId: conversation.id, messageId }
   }
 
   async sendText(
@@ -772,6 +887,7 @@ export class XmtpMessagingSession {
     onHealth: (health: StreamHealth) => void,
     onInboxChanged: () => void = () => undefined,
   ): Promise<void> {
+    this.#throwIfTerminal()
     if (
       this.#messageStream && !this.#messageStream.isDone &&
       this.#groupStream && !this.#groupStream.isDone
@@ -837,8 +953,10 @@ export class XmtpMessagingSession {
         onError: onDegraded,
         onFail: onDegraded,
         onRestart: () => {
-          startupDegraded.delete(kind)
-          setStreamHealth(kind, 'live')
+          void this.#recoverStreamGap(generation, onInboxChanged).then(() => {
+            startupDegraded.delete(kind)
+            setStreamHealth(kind, 'live')
+          }).catch(onDegraded)
         },
         onRetry: onDegraded,
         retryAttempts: 6,
@@ -846,8 +964,9 @@ export class XmtpMessagingSession {
         retryOnFail: true,
       }
     }
-    const stream = await this.client.conversations.streamAllMessages({
+    const messageOpening = this.client.conversations.streamAllMessages({
       consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+      disableSync: true,
       ...streamOptions('messages'),
       onValue: (message) => {
         if (generation !== this.#streamGeneration) return
@@ -865,9 +984,14 @@ export class XmtpMessagingSession {
         ).catch(() => undefined)
       },
     })
+    void messageOpening.then((stream) => {
+      if (this.#terminalError && !stream.isDone) return stream.end()
+    }).catch(() => undefined)
+    const stream = await this.#untilTerminal(messageOpening)
     let groupStream: AsyncStreamProxy<AppGroup>
     try {
-      groupStream = await this.client.conversations.streamGroups({
+      const groupOpening = this.client.conversations.streamGroups({
+        disableSync: true,
         ...streamOptions('groups'),
         onValue: () => {
           if (generation !== this.#streamGeneration) return
@@ -875,7 +999,13 @@ export class XmtpMessagingSession {
             if (generation === this.#streamGeneration) onInboxChanged()
           }).catch(() => undefined)
         },
-      }) as AsyncStreamProxy<AppGroup>
+      }) as Promise<AsyncStreamProxy<AppGroup>>
+      void groupOpening.then((openedGroupStream) => {
+        if (this.#terminalError && !openedGroupStream.isDone) {
+          return openedGroupStream.end()
+        }
+      }).catch(() => undefined)
+      groupStream = await this.#untilTerminal(groupOpening)
     } catch (error) {
       if (!stream.isDone) await stream.end().catch(() => undefined)
       throw error
@@ -896,6 +1026,24 @@ export class XmtpMessagingSession {
     return this.#messageStreamHealth === 'live' && this.#groupStreamHealth === 'live'
       ? 'live'
       : 'retrying'
+  }
+
+  async #recoverStreamGap(
+    generation: number,
+    onInboxChanged: () => void,
+  ): Promise<void> {
+    const existing = this.#streamRecovery
+    if (existing) return await existing
+
+    const recovery = this.loadInbox().then(() => {
+      if (generation === this.#streamGeneration) onInboxChanged()
+    })
+    this.#streamRecovery = recovery
+    try {
+      await recovery
+    } finally {
+      if (this.#streamRecovery === recovery) this.#streamRecovery = null
+    }
   }
 
   async #emitAllowedStreamMessage(
@@ -956,6 +1104,20 @@ export class XmtpMessagingSession {
   }
 
   async close(): Promise<void> {
+    await this.#terminate(new XmtpSessionClosedError())
+  }
+
+  async #terminate(error: Error): Promise<void> {
+    if (this.#terminalError) return
+    this.#terminalError = error
+    this.#resolveTerminal(error)
+    if (error instanceof XmtpSyncTimeoutError) {
+      try {
+        this.#onTerminal?.(error)
+      } catch {
+        // App-level terminal reporting must never prevent Worker teardown.
+      }
+    }
     this.#streamGeneration += 1
     this.#pushStreamGeneration += 1
     this.#reactionRefreshVersions.clear()
@@ -969,7 +1131,7 @@ export class XmtpMessagingSession {
     this.#groupStreamHealth = 'retrying'
     const starting = this.#messageStreamStart
     this.#messageStreamStart = null
-    // A start can be waiting indefinitely for the SDK's pre-stream sync. Do
+    // A start can be waiting indefinitely for the SDK's stream proxy. Do
     // not hold the origin-wide OPFS lease hostage to that promise. Closing the
     // client terminates its Worker; the generation guard suppresses any late
     // callbacks, and a late returned proxy is ended by #openMessageStream.

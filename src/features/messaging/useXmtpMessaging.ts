@@ -67,6 +67,9 @@ const initialConnection: ConnectionState = {
   phase: 'idle',
 }
 
+const RESUME_WALLET_RETRY_DELAYS_MS = [0, 100, 300] as const
+const RESUME_WALLET_REQUEST_TIMEOUT_MS = 2_000
+
 type UseXmtpMessagingOptions = {
   autoConnect?: boolean
   inboxTarget?: InboxTarget | null
@@ -99,7 +102,13 @@ export function useXmtpMessaging({
   const refreshingRef = useRef(false)
   const visibleRefreshRef = useRef(false)
   const onlineRefreshPendingRef = useRef(false)
-  const foregroundCheckRef = useRef(false)
+  const foregroundCheckRef = useRef<symbol | null>(null)
+  const foregroundRefreshNeededRef = useRef(false)
+  const foregroundEventPendingRef = useRef(false)
+  const backgroundEpochRef = useRef(0)
+  const confirmedBackgroundRef = useRef(false)
+  const foregroundRefreshCallbackRef = useRef<() => void>(() => undefined)
+  const visibleRefreshCallbackRef = useRef<() => void>(() => undefined)
   const loadingOlderRequestRef = useRef<number | null>(null)
   const sendingRef = useRef(false)
   const retryingMessageIdsRef = useRef(new Set<string>())
@@ -246,7 +255,11 @@ export function useXmtpMessaging({
     refreshingRef.current = false
     visibleRefreshRef.current = false
     onlineRefreshPendingRef.current = false
-    foregroundCheckRef.current = false
+    foregroundCheckRef.current = null
+    foregroundRefreshNeededRef.current = false
+    foregroundEventPendingRef.current = false
+    backgroundEpochRef.current += 1
+    confirmedBackgroundRef.current = false
     loadingOlderRequestRef.current = null
     creatingDmRef.current = false
     sendingRef.current = false
@@ -579,42 +592,73 @@ export function useXmtpMessaging({
       provider.on('chainChanged', onChainChanged)
       provider.on('disconnect', onDisconnect)
       validateWalletRef.current = async () => {
-        let accounts: unknown
-        let chainId: unknown
-        try {
-          [accounts, chainId] = await Promise.all([
-            provider.request({ method: 'eth_accounts' }),
-            wallet.kind === 'SCW'
-              ? provider.request({ method: 'eth_chainId' })
-              : Promise.resolve(wallet.chainId),
-          ])
-        } catch {
-          invalidateWallet('Converge Mini could not reverify the Farcaster wallet after the app resumed. Reconnect it to continue safely.')
-          return false
-        }
+        const validationEpoch = backgroundEpochRef.current
+        for (const [attempt, delayMs] of RESUME_WALLET_RETRY_DELAYS_MS.entries()) {
+          if (delayMs) await waitForWalletResume(delayMs)
+          if (
+            walletRef.current !== wallet ||
+            backgroundEpochRef.current !== validationEpoch
+          ) return false
 
-        if (!walletAccountIsAvailable(
-          accounts,
-          wallet.address,
-          expectedPreferredTarget,
-        )) {
-          invalidateWallet('Your Farcaster wallet account changed while the app was away. Reconnect to open the matching XMTP inbox.')
-          return false
-        }
-
-        if (wallet.kind === 'SCW') {
+          let accounts: unknown
+          let chainId: unknown
           try {
-            if (parseEip1193ChainId(chainId) !== wallet.chainId) {
+            [accounts, chainId] = await withWalletResumeTimeout(Promise.all([
+              provider.request({ method: 'eth_accounts' }),
+              wallet.kind === 'SCW'
+                ? provider.request({ method: 'eth_chainId' })
+                : Promise.resolve(wallet.chainId),
+            ]))
+          } catch {
+            if (
+              walletRef.current !== wallet ||
+              backgroundEpochRef.current !== validationEpoch
+            ) return false
+            if (attempt < RESUME_WALLET_RETRY_DELAYS_MS.length - 1) continue
+            invalidateWallet('Converge Mini could not reverify the Farcaster wallet after the app resumed. Reconnect it to continue safely.')
+            return false
+          }
+          if (
+            walletRef.current !== wallet ||
+            backgroundEpochRef.current !== validationEpoch
+          ) return false
+
+          if (!walletAccountIsAvailable(
+            accounts,
+            wallet.address,
+            expectedPreferredTarget,
+          )) {
+            const accountResultIsTransient = !Array.isArray(accounts) ||
+              accounts.length === 0 || typeof accounts[0] !== 'string'
+            if (
+              accountResultIsTransient &&
+              attempt < RESUME_WALLET_RETRY_DELAYS_MS.length - 1
+            ) continue
+            invalidateWallet(accountResultIsTransient
+              ? 'Converge Mini could not reverify the Farcaster wallet after the app resumed. Reconnect it to continue safely.'
+              : 'Your Farcaster wallet account changed while the app was away. Reconnect to open the matching XMTP inbox.')
+            return false
+          }
+
+          if (wallet.kind === 'SCW') {
+            let parsedChainId: bigint
+            try {
+              parsedChainId = parseEip1193ChainId(chainId)
+            } catch {
+              if (attempt < RESUME_WALLET_RETRY_DELAYS_MS.length - 1) continue
+              invalidateWallet('The Farcaster wallet reported an invalid network after the app resumed. Reconnect to continue safely.')
+              return false
+            }
+            if (parsedChainId !== wallet.chainId) {
               invalidateWallet('Your Farcaster wallet network changed while the app was away. Reconnect so XMTP can verify the active signer.')
               return false
             }
-          } catch {
-            invalidateWallet('The Farcaster wallet reported an invalid network after the app resumed. Reconnect to continue safely.')
-            return false
           }
+
+          return true
         }
 
-        return true
+        return false
       }
       removeWalletListenerRef.current = () => {
         provider.removeListener('accountsChanged', onAccountsChanged)
@@ -629,6 +673,9 @@ export function useXmtpMessaging({
         wallet.signer,
         wallet.address,
         inboxTarget?.inboxId,
+        () => invalidateWallet(
+          'XMTP stopped responding while synchronizing. Reconnect the inbox to restart it safely.',
+        ),
       )
       const pendingFactory: PendingSessionFactory = {
         cancelled: false,
@@ -660,6 +707,15 @@ export function useXmtpMessaging({
         return
       }
       sessionRef.current = session
+      // Wallet approval can blur/focus the host while the initial client is
+      // still opening. That belongs to setup, not to foreground recovery. A
+      // genuinely hidden document still needs one refresh when it returns.
+      if (
+        document.visibilityState !== 'hidden' &&
+        !confirmedBackgroundRef.current
+      ) {
+        foregroundRefreshNeededRef.current = false
+      }
       setEnvironment(session.environment)
 
       let recoveryNotice: string | null = null
@@ -805,7 +861,41 @@ export function useXmtpMessaging({
         })
       }
     } finally {
-      if (connectionAttemptRef.current === attempt) connectingRef.current = false
+      if (connectionAttemptRef.current === attempt) {
+        connectingRef.current = false
+        const hasSession = sessionRef.current !== null
+        const shouldRevalidateForeground = hasSession &&
+          confirmedBackgroundRef.current &&
+          document.visibilityState !== 'hidden'
+        const shouldRecoverOnline = hasSession &&
+          onlineRefreshPendingRef.current &&
+          !browserIsKnownOffline()
+        // Any visible blur/focus during setup was caused by the wallet or host
+        // handoff that setup just completed. A confirmed visibility/BFCache
+        // transition remains distinct and is revalidated once setup settles.
+        if (document.visibilityState !== 'hidden') {
+          foregroundRefreshNeededRef.current = shouldRevalidateForeground
+          if (!shouldRevalidateForeground) confirmedBackgroundRef.current = false
+        }
+        if (shouldRevalidateForeground) {
+          const resumeEpoch = backgroundEpochRef.current
+          confirmedBackgroundRef.current = false
+          onlineRefreshPendingRef.current = false
+          window.setTimeout(() => {
+            if (backgroundEpochRef.current === resumeEpoch) {
+              foregroundRefreshCallbackRef.current()
+            }
+          }, 0)
+        } else if (shouldRecoverOnline) {
+          const resumeEpoch = backgroundEpochRef.current
+          onlineRefreshPendingRef.current = false
+          window.setTimeout(() => {
+            if (backgroundEpochRef.current === resumeEpoch) {
+              visibleRefreshCallbackRef.current()
+            }
+          }, 0)
+        }
+      }
     }
   }, [applyConvosAccessSnapshot, inboxTarget, releaseResources, startMessageStream, updateConvosAccessRequest, updateNotice])
 
@@ -1060,6 +1150,12 @@ export function useXmtpMessaging({
           updateNotice(readableMessagingError(
             error,
             'Network sync paused. Showing messages saved in this browser.',
+          ))
+        } else if (activeRef.current?.id === conversationId) {
+          setStreamHealth(browserIsKnownOffline() ? 'offline' : 'failed')
+          updateNotice(readableMessagingError(
+            error,
+            'This conversation could not sync. Its saved inbox entry remains open so you can retry.',
           ))
         } else {
           updateNotice(readableMessagingError(error, 'This conversation could not sync.'))
@@ -1428,6 +1524,8 @@ export function useXmtpMessaging({
     if (!session || visibleRefreshRef.current) return
 
     const generation = operationGenerationRef.current
+    const activeConversationIdAtStart = activeRef.current?.id ?? null
+    const openRequestAtStart = openRequestRef.current
     let offline = browserIsKnownOffline()
     onlineRefreshPendingRef.current = false
     if (offline) setStreamHealth('offline')
@@ -1437,7 +1535,11 @@ export function useXmtpMessaging({
       offline = browserIsKnownOffline()
 
       const conversation = activeRef.current
-      if (conversation) {
+      if (
+        conversation &&
+        conversation.id === activeConversationIdAtStart &&
+        openRequestRef.current === openRequestAtStart
+      ) {
         try {
           let loaded: Awaited<ReturnType<XmtpMessagingSession['readConversation']>>
           if (offline) {
@@ -1538,47 +1640,118 @@ export function useXmtpMessaging({
 
   useEffect(() => {
     const refreshForeground = async () => {
+      const session = sessionRef.current
       if (
         document.visibilityState === 'hidden' ||
-        !sessionRef.current ||
-        foregroundCheckRef.current
+        !session ||
+        connectingRef.current ||
+        foregroundCheckRef.current !== null
       ) return
 
-      foregroundCheckRef.current = true
+      const generation = operationGenerationRef.current
+      const owner = Symbol('foreground-check')
+      foregroundCheckRef.current = owner
       try {
         const validateWallet = validateWalletRef.current
         if (validateWallet && !(await validateWallet())) return
-        if (sessionRef.current) await refreshVisibleState()
+        if (
+          operationGenerationRef.current !== generation ||
+          sessionRef.current !== session
+        ) return
+        await refreshVisibleState()
       } finally {
-        foregroundCheckRef.current = false
+        if (foregroundCheckRef.current === owner) {
+          foregroundCheckRef.current = null
+          if (
+            foregroundEventPendingRef.current &&
+            foregroundRefreshNeededRef.current &&
+            !documentIsHidden() &&
+            !connectingRef.current &&
+            operationGenerationRef.current === generation &&
+            sessionRef.current === session
+          ) {
+            const resumeEpoch = backgroundEpochRef.current
+            foregroundEventPendingRef.current = false
+            foregroundRefreshNeededRef.current = false
+            window.setTimeout(() => {
+              if (backgroundEpochRef.current === resumeEpoch) {
+                void refreshForeground()
+              }
+            }, 0)
+          }
+        }
       }
     }
-    const onForeground = () => void refreshForeground()
-    const onOnline = () => {
-      if (mountedRef.current && sessionRef.current) {
-        onlineRefreshPendingRef.current = true
-        setStreamHealth('retrying')
-        if (visibleRefreshRef.current || foregroundCheckRef.current) return
+    const markBackgrounded = () => {
+      backgroundEpochRef.current += 1
+      foregroundEventPendingRef.current = false
+      foregroundRefreshNeededRef.current = true
+    }
+    const markConfirmedBackground = () => {
+      confirmedBackgroundRef.current = true
+      markBackgrounded()
+    }
+    const onForeground = () => {
+      if (
+        !foregroundRefreshNeededRef.current ||
+        document.visibilityState === 'hidden' ||
+        !sessionRef.current ||
+        connectingRef.current
+      ) return
+      if (foregroundCheckRef.current !== null) {
+        foregroundEventPendingRef.current = true
+        return
       }
-      onForeground()
+      foregroundRefreshNeededRef.current = false
+      foregroundEventPendingRef.current = false
+      confirmedBackgroundRef.current = false
+      void refreshForeground()
+    }
+    const onOnline = () => {
+      if (mountedRef.current && (sessionRef.current || connectingRef.current)) {
+        onlineRefreshPendingRef.current = true
+        if (sessionRef.current) setStreamHealth('retrying')
+        if (
+          visibleRefreshRef.current ||
+          connectingRef.current ||
+          foregroundCheckRef.current !== null
+        ) return
+      }
+      void refreshForeground()
     }
     const onOffline = () => {
       if (mountedRef.current && sessionRef.current) setStreamHealth('offline')
     }
     const onVisibilityChange = () => {
-      if (document.visibilityState !== 'hidden') onForeground()
+      if (document.visibilityState === 'hidden') markConfirmedBackground()
+      else onForeground()
     }
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) markConfirmedBackground()
+      if (!sessionRef.current) return
+      onForeground()
+    }
+    foregroundRefreshCallbackRef.current = onForeground
+    visibleRefreshCallbackRef.current = () => void refreshVisibleState()
     document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('blur', markBackgrounded)
     window.addEventListener('focus', onForeground)
     window.addEventListener('online', onOnline)
     window.addEventListener('offline', onOffline)
-    window.addEventListener('pageshow', onForeground)
+    window.addEventListener('pagehide', markConfirmedBackground)
+    window.addEventListener('pageshow', onPageShow)
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('blur', markBackgrounded)
       window.removeEventListener('focus', onForeground)
       window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)
-      window.removeEventListener('pageshow', onForeground)
+      window.removeEventListener('pagehide', markConfirmedBackground)
+      window.removeEventListener('pageshow', onPageShow)
+      if (foregroundRefreshCallbackRef.current === onForeground) {
+        foregroundRefreshCallbackRef.current = () => undefined
+      }
+      visibleRefreshCallbackRef.current = () => undefined
     }
   }, [refreshVisibleState])
 
@@ -1641,6 +1814,10 @@ function browserIsKnownOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false
 }
 
+function documentIsHidden(): boolean {
+  return document.visibilityState === 'hidden'
+}
+
 async function settleUntilOffline<T>(promise: Promise<T>): Promise<
   | { status: 'completed'; value: T }
   | { status: 'offline' }
@@ -1686,6 +1863,25 @@ function walletAccountIsAvailable(
   return candidates.some((account: unknown) => (
     typeof account === 'string' && account.toLowerCase() === address.toLowerCase()
   ))
+}
+
+function waitForWalletResume(delayMs: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, delayMs))
+}
+
+async function withWalletResumeTimeout<T>(request: Promise<T>): Promise<T> {
+  let timeoutId: number | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error('The Farcaster wallet did not respond in time.'))
+    }, RESUME_WALLET_REQUEST_TIMEOUT_MS)
+  })
+
+  try {
+    return await Promise.race([request, timeout])
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId)
+  }
 }
 
 function assertPersistedWalletMetadata(

@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useEffect, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { MessagingApp } from './MessagingApp'
@@ -336,6 +337,66 @@ describe('MessagingApp storage and installation states', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Garden chat/i })).toHaveFocus()
     })
+  })
+
+  it('opens the first conversation without remounting the app or reloading the document', async () => {
+    const lifecycle = { cleanups: 0, mounts: 0 }
+    const reloadDocument = vi.fn()
+    const conversation = {
+      id: 'conversation-1',
+      kind: 'dm' as const,
+      peerAddress: '0x2222222222222222222222222222222222222222' as const,
+      peerInboxId: 'peer-inbox',
+    }
+    const summary = {
+      ...conversation,
+      isOwnLastMessage: false,
+      preview: 'Saved locally',
+      updatedAt: new Date('2026-07-15T20:00:00Z'),
+    }
+    mocks.messaging.mockImplementation(function useStatefulMessagingMock() {
+      const [activeConversation, setActiveConversation] = useState<
+        typeof conversation | null
+      >(null)
+      useEffect(() => {
+        lifecycle.mounts += 1
+        return () => {
+          lifecycle.cleanups += 1
+        }
+      }, [])
+
+      return {
+        ...readyMessaging(),
+        activeConversation,
+        conversations: [summary],
+        openConversation: async () => setActiveConversation(conversation),
+        view: activeConversation ? 'conversation' as const : 'inbox' as const,
+      }
+    })
+
+    const rendered = render(
+      <MessagingApp
+        canUseBack={false}
+        canUseWallet
+        reloadDocument={reloadDocument}
+        user={user}
+      />,
+    )
+    const originalAppNode = rendered.container.querySelector('.messaging-app')
+
+    fireEvent.click(screen.getByRole('button', {
+      name: /0x2222222222222222222222222222222222222222/i,
+    }))
+    expect(await screen.findByRole('heading', {
+      name: '0x2222222222222222222222222222222222222222',
+    })).toBeVisible()
+
+    expect(rendered.container.querySelector('.messaging-app')).toBe(originalAppNode)
+    expect(lifecycle).toEqual({ cleanups: 0, mounts: 1 })
+    expect(reloadDocument).not.toHaveBeenCalled()
+
+    rendered.unmount()
+    expect(lifecycle.cleanups).toBe(1)
   })
 
   it('renders a retained Convos waiting state without claiming membership', () => {
