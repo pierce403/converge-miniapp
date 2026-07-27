@@ -28,20 +28,20 @@ Status vocabulary:
 ## Current delivery checkpoint
 
 As of 2026-07-27, the deployed product implementation includes commits through
-`5f65625`. Cloudflare Worker version
-`1e270715-1632-4462-9120-8895dd590314` reports healthy canonical production
+`c66a260`. Cloudflare Worker version
+`9d8af11a-e9f8-471f-be3a-d8d2483c2182` reports healthy canonical production
 metadata, Farcaster account association remains present on the exact domain,
-and the 595-test local gate passed for that source checkpoint.
+and the 623-test local gate passed for that source checkpoint.
 
 The application implementation is deployed through Task 7, including the compact Mini App shell, Farcaster-wallet XMTP identity, cached/live messaging, address-or-ENS compose, explicit ENS-backed identity binding, verified Convos group import, and the fail-closed Farcaster/XMTP alert bridge. “Deployed” does not mean “launch-ready”: real Farcaster desktop/iOS/Android acceptance, canonical-origin OPFS re-entry, independent two-client message exchange, embedded keyboard review, and the authenticated payer/Gateway production-send proof remain open release gates.
 
-The 2026-07-27 inbox-routing correction passes the 623-test full local gate. It
-replaces local-first identity proof with stateless XMTP network resolution,
+The 2026-07-27 inbox-routing correction is deployed in the Worker version above.
+It replaces local-first identity proof with stateless XMTP network resolution,
 preserves old-inbox recovery authority before a new reassignment, journals the
 target before mutation, and closes/recreates any resident client whose active
-Farcaster identity now resolves another inbox. Production deployment and the
-canonical `deanpierce.eth` two-client send/receive acceptance remain explicit
-gates rather than inferred success.
+Farcaster identity now resolves another inbox. The canonical `deanpierce.eth`
+Farcaster re-entry and two-client send/receive acceptance remain explicit gates
+rather than inferred success.
 
 The notification bridge is the active P1 milestone. Its production status and
 manifest webhook are enabled now that the verifier, encryption, D1, DNS, and
