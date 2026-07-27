@@ -29,9 +29,10 @@ Status vocabulary:
 
 As of 2026-07-27, the deployed product implementation includes commits through
 `cd64cac`. Cloudflare Worker version
-`d33d418b-4d98-409d-953f-7db97c38d146` reports healthy canonical production
-metadata, Farcaster account association remains present on the exact domain,
-and the 630-test local gate passed for that source checkpoint.
+`d33d418b-4d98-409d-953f-7db97c38d146` is the corresponding healthy
+code-bearing production deployment, Farcaster account association remains
+present on the exact domain, and the 630-test local gate passed for that source
+checkpoint.
 
 The application implementation is deployed through Task 7, including the compact Mini App shell, Farcaster-wallet XMTP identity, cached/live messaging, address-or-ENS compose, explicit ENS-backed identity binding, verified Convos group import, and the fail-closed Farcaster/XMTP alert bridge. “Deployed” does not mean “launch-ready”: real Farcaster desktop/iOS/Android acceptance, canonical-origin OPFS re-entry, independent two-client message exchange, embedded keyboard review, and the authenticated payer/Gateway production-send proof remain open release gates.
 
