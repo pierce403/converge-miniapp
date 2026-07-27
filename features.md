@@ -1,8 +1,8 @@
 # Converge Mini App: product and feature plan
 
 > Working title: **Converge Mini**
-> Status: implementation in progress
-> Last reviewed: 2026-07-20
+> Status: deployed implementation; release acceptance in progress
+> Last reviewed: 2026-07-27
 > Canonical scope: this file
 > Canonical production origin: `https://miniapp.converge.cv`
 
@@ -19,8 +19,19 @@ Status vocabulary:
 | Spike | Must be proven in current SDKs/hosts before implementation proceeds. |
 | Blocked | Required outcome whose current integration path is not yet available or proven. |
 | Implemented locally | Code and automated checks exist, but named host/device/network proof is still outstanding. |
+| Deployed; acceptance pending | Code is on the canonical production deployment, but named host/device/network acceptance evidence is still outstanding. |
+| Deployed disabled | Fail-closed code is deployed, but the feature is intentionally unavailable until its named production dependencies and acceptance checks are complete. |
+| Verified production | The named production behavior has been checked against the canonical deployment or an authoritative public verifier. |
 | Later | Useful after the first release, but not required to prove the product. |
 | Out | Explicitly excluded from this product direction for now. |
+
+## Current delivery checkpoint
+
+As of 2026-07-27, the deployed product implementation includes commits through `fb0020c`. The canonical Worker reports healthy production metadata for the 2026-07-20 deployment, Farcaster account association remains publicly verified, and GitHub's latest checks for that deployed product head are green.
+
+The application implementation is deployed through Task 7, including the compact Mini App shell, Farcaster-wallet XMTP identity, cached/live messaging, address-or-ENS compose, explicit ENS-backed identity binding, verified Convos group import, and the fail-closed Farcaster/XMTP alert bridge. “Deployed” does not mean “launch-ready”: real Farcaster desktop/iOS/Android acceptance, canonical-origin OPFS re-entry, independent two-client message exchange, embedded keyboard review, and the authenticated payer/Gateway production-send proof remain open release gates.
+
+The notification bridge is optional P1 and remains disabled unless all production verifier, encryption, D1, and vapid.party dependencies are configured. Its deployed fail-closed code is not evidence of live closed-app delivery.
 
 Priority vocabulary:
 
@@ -289,40 +300,40 @@ Success condition: the optional label flow never moves identity state; the expli
 
 | Area | Feature | Priority | Status | Definition of done |
 | --- | --- | --- | --- | --- |
-| Shell | Farcaster Mini App detection and SDK lifecycle | P0 | Committed | Embedded and standalone modes render; `ready()` is called at the correct point; listeners are cleaned up. |
-| Shell | Mobile safe areas, keyboard, and constrained viewport | P0 | Committed | Core flows work in host webviews without clipped header/composer or body-scroll traps. |
+| Shell | Farcaster Mini App detection and SDK lifecycle | P0 | Deployed; acceptance pending | Embedded and standalone modes render; `ready()` is called at the correct point; real-host lifecycle acceptance remains. |
+| Shell | Mobile safe areas, keyboard, and constrained viewport | P0 | Deployed; acceptance pending | Automated viewport and safe-area coverage passes; embedded keyboard and representative-device acceptance remain. |
 | Publishing | Signed `/.well-known/farcaster.json` | P0 | Verified production | Farcaster's public debugger verifies schema, signature, FID ownership, and the exact production domain. |
-| Publishing | Root `fc:miniapp` share embed | P0 | Committed | Root URL renders a valid 3:2 feed card and launches the app. |
-| Identity | Farcaster Quick Auth session | P1 | Implemented locally | Exact issuer, expiry, audience/domain, and positive-FID subject verification protects the ENS preference API; canonical-host proof remains. |
-| Identity | Host EVM wallet connection | P0 | Implemented locally | The host's preferred account opens automatically with no wallet/key chooser; lifecycle teardown is implemented and real Farcaster desktop/iOS/Android proof remains. |
-| Identity | EOA and supported SCW XMTP signer | P0 | Implemented locally | EOA/SCW construction is unit-tested; real host signature traces remain. |
-| Identity | Stable XMTP inbox/installation reuse | P0 | Implemented locally | Persistent OPFS defaults and a single-owner Web Lock exist; host re-entry proof remains. |
-| Identity | Forward-verified ENS primary-name offer | P1 | Implemented locally | Trusted-FID discovery, reverse/forward ENS proof, read-only XMTP relationship checks, remembered acceptance/dismissal, safe label-only use, and truthful separate-inbox states are tested; canonical-host proof remains. |
-| Identity | Peer fname, ENS, and Basename labels | P1 | Implemented locally | Bounded, rate-limited protected batches resolve public wallet metadata without persistence; ambiguous/broken sources fall back to the visible address. A registered fname is secondary registry metadata, not a canonical profile or authorization. |
-| Identity | Compact identity/privacy menu | P0 | Implemented locally | Active wallet, network, local-storage disclosure, ENS recheck, label selection/deletion, and an explicit signer-backed identity binding remain available after onboarding. Short-viewport host proof remains. |
-| Identity | ENS-backed Farcaster identity binding | P1 | Implemented locally | A fresh different-inbox candidate requires exact external ENS-owner authorization plus explicit permanent/no-merge confirmation; XMTP then reassigns and network-verifies the Farcaster identity, disconnects WalletConnect, and uses only Farcaster for later sessions. Canonical-host real-wallet proof remains. |
-| Inbox | Allowed DM conversation list | P0 | Implemented locally | Allowed-only cached-first sync/list/stream UI exists; dev-network and offline host acceptance remain. |
+| Publishing | Root `fc:miniapp` share embed | P0 | Deployed; acceptance pending | Root metadata and the 3:2 feed asset are deployed; real Farcaster launch/embed acceptance remains. |
+| Identity | Farcaster Quick Auth session | P1 | Deployed; acceptance pending | Exact issuer, expiry, audience/domain, and positive-FID subject verification protects the ENS preference API; canonical-host interactive proof remains. |
+| Identity | Host EVM wallet connection | P0 | Deployed; acceptance pending | The host's preferred account opens automatically with no wallet/key chooser; lifecycle teardown is implemented and real Farcaster desktop/iOS/Android proof remains. |
+| Identity | EOA and supported SCW XMTP signer | P0 | Deployed; acceptance pending | EOA/SCW construction is unit-tested; real host signature traces remain. |
+| Identity | Stable XMTP inbox/installation reuse | P0 | Deployed; acceptance pending | Persistent OPFS defaults and a single-owner Web Lock exist; canonical-origin host re-entry proof remains. |
+| Identity | Forward-verified ENS primary-name offer | P1 | Deployed; acceptance pending | Trusted-FID discovery, reverse/forward ENS proof, read-only XMTP relationship checks, remembered acceptance/dismissal, safe label-only use, and truthful separate-inbox states are tested; canonical-host proof remains. |
+| Identity | Peer fname, ENS, and Basename labels | P1 | Deployed; acceptance pending | Bounded, rate-limited protected batches resolve public wallet metadata without persistence; ambiguous/broken sources fall back to the visible address. A registered fname is secondary registry metadata, not a canonical profile or authorization. |
+| Identity | Compact identity/privacy menu | P0 | Deployed; acceptance pending | Active wallet, network, local-storage disclosure, ENS recheck, label selection/deletion, and an explicit signer-backed identity binding remain available after onboarding. Short-viewport host proof remains. |
+| Identity | ENS-backed Farcaster identity binding | P1 | Deployed; acceptance pending | A fresh different-inbox candidate requires exact external ENS-owner authorization plus explicit permanent/no-merge confirmation; XMTP then reassigns and network-verifies the Farcaster identity, disconnects WalletConnect, and uses only Farcaster for later sessions. Canonical-host real-wallet proof remains. |
+| Inbox | Allowed DM conversation list | P0 | Deployed; acceptance pending | Allowed-only cached-first sync/list/stream UI exists; two-client and offline-host acceptance remain. |
 | Inbox | Separate message requests | P1 | Later | Unknown contacts stay excluded from the P0 allowed list; later accept/decline updates consent. |
-| Compose | Address-or-ENS recipient reachability | P0 | Implemented locally | Addresses are checksummed directly; bounded ENS names are normalized and forward-resolved through the protected Worker before the full name/address pair is confirmed and checked with `canMessage()`. Canonical-host and two-client network proof remain. |
+| Compose | Address-or-ENS recipient reachability | P0 | Deployed; acceptance pending | Addresses are checksummed directly; bounded ENS names are normalized and forward-resolved through the protected Worker before the full name/address pair is confirmed and checked with `canMessage()`. Canonical-host and two-client network proof remain. |
 | Compose | Farcaster handle/name recipient search | P1 | Later | Trusted directory lookup maps profile to verified candidate identity before `canMessage()`. |
-| Chat | Compatible message history | P0 | Implemented locally | Cached-first text and plain-text Markdown source, replies, attachment metadata, reaction summaries, a growing contiguous newest-message window, exact-nanosecond ordering, ownership, fallback, and loading exist. Silent control messages remain off the timeline. |
-| Chat | Live incoming text messages | P0 | Implemented locally | Allowed-DM stream, stable-ID upsert, one retained SDK-owned retry proxy, foreground visible-chat refresh, and health UI exist; real reconnect proof remains. |
-| Chat | Send, optimistic state, failure, retry | P0 | Implemented locally | Duplicate guards and same-ID unpublished retry exist; Browser SDK 7 terminal failures are disclosed. |
-| Local data | Single-connection protection | P0 | Implemented locally | A second tab/window cannot contend for OPFS and gets useful guidance. |
-| Local data | Offline cached reading | P0 | Implemented locally | The installed static shell can reopen without network, an already resumable XMTP client reads its OPFS inbox/messages without attempting sync while the browser reports offline, and network-only actions are clearly unavailable. Cold offline XMTP client construction remains an SDK boundary until the pinned Browser SDK exposes a supported offline-init path. |
-| Local data | Storage-loss/install-limit recognition | P0 | Implemented locally | Browser primitives are checked before wallet access; curated storage, installation, and permanent inbox-limit states never auto-revoke or expose raw database identifiers. |
+| Chat | Compatible message history | P0 | Deployed; acceptance pending | Cached-first text and plain-text Markdown source, replies, attachment metadata, reaction summaries, a growing contiguous newest-message window, exact-nanosecond ordering, ownership, fallback, and loading exist. Silent control messages remain off the timeline. |
+| Chat | Live incoming text messages | P0 | Deployed; acceptance pending | Allowed-DM stream, stable-ID upsert, one retained SDK-owned retry proxy, foreground visible-chat refresh, and health UI exist; real reconnect proof remains. |
+| Chat | Send, optimistic state, failure, retry | P0 | Deployed; acceptance pending | Duplicate guards and same-ID unpublished retry exist; two-client acknowledgement-loss and offline retry proof remain. |
+| Local data | Single-connection protection | P0 | Deployed; acceptance pending | A second tab/window cannot contend for OPFS and gets useful guidance; canonical-host multi-instance proof remains. |
+| Local data | Offline cached reading | P0 | Deployed; acceptance pending | The installed static shell can reopen without network, an already resumable XMTP client reads its OPFS inbox/messages without attempting sync while the browser reports offline, and network-only actions are clearly unavailable. Cold offline XMTP client construction remains an SDK boundary until the pinned Browser SDK exposes a supported offline-init path. |
+| Local data | Storage-loss/install-limit recognition | P0 | Deployed; acceptance pending | Browser primitives are checked before wallet access; curated storage, installation, and permanent inbox-limit states never auto-revoke or expose raw database identifiers. |
 | Local data | Installation management/revocation UI | P1 | Later | User can deliberately inspect and revoke an old installation when required. |
-| Design | Converge-derived compact visual system | P0 | Implemented locally | Palette, bubbles, surfaces, inputs, focus states, and empty states are implemented; embedded-device review remains. |
+| Design | Converge-derived compact visual system | P0 | Deployed; acceptance pending | Palette, bubbles, surfaces, inputs, focus states, and empty states are deployed; embedded-device review remains. |
 | Backend | Cloudflare Worker Static Assets | P0 | Deployed | The Worker, `miniapp.converge.cv` Custom Domain, and Farcaster ownership are live; Cloudflare Workers Builds deploys verified `main` commits. Production XMTP remains a separate release gate. |
 | Backend | Authenticated XMTP payer Gateway | P0 | Blocked | A decentralized-mainnet move must prove Gateway selection/auth, per-user quotas, viable container hosting, and one funded send. Legacy `production` inbox testing can proceed independently. |
-| Backend | Protected API and minimal identity data | P1 | Implemented locally | Exact-host Quick Auth routes and isolated production/preview D1 bindings store only ENS `accepted`/`dismissed` choice by FID; migration and production route proof remain. |
-| Backend | Notification token data model | P1 | Implemented locally | Signed lifecycle tokens stay encrypted in Mini D1; opaque XMTP callback handles and bounded replay state contain no message content or XMTP identity. Production secrets, migration, and canonical-host proof remain. |
-| Operations | Redacted logs, health, and error visibility | P0 | Committed | Failures are diagnosable without leaking message content, tokens, or full wallet identifiers. |
-| Notifications | Add Mini App and store notification permission | P1 | Implemented locally | The manifest and one-time prompt remain fail-closed until the Hub credential, encrypted-token key, and vapid.party app configuration are all present. Real-host approval and lifecycle proof remain. |
-| Notifications | Notify on incoming XMTP message | P1 | Implemented locally | Browser supplies only signed installation-owned topic/HMAC state; vapid.party observes minimal delivery hints and signs opaque callbacks; Mini sends fixed-copy Farcaster alerts without message plaintext or sender metadata. Live closed-app proof remains. |
-| Convos | Import a signed Convos invite | P1 | Implemented locally | Exact production invite URLs and raw slugs are validated locally, a typed XMTP join request is sent only after an explicit tap, and only an active exact-tag group added by the declared creator to the current inbox completes the import. |
-| Convos | Read and send in an imported group | P1 | Implemented locally | Verified allowed groups share the cached-first timeline, pagination, send/retry path, and live-stream reliability of DMs without weakening consent or exposing invite/control traffic as ordinary chat. |
-| Convos | Re-share and open an imported invite | P1 | In progress | A still-valid reusable signed invite can produce a local QR/share link and explicit Convos/Converge handoff links without placing the bearer slug in backend requests, logs, or Web Storage. |
+| Backend | Protected API and minimal identity data | P1 | Deployed; acceptance pending | Exact-host Quick Auth routes and isolated production/preview D1 bindings store only ENS `accepted`/`dismissed` choice by FID; canonical-host interactive route proof remains. |
+| Backend | Notification token data model | P1 | Deployed disabled | Signed lifecycle tokens stay encrypted in Mini D1; the deployed routes remain fail-closed until production secrets, migration, verifier, and canonical-host proof are complete. |
+| Operations | Redacted logs, health, and error visibility | P0 | Deployed; acceptance pending | Health/version and redaction-safe failures are implemented; sampled production-log review remains. |
+| Notifications | Add Mini App and store notification permission | P1 | Deployed disabled | The manifest and one-time prompt remain fail-closed until the Hub credential, encrypted-token key, and vapid.party app configuration are all present. Real-host approval and lifecycle proof remain. |
+| Notifications | Notify on incoming XMTP message | P1 | Deployed disabled | Browser supplies only signed installation-owned topic/HMAC state; vapid.party observes minimal delivery hints and signs opaque callbacks; Mini sends fixed-copy Farcaster alerts without message plaintext or sender metadata. Live closed-app proof remains. |
+| Convos | Import a signed Convos invite | P1 | Deployed; acceptance pending | Exact production invite URLs and raw slugs are validated locally, a typed XMTP join request is sent only after an explicit tap, and only an active exact-tag group added by the declared creator to the current inbox completes the import. |
+| Convos | Read and send in an imported group | P1 | Deployed; acceptance pending | Verified allowed groups share the cached-first timeline, pagination, send/retry path, and live-stream reliability of DMs without weakening consent or exposing invite/control traffic as ordinary chat. |
+| Convos | Re-share and open an imported invite | P1 | Later | URL builders exist, but QR/share/handoff UI is not implemented. Task 11d remains a separate post-import slice. |
 | Sharing | Share app with Farcaster compose action | P1 | Later | User can share a generic app card without leaking private conversation details. |
 | Settings | Expanded privacy/identity/about sheet | P1 | Later | Add trusted profile/FID, inbox/installation details, version, notifications, and broader future account-data controls beyond the implemented compact menu. |
 
@@ -644,7 +655,7 @@ Production-promotion gate:
 - Use stable notification IDs for deduplication and honor host rate limits.
 - Keep target URLs on the exact registered hostname.
 
-#### Incoming-message notification bridge (P1, implemented locally)
+#### Incoming-message notification bridge (P1, deployed disabled)
 
 The closed Mini App cannot keep a browser XMTP stream alive. Farcaster notification delivery and detection of incoming XMTP traffic are separate systems.
 
@@ -861,20 +872,20 @@ This is the implementation target. Protocol surfaces that still require live-hos
 | --- | --- | --- | --- |
 | `GET /.well-known/farcaster.json` | Public | Signed Mini App manifest. | P0 |
 | `GET /api/health` | Public/minimal | Deployment health/version without sensitive dependency detail. | Deployed |
-| `GET /api/me/ens` | Quick Auth | Discover the verified FID's forward-verified ENS primary-name candidate and return its saved preference. | Implemented locally |
-| `PUT /api/me/ens-preference` | Quick Auth | Idempotently save `accepted` or `dismissed` for the verified FID. | Implemented locally |
-| `DELETE /api/me` | Quick Auth | Delete the verified FID's saved ENS preference. | Implemented locally with menu control |
-| `POST /api/resolve` | Quick Auth + rate limit | ENSIP-15-normalize and forward-resolve one bounded dot-separated recipient name without putting the raw query in URLs/history/referrers or persistence. | Implemented locally |
+| `GET /api/me/ens` | Quick Auth | Discover the verified FID's forward-verified ENS primary-name candidate and return its saved preference. | Deployed; interactive acceptance pending |
+| `PUT /api/me/ens-preference` | Quick Auth | Idempotently save `accepted` or `dismissed` for the verified FID. | Deployed; interactive acceptance pending |
+| `DELETE /api/me` | Quick Auth | Delete the verified FID's saved ENS preference. | Deployed with menu control; interactive acceptance pending |
+| `POST /api/resolve` | Quick Auth + rate limit | ENSIP-15-normalize and forward-resolve one bounded dot-separated recipient name without putting the raw query in URLs/history/referrers or persistence. | Deployed; interactive acceptance pending |
 | `POST /api/identity/link` | Quick Auth + proof | Store a verified FID/wallet/inbox mapping after a separately specified proof protocol. | P1 spike; do not implement yet |
-| `POST /api/farcaster/webhook` | Signed event verification | Apply add/remove/notification token lifecycle. | P1 foundation implemented; unadvertised and fail-closed until the Hub credential is configured |
-| `POST /api/xmtp-push-subscriptions` | Quick Auth + identity proof | Register/rotate encrypted XMTP topic/HMAC filtering material only after Browser SDK feasibility is proven. | P1 spike; blocked |
+| `POST /api/farcaster/webhook` | Signed event verification | Apply add/remove/notification token lifecycle. | P1 deployed disabled; unadvertised and fail-closed until production dependencies are configured |
+| `POST /api/xmtp-push-subscriptions` | Quick Auth + installation proof | Register/rotate the opaque vapid.party route after Browser SDK snapshot and installation-ownership proof. | P1 deployed disabled; live listener/host acceptance pending |
 | `POST /api/notifications/test` | Admin-only | Verify notification plumbing without exposing an open sender. | P1 |
 
 The implemented identity routes require the exact canonical hostname in production and the exact rendered host outside production, derive the FID only from a verified Quick Auth JWT subject, use prepared D1 statements, and return no-store responses. Auth and binding failures fail closed; unavailable Farcaster/ENS evidence returns no candidate and never authorizes an identity change. No endpoint accepts a wallet private key, XMTP private key, decrypted message, draft, message search query, or raw local database.
 
 ### Minimal D1 model
 
-#### `ens_identity_preferences` (implemented locally)
+#### `ens_identity_preferences` (deployed; interactive acceptance pending)
 
 - trusted positive `fid` primary key;
 - `choice`, constrained to `accepted` or `dismissed`; and
@@ -884,7 +895,7 @@ There is no stored ENS name, wallet address, XMTP inbox/installation ID, Quick A
 
 Production and preview use separate `PREFERENCES` D1 databases and the same repository migration under `migrations/`.
 
-#### `farcaster_notification_subscriptions` (implemented foundation; unadvertised)
+#### `farcaster_notification_subscriptions` (deployed disabled; unadvertised)
 
 - trusted positive `fid` and Farcaster client `app_fid` composite primary key;
 - one AES-256-GCM ciphertext containing the exact delivery URL and token together;
@@ -1232,7 +1243,7 @@ Exit criteria:
 - empty production build and selected-provider local preview pass with pinned tool versions;
 - verified commands are added to `AGENTS.md`.
 
-### Task 3: visual shell and Mini App lifecycle — in progress
+### Task 3: visual shell and Mini App lifecycle — deployed, host acceptance pending
 
 Implemented locally on 2026-07-14:
 
@@ -1267,7 +1278,7 @@ Ready-messaging top-inset correction implemented, then revised from live host fe
 - no viewport-height heuristic guesses whether total clipping came from the top, bottom, keyboard, browser chrome, or split-screen geometry; and
 - component and browser coverage verify that a reported 72px mobile host inset produces no shell, setup-card, or ready-messaging gap while web clients retain it.
 
-Automated coverage now includes a true 390 × 844 Playwright device viewport assertion with no horizontal overflow. Remaining in Task 3: the inbox/chat/composer states supplied by Tasks 5 and 6 and an embedded-host screenshot on the canonical domain.
+Automated coverage includes a true 390 × 844 Playwright device viewport assertion with no horizontal overflow. The inbox, chat, composer, and lifecycle states supplied by Tasks 5 and 6 are implemented and deployed. Remaining in Task 3: embedded-host screenshots, keyboard behavior, and representative-device acceptance on the canonical domain.
 
 Deliverables:
 
@@ -1282,7 +1293,7 @@ Exit criteria:
 - visual acceptance checklist is reviewed; and
 - no mock messaging behavior is presented as functional.
 
-### Task 4: host wallet and XMTP identity — implemented locally, host proof pending
+### Task 4: host wallet and XMTP identity — deployed, host proof pending
 
 Implemented on 2026-07-14:
 
@@ -1334,7 +1345,7 @@ Exit criteria:
 - existing installations resume without new XMTP wallet signatures; optional post-inbox Quick Auth may still require a Farcaster sign-in approval when no current token or local dismissal exists; and
 - no server/log path sees private keys or message content.
 
-### Task 5: allowed inbox and live receive — implemented locally, network proof pending
+### Task 5: allowed inbox and live receive — deployed, network proof pending
 
 Implemented on 2026-07-14:
 
@@ -1382,7 +1393,7 @@ Exit criteria:
 - foreground/resume sync and live receive pass without duplicate rows; and
 - identity switching never displays another identity's cached content.
 
-### Task 6: address-or-ENS compose and text send — implemented locally, network proof pending
+### Task 6: address-or-ENS compose and text send — deployed, network proof pending
 
 Implemented on 2026-07-14:
 
@@ -1494,7 +1505,7 @@ Exit criteria:
 - target domain and idempotency rules are correct;
 - notification content leaks no private message or participant data.
 
-### Task 11a: Convos protocol primitives — implemented locally 2026-07-15
+### Task 11a: Convos protocol primitives — deployed, acceptance pending
 
 Implemented and locally verified:
 
@@ -1513,7 +1524,7 @@ Exit evidence:
 - the production-shaped local SPA and `/api/health` both return 200; and
 - all five mobile Playwright checks pass.
 
-### Task 11b: Convos request-access flow — implemented locally 2026-07-15
+### Task 11b: Convos request-access flow — deployed, acceptance pending
 
 Implemented and locally verified:
 
@@ -1532,7 +1543,7 @@ Exit evidence:
 - the production-shaped local Worker serves both the SPA and versioned `/api/health`; and
 - all five mobile Playwright checks pass.
 
-### Task 11c: verified Convos group import and messaging — implemented locally 2026-07-15
+### Task 11c: verified Convos group import and messaging — deployed, acceptance pending
 
 Implemented and locally verified:
 
