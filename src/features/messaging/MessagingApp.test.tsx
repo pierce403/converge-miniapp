@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useEffect, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { XmtpAlertRegistrationError } from '../../lib/xmtp/alertRegistrationError'
 import { MessagingApp } from './MessagingApp'
 
 const mocks = vi.hoisted(() => ({
@@ -246,6 +247,57 @@ describe('MessagingApp storage and installation states', () => {
     render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
 
     await waitFor(() => expect(syncAlerts).toHaveBeenCalledOnce())
+  })
+
+  it('shows the safe registration stage, code, and status when alert sync fails', async () => {
+    const setNotice = vi.fn()
+    const syncAlerts = vi.fn().mockRejectedValue(
+      new XmtpAlertRegistrationError(
+        'ticket_request',
+        'notification_token_pending',
+        425,
+      ),
+    )
+    mocks.alerts.mockReturnValue(readyAlerts({
+      available: true,
+      notificationsEnabled: true,
+    }))
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      setNotice,
+      syncAlerts,
+    })
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    await waitFor(() => expect(setNotice).toHaveBeenCalledWith(
+      'Farcaster reports alerts are on, but Converge Mini has not received a signed notification token for this installation. Turn alerts off and on, or remove and re-add the Mini App. (stage: ticket request; code: notification_token_pending; HTTP 425)',
+    ))
+  })
+
+  it('does not reflect unknown alert failures into the inbox notice', async () => {
+    const setNotice = vi.fn()
+    const syncAlerts = vi.fn().mockRejectedValue(
+      new Error('ticket=vpxet1.secret inbox=private signature=hidden'),
+    )
+    mocks.alerts.mockReturnValue(readyAlerts({
+      available: true,
+      notificationsEnabled: true,
+    }))
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      setNotice,
+      syncAlerts,
+    })
+
+    render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
+
+    await waitFor(() => expect(setNotice).toHaveBeenCalledWith(
+      'Farcaster alerts are on, but this inbox could not finish alert registration. Reopen Converge Mini online and try again. (stage: alert sync; code: unknown)',
+    ))
+    expect(setNotice.mock.calls.flat().join(' ')).not.toMatch(
+      /vpxet1|private|signature|hidden/,
+    )
   })
 
   it('does not invoke authenticated cleanup merely because alerts start off', async () => {

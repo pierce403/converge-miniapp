@@ -1,6 +1,10 @@
 import { sdk } from '@farcaster/miniapp-sdk'
 
 import type { XmtpMessagingSession } from './session'
+import {
+  XmtpAlertRegistrationError,
+  xmtpAlertRegistrationResponseError,
+} from './alertRegistrationError'
 
 type TicketResponse = {
   registration: unknown
@@ -17,10 +21,21 @@ export async function syncXmtpAlertRegistration(
 ): Promise<void> {
   if (session.environment !== 'production') return
   if (!Number.isSafeInteger(fid) || fid <= 0) {
-    throw new Error('Converge Mini could not identify the alert account.')
+    throw new XmtpAlertRegistrationError(
+      'alert_account',
+      'invalid_alert_account',
+    )
   }
 
-  const snapshot = await session.pushSnapshot()
+  let snapshot: Awaited<ReturnType<XmtpMessagingSession['pushSnapshot']>>
+  try {
+    snapshot = await session.pushSnapshot()
+  } catch {
+    throw new XmtpAlertRegistrationError(
+      'push_snapshot',
+      'push_snapshot_failed',
+    )
+  }
   // XMTP consent is inbox-wide, so retaining an old route here could alert on a
   // now-denied topic. This account-wide cleanup is intentionally distinct from
   // one Farcaster client disabling native notifications, which stays local.
@@ -47,28 +62,55 @@ export async function syncXmtpAlertRegistration(
     headers: { 'content-type': 'application/json' },
     method: 'POST',
   }
-  const ticketResponse = await fetchTicket(ticketRequest)
+  let ticketResponse: Response
+  try {
+    ticketResponse = await fetchTicket(ticketRequest)
+  } catch {
+    throw new XmtpAlertRegistrationError('ticket_request', 'network_error')
+  }
   if (!ticketResponse.ok) {
-    throw new Error('Converge Mini could not prepare XMTP alerts.')
+    throw await xmtpAlertRegistrationResponseError(
+      'ticket_request',
+      ticketResponse,
+    )
   }
 
   const enrollment = await readTicketResponse(ticketResponse)
-  const signature = await session.signPushEnrollmentTicket(enrollment.ticket)
-  const registrationResponse = await sdk.quickAuth.fetch(SUBSCRIPTION_PATH, {
-    body: JSON.stringify({
-      proof: {
-        publicKey: snapshot.publicKey,
-        signature,
-      },
-      registration: enrollment.registration,
-      ticket: enrollment.ticket,
-    }),
-    cache: 'no-store',
-    headers: { 'content-type': 'application/json' },
-    method: 'POST',
-  })
+  let signature: string
+  try {
+    signature = await session.signPushEnrollmentTicket(enrollment.ticket)
+  } catch {
+    throw new XmtpAlertRegistrationError(
+      'ticket_signature',
+      'ticket_signature_failed',
+    )
+  }
+  let registrationResponse: Response
+  try {
+    registrationResponse = await sdk.quickAuth.fetch(SUBSCRIPTION_PATH, {
+      body: JSON.stringify({
+        proof: {
+          publicKey: snapshot.publicKey,
+          signature,
+        },
+        registration: enrollment.registration,
+        ticket: enrollment.ticket,
+      }),
+      cache: 'no-store',
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    })
+  } catch {
+    throw new XmtpAlertRegistrationError(
+      'subscription_request',
+      'network_error',
+    )
+  }
   if (!registrationResponse.ok) {
-    throw new Error('Converge Mini could not finish XMTP alert setup.')
+    throw await xmtpAlertRegistrationResponseError(
+      'subscription_request',
+      registrationResponse,
+    )
   }
 }
 
@@ -97,17 +139,33 @@ async function wait(milliseconds: number): Promise<void> {
 // This removes the authenticated Farcaster account's shared XMTP route. A
 // single client disabling native notifications must only stop its local sync.
 export async function revokeXmtpAlertRegistration(): Promise<void> {
-  const response = await sdk.quickAuth.fetch(SUBSCRIPTION_PATH, {
-    cache: 'no-store',
-    method: 'DELETE',
-  })
+  let response: Response
+  try {
+    response = await sdk.quickAuth.fetch(SUBSCRIPTION_PATH, {
+      cache: 'no-store',
+      method: 'DELETE',
+    })
+  } catch {
+    throw new XmtpAlertRegistrationError('route_revocation', 'network_error')
+  }
   if (!response.ok && response.status !== 410) {
-    throw new Error('Converge Mini could not remove XMTP alerts.')
+    throw await xmtpAlertRegistrationResponseError(
+      'route_revocation',
+      response,
+    )
   }
 }
 
 async function readTicketResponse(response: Response): Promise<TicketResponse> {
-  const value: unknown = await response.json()
+  let value: unknown
+  try {
+    value = await response.json()
+  } catch {
+    throw new XmtpAlertRegistrationError(
+      'ticket_response',
+      'invalid_ticket_response',
+    )
+  }
   if (
     !value ||
     typeof value !== 'object' ||
@@ -119,7 +177,10 @@ async function readTicketResponse(response: Response): Promise<TicketResponse> {
     !value.registration ||
     typeof value.registration !== 'object'
   ) {
-    throw new Error('Converge Mini received an invalid XMTP alert ticket.')
+    throw new XmtpAlertRegistrationError(
+      'ticket_response',
+      'invalid_ticket_response',
+    )
   }
   return { registration: value.registration, ticket: value.ticket }
 }

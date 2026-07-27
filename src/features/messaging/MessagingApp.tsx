@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../../components/Button'
 import { StatePanel } from '../../components/StatePanel'
 import { useMiniAppBack } from '../../app/useMiniAppBack'
+import { formatXmtpAlertRegistrationError } from '../../lib/xmtp/alertRegistrationError'
 import {
   allowAutomaticEnsDiscovery,
   useEnsIdentity,
@@ -192,11 +193,9 @@ export function MessagingApp({
       return
     }
 
-    void syncMessagingAlerts().catch(() => {
+    void syncMessagingAlerts().catch((error: unknown) => {
       if (cancelled) return
-      setMessagingNotice(
-        'Farcaster alerts are on, but this inbox could not finish alert registration. Reopen Converge Mini online; if it persists, turn alerts off and on or remove and re-add the Mini App.',
-      )
+      setMessagingNotice(formatXmtpAlertRegistrationError(error))
     })
 
     return () => {

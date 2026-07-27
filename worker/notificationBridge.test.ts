@@ -406,6 +406,9 @@ describe('XMTP to Farcaster notification bridge', () => {
 
     expect(response.status).toBe(425)
     expect(response.headers.get('retry-after')).toBe('2')
+    await expect(response.json()).resolves.toEqual({
+      error: 'notification_token_pending',
+    })
     expect(storage.routeForFid(8531)).toBeUndefined()
     expect(upstreamFetch).not.toHaveBeenCalled()
   })
