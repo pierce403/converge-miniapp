@@ -27,14 +27,15 @@ describe('XMTP to Farcaster notification bridge', () => {
   it('mints an app-approved ticket with a server-owned callback and opaque route', async () => {
     const storage = fakeBridgeDatabase()
     storage.seedSubscription(8531, 9152)
-    const upstreamFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
-      data: {
-        expiresAt: '2026-07-18T12:05:00.000Z',
-        signatureText: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
-        token: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
-      },
-      success: true,
-    }))
+    const upstreamFetch = vi.fn<typeof fetch>().mockImplementation(async () =>
+      Response.json({
+        data: {
+          expiresAt: '2026-07-18T12:05:00.000Z',
+          signatureText: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
+          token: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
+        },
+        success: true,
+      }))
     const response = await handleNotificationUserApi(
       jsonRequest('/api/me/notifications/xmtp-ticket', {
         registration: requestedRegistration(),
@@ -59,7 +60,11 @@ describe('XMTP to Farcaster notification bridge', () => {
       preferences: { minimalPayloadOnly: true, plaintextPreview: false },
       xmtp: { topicSource: 'conversations.hmacKeys' },
     })
+    expect(
+      (body.registration.xmtp as { topics: unknown[] }).topics,
+    ).toEqual(requestedRegistration().xmtp.topics)
     expect(JSON.stringify(body)).not.toMatch(/sender|message|conversationId/u)
+    expect(JSON.stringify(body)).not.toContain('/xmtp/mls/1/w-')
     expect(upstreamFetch).toHaveBeenCalledWith(
       'https://vapid.party/api/apps/app_12345678/xmtp/enrollment-ticket',
       expect.objectContaining({
@@ -73,17 +78,65 @@ describe('XMTP to Farcaster notification bridge', () => {
     )
   })
 
+  it.each([
+    {
+      mutate(registration: ReturnType<typeof requestedRegistration>) {
+        registration.xmtp.topics = []
+      },
+      name: 'an empty topic snapshot',
+    },
+    {
+      mutate(registration: ReturnType<typeof requestedRegistration>) {
+        registration.xmtp.topics.push({
+          hmacKeys: [],
+          topic: `/xmtp/mls/1/w-${registration.identity.installationId}/proto`,
+        })
+      },
+      name: 'a legacy installation welcome topic',
+    },
+    {
+      mutate(registration: ReturnType<typeof requestedRegistration>) {
+        registration.xmtp.topics[0]!.topic =
+          `/xmtp/mls/1/g-${'AB'.repeat(16)}/proto`
+      },
+      name: 'a non-canonical group topic',
+    },
+    {
+      mutate(registration: ReturnType<typeof requestedRegistration>) {
+        registration.xmtp.topics[0]!.hmacKeys = []
+      },
+      name: 'a group topic without HMAC keys',
+    },
+  ])('rejects $name before allocating a route', async ({ mutate }) => {
+    const storage = fakeBridgeDatabase()
+    storage.seedSubscription(8531, 9152)
+    const registration = requestedRegistration()
+    mutate(registration)
+    const upstreamFetch = vi.fn<typeof fetch>()
+    const response = await handleNotificationUserApi(
+      jsonRequest('/api/me/notifications/xmtp-ticket', { registration }),
+      environment(storage.database),
+      8531,
+      dependencies({ fetch: upstreamFetch }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(storage.routeForFid(8531)).toBeUndefined()
+    expect(upstreamFetch).not.toHaveBeenCalled()
+  })
+
   it('keeps one stable opaque route while vapid.party replaces the active installation', async () => {
     const storage = fakeBridgeDatabase()
     storage.seedSubscription(8531, 9152)
-    const upstreamFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
-      data: {
-        expiresAt: '2026-07-18T12:05:00.000Z',
-        signatureText: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
-        token: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
-      },
-      success: true,
-    }))
+    const upstreamFetch = vi.fn<typeof fetch>().mockImplementation(async () =>
+      Response.json({
+        data: {
+          expiresAt: '2026-07-18T12:05:00.000Z',
+          signatureText: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
+          token: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
+        },
+        success: true,
+      }))
     const env = environment(storage.database)
 
     await handleNotificationUserApi(
@@ -111,11 +164,7 @@ describe('XMTP to Farcaster notification bridge', () => {
 
     const changed = requestedRegistration()
     changed.identity.installationId = 'ef'.repeat(32)
-    changed.xmtp.topics[1] = {
-      hmacKeys: [],
-      topic: `/xmtp/mls/1/w-${changed.identity.installationId}/proto`,
-    }
-    await handleNotificationUserApi(
+    const changedResponse = await handleNotificationUserApi(
       jsonRequest('/api/me/notifications/xmtp-ticket', { registration: changed }),
       env,
       8531,
@@ -124,6 +173,7 @@ describe('XMTP to Farcaster notification bridge', () => {
         randomBytes: () => new Uint8Array(32).fill(7),
       }),
     )
+    expect(changedResponse.status).toBe(200)
     expect(storage.routeForFid(8531)).toBe(firstHandle)
   })
 
@@ -147,7 +197,7 @@ describe('XMTP to Farcaster notification bridge', () => {
           hmacKeysRegistered: 1,
           identityId: 'identity',
           subscriptionId: 'subscription',
-          topicsRegistered: 2,
+          topicsRegistered: 1,
         },
         success: true,
       }, { status: 201 }))
@@ -388,9 +438,11 @@ describe('XMTP to Farcaster notification bridge', () => {
     storage.seedRoute(8531, inboxHandle)
     storage.seedSubscription(8531, 9152)
     const providerFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
-      invalidTokens: [],
-      rateLimitedTokens: [],
-      successfulTokens: ['farcaster-token'],
+      result: {
+        invalidTokens: [],
+        rateLimitedTokens: [],
+        successfulTokens: ['farcaster-token'],
+      },
     }))
     const verify = vi.fn().mockResolvedValue(true)
     const deps = dependencies({
@@ -485,9 +537,11 @@ describe('XMTP to Farcaster notification bridge', () => {
     storage.seedRoute(8531, inboxHandle)
     storage.seedSubscription(8531, 9152)
     const providerFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
-      invalidTokens: [],
-      rateLimitedTokens: ['farcaster-token'],
-      successfulTokens: [],
+      result: {
+        invalidTokens: [],
+        rateLimitedTokens: ['farcaster-token'],
+        successfulTokens: [],
+      },
     }, { headers: { 'retry-after': '45' } }))
     const response = await handleXmtpNotificationCallback(
       callbackRequest('4c0f7a8e-b9a1-4d8e-a9cc-123456789abc', inboxHandle),
@@ -506,6 +560,293 @@ describe('XMTP to Farcaster notification bridge', () => {
     expect(response.headers.get('retry-after')).toBe('45')
   })
 
+  it.each([
+    'domain_mismatch',
+    'no_webhook_url',
+    'unknown',
+  ] as const)('retries the %s Farcaster per-token failure', async (reason) => {
+    const { response, storage } = await runFarcasterResponse({
+      result: {
+        failedTokens: [{ fid: 8531, reason, token: 'farcaster-token' }],
+        invalidTokens: [],
+        rateLimitedTokens: [],
+        successfulTokens: [],
+      },
+    })
+
+    expect(response.status).toBe(503)
+    expect(storage.hasSubscription(8531, 9152)).toBe(true)
+    expect(storage.routeForFid(8531)).toBeDefined()
+  })
+
+  it('cleans up terminal tokens but preserves retryable failures in a mixed response', async () => {
+    const storage = fakeBridgeDatabase()
+    const inboxHandle = base64url(new Uint8Array(32).fill(11))
+    storage.seedRoute(8531, inboxHandle)
+    storage.seedSubscription(8531, 9152)
+    storage.seedSubscription(8531, 9153)
+    storage.seedSubscription(8531, 9154)
+    storage.seedSubscription(8531, 9155)
+    const decrypt = vi.fn()
+      .mockResolvedValueOnce({ token: 'token-ok', url: deliveryUrl })
+      .mockResolvedValueOnce({ token: 'token-invalid', url: deliveryUrl })
+      .mockResolvedValueOnce({ token: 'token-target', url: deliveryUrl })
+      .mockResolvedValueOnce({ token: 'token-operational', url: deliveryUrl })
+    const providerFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      result: {
+        failedTokens: [
+          { fid: 8531, reason: 'invalid_token', token: 'token-invalid' },
+          { reason: 'target_url_mismatch', token: 'token-target' },
+          { reason: 'domain_mismatch', token: 'token-operational' },
+        ],
+        invalidTokens: ['token-invalid'],
+        rateLimitedTokens: [],
+        successfulTokens: ['token-ok'],
+      },
+    }))
+    const response = await handleXmtpNotificationCallback(
+      callbackRequest('bc0f7a8e-b9a1-4d8e-a9cc-123456789abc', inboxHandle),
+      environment(storage.database),
+      dependencies({
+        decryptNotificationDetails: decrypt,
+        fetch: providerFetch,
+        verifyCallbackSignature: vi.fn().mockResolvedValue(true),
+      }),
+    )
+
+    expect(response.status).toBe(503)
+    expect(storage.hasSubscription(8531, 9152)).toBe(true)
+    expect(storage.hasSubscription(8531, 9153)).toBe(false)
+    expect(storage.hasSubscription(8531, 9154)).toBe(false)
+    expect(storage.hasSubscription(8531, 9155)).toBe(true)
+    expect(storage.routeForFid(8531)).toBe(inboxHandle)
+  })
+
+  it('reuses the stable Farcaster notification ID when a delivery is retried', async () => {
+    const storage = fakeBridgeDatabase()
+    const inboxHandle = base64url(new Uint8Array(32).fill(12))
+    storage.seedRoute(8531, inboxHandle)
+    storage.seedSubscription(8531, 9152)
+    const providerFetch = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({
+        result: {
+          failedTokens: [{
+            reason: 'domain_mismatch',
+            token: 'farcaster-token',
+          }],
+          invalidTokens: [],
+          rateLimitedTokens: [],
+          successfulTokens: [],
+        },
+      }))
+      .mockResolvedValueOnce(Response.json({
+        result: {
+          invalidTokens: [],
+          rateLimitedTokens: [],
+          successfulTokens: ['farcaster-token'],
+        },
+      }))
+    const deps = dependencies({
+      decryptNotificationDetails: vi.fn().mockResolvedValue({
+        token: 'farcaster-token',
+        url: deliveryUrl,
+      }),
+      fetch: providerFetch,
+      verifyCallbackSignature: vi.fn().mockResolvedValue(true),
+    })
+    const deliveryId = 'cc0f7a8e-b9a1-4d8e-a9cc-123456789abc'
+    const first = await handleXmtpNotificationCallback(
+      callbackRequest(deliveryId, inboxHandle),
+      environment(storage.database),
+      deps,
+    )
+    const retry = await handleXmtpNotificationCallback(
+      callbackRequest(deliveryId, inboxHandle),
+      environment(storage.database),
+      deps,
+    )
+
+    expect(first.status).toBe(503)
+    expect(retry.status).toBe(204)
+    expect(providerFetch).toHaveBeenCalledTimes(2)
+    const notificationIds = providerFetch.mock.calls.map((call) =>
+      JSON.parse(call[1]?.body as string).notificationId)
+    expect(notificationIds).toEqual([
+      `xmtp.${deliveryId}`,
+      `xmtp.${deliveryId}`,
+    ])
+  })
+
+  it.each([
+    {
+      body: {
+        invalidTokens: [],
+        rateLimitedTokens: [],
+        successfulTokens: ['farcaster-token'],
+      },
+      name: 'the obsolete flat response',
+    },
+    {
+      body: {
+        result: {
+          invalidTokens: [],
+          successfulTokens: ['farcaster-token'],
+        },
+      },
+      name: 'a missing legacy outcome array',
+    },
+    {
+      body: {
+        result: {
+          failedTokens: {},
+          invalidTokens: [],
+          rateLimitedTokens: [],
+          successfulTokens: ['farcaster-token'],
+        },
+      },
+      name: 'a non-array failedTokens value',
+    },
+    {
+      body: {
+        result: {
+          failedTokens: [{
+            reason: 'future_reason',
+            token: 'farcaster-token',
+          }],
+          invalidTokens: [],
+          rateLimitedTokens: [],
+          successfulTokens: [],
+        },
+      },
+      name: 'an unrecognized failure reason',
+    },
+    {
+      body: {
+        result: {
+          failedTokens: [{
+            fid: 0,
+            reason: 'domain_mismatch',
+            token: 'farcaster-token',
+          }],
+          invalidTokens: [],
+          rateLimitedTokens: [],
+          successfulTokens: [],
+        },
+      },
+      name: 'a non-positive failed-token FID',
+    },
+    {
+      body: {
+        result: {
+          invalidTokens: [],
+          rateLimitedTokens: [],
+          successfulTokens: ['farcaster-token', 'farcaster-token'],
+        },
+      },
+      name: 'a duplicate legacy outcome',
+    },
+    {
+      body: {
+        result: {
+          invalidTokens: ['farcaster-token'],
+          rateLimitedTokens: [],
+          successfulTokens: ['farcaster-token'],
+        },
+      },
+      name: 'conflicting legacy outcomes',
+    },
+    {
+      body: {
+        result: {
+          failedTokens: [
+            { reason: 'domain_mismatch', token: 'farcaster-token' },
+            { reason: 'domain_mismatch', token: 'farcaster-token' },
+          ],
+          invalidTokens: [],
+          rateLimitedTokens: [],
+          successfulTokens: [],
+        },
+      },
+      name: 'a duplicate failed-token outcome',
+    },
+    {
+      body: {
+        result: {
+          failedTokens: [{
+            reason: 'domain_mismatch',
+            token: 'farcaster-token',
+          }],
+          invalidTokens: [],
+          rateLimitedTokens: [],
+          successfulTokens: ['farcaster-token'],
+        },
+      },
+      name: 'an operational failure reported as successful',
+    },
+    {
+      body: {
+        result: {
+          failedTokens: [{
+            reason: 'invalid_token',
+            token: 'farcaster-token',
+          }],
+          invalidTokens: [],
+          rateLimitedTokens: [],
+          successfulTokens: [],
+        },
+      },
+      name: 'an invalid failure without its legacy mirror',
+    },
+    {
+      body: {
+        result: {
+          invalidTokens: [],
+          rateLimitedTokens: [],
+          successfulTokens: [],
+        },
+      },
+      name: 'an unaccounted requested token',
+    },
+    {
+      body: {
+        result: {
+          failedTokens: [{
+            reason: 'domain_mismatch',
+            token: 'unrequested-token',
+          }],
+          invalidTokens: [],
+          rateLimitedTokens: [],
+          successfulTokens: [],
+        },
+      },
+      name: 'an unrequested failed token',
+    },
+  ])('retries malformed Farcaster accounting: $name', async ({ body }) => {
+    const { response, storage } = await runFarcasterResponse(body)
+
+    expect(response.status).toBe(503)
+    expect(storage.hasSubscription(8531, 9152)).toBe(true)
+  })
+
+  it('revokes the opaque route after its last token has a target URL mismatch', async () => {
+    const { response, storage } = await runFarcasterResponse({
+      result: {
+        failedTokens: [{
+          fid: 8531,
+          reason: 'target_url_mismatch',
+          token: 'farcaster-token',
+        }],
+        invalidTokens: [],
+        rateLimitedTokens: [],
+        successfulTokens: [],
+      },
+    })
+
+    expect(response.status).toBe(410)
+    expect(storage.hasSubscription(8531, 9152)).toBe(false)
+    expect(storage.routeForFid(8531)).toBeUndefined()
+  })
+
   it('revokes the opaque route after the last Farcaster token becomes invalid', async () => {
     const storage = fakeBridgeDatabase()
     const inboxHandle = base64url(new Uint8Array(32).fill(2))
@@ -517,9 +858,16 @@ describe('XMTP to Farcaster notification bridge', () => {
         url: deliveryUrl,
       }),
       fetch: vi.fn<typeof fetch>().mockResolvedValue(Response.json({
-        invalidTokens: ['farcaster-token'],
-        rateLimitedTokens: [],
-        successfulTokens: [],
+        result: {
+          failedTokens: [{
+            fid: 8531,
+            reason: 'invalid_token',
+            token: 'farcaster-token',
+          }],
+          invalidTokens: ['farcaster-token'],
+          rateLimitedTokens: [],
+          successfulTokens: [],
+        },
       })),
       verifyCallbackSignature: vi.fn().mockResolvedValue(true),
     })
@@ -657,10 +1005,6 @@ function requestedRegistration() {
           hmacKeys: [{ epoch: 7, key: base64url(new Uint8Array([1, 2, 3])) }],
           topic: `/xmtp/mls/1/g-${'12'.repeat(16)}/proto`,
         },
-        {
-          hmacKeys: [],
-          topic: `/xmtp/mls/1/w-${installationId}/proto`,
-        },
       ],
     },
   }
@@ -707,6 +1051,32 @@ function stalledJsonResponse(signal: AbortSignal): Response {
   }), {
     headers: { 'content-type': 'application/json' },
   })
+}
+
+async function runFarcasterResponse(
+  body: unknown,
+  deliveryId = 'ac0f7a8e-b9a1-4d8e-a9cc-123456789abc',
+) {
+  const storage = fakeBridgeDatabase()
+  const inboxHandle = base64url(new Uint8Array(32).fill(10))
+  storage.seedRoute(8531, inboxHandle)
+  storage.seedSubscription(8531, 9152)
+  const providerFetch = vi.fn<typeof fetch>().mockResolvedValue(
+    Response.json(body),
+  )
+  const response = await handleXmtpNotificationCallback(
+    callbackRequest(deliveryId, inboxHandle),
+    environment(storage.database),
+    dependencies({
+      decryptNotificationDetails: vi.fn().mockResolvedValue({
+        token: 'farcaster-token',
+        url: deliveryUrl,
+      }),
+      fetch: providerFetch,
+      verifyCallbackSignature: vi.fn().mockResolvedValue(true),
+    }),
+  )
+  return { inboxHandle, providerFetch, response, storage }
 }
 
 type FakeSubscription = {
@@ -810,7 +1180,10 @@ function fakeBridgeDatabase() {
           deliveries.set(deliveryId, { inboxHandle, lease, status: 'processing' })
           changes = 1
         }
-      } else if (this.query.includes("SET status = 'processing'")) {
+      } else if (
+        this.query.includes('UPDATE xmtp_notification_deliveries') &&
+        this.query.includes("status = 'processing'")
+      ) {
         const [deliveryId, lease, current] = this.values as [string, number, number]
         const row = deliveries.get(deliveryId)
         if (row && row.status !== 'delivered' &&
@@ -848,8 +1221,14 @@ function fakeBridgeDatabase() {
         const route = routesByFid.get(fid)
         const deleteExactHandle = this.values.length === 2 &&
           route?.handle === this.values[1]
-        const deleteUnconditional = this.values.length === 1
-        if (route && (deleteExactHandle || deleteUnconditional)) {
+        const deleteIfOrphaned = this.query.includes('NOT EXISTS') &&
+          ![...subscriptions.values()].some((row) => row.fid === fid)
+        const deleteUnconditional = this.values.length === 1 &&
+          !this.query.includes('NOT EXISTS')
+        if (
+          route &&
+          (deleteExactHandle || deleteIfOrphaned || deleteUnconditional)
+        ) {
           routesByFid.delete(fid)
           routesByHandle.delete(route.handle)
           changes = 1
@@ -870,6 +1249,8 @@ function fakeBridgeDatabase() {
 
   return {
     database,
+    hasSubscription: (fid: number, appFid: number) =>
+      subscriptions.has(`${fid}:${appFid}`),
     routeForFid: (fid: number) => routesByFid.get(fid)?.handle,
     removeRoute(fid: number) {
       const route = routesByFid.get(fid)

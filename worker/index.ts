@@ -62,6 +62,7 @@ export type AppEnv = {
   FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE?: string
   FARCASTER_HUB_API_KEY?: string
   FARCASTER_HUB_URL?: string
+  FARCASTER_NOTIFICATIONS_ENABLED?: string
   FARCASTER_NOTIFICATION_DELIVERY_URLS?: string
   FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1?: string
   IDENTITY_RATE_LIMITER?: RateLimit
@@ -133,13 +134,20 @@ export async function handleRequest(
   }
 
   if (url.pathname === '/api/notifications/status') {
-    const canonicalOrigin = new URL(env.CANONICAL_ORIGIN).origin
+    const canonicalUrl = new URL(env.CANONICAL_ORIGIN)
+    const canonicalOrigin = canonicalUrl.origin
     if (env.APP_ENV === 'production' && url.origin !== canonicalOrigin) {
       return jsonError('not_found', 404)
     }
     if (request.method !== 'GET') return methodNotAllowed('GET')
+    const association = accountAssociation(env, canonicalUrl.hostname)
     return Response.json(
-      { available: notificationBridgeConfigured(env) },
+      {
+        available: notificationRolloutAvailable(
+          env,
+          association.state === 'valid',
+        ),
+      },
       { headers: noStoreJsonHeaders },
     )
   }
@@ -679,7 +687,7 @@ function farcasterManifest(request: Request, env: AppEnv): Response {
       tagline: 'Private messages in Farcaster',
       tags: ['xmtp', 'messaging', 'privacy', 'farcaster'],
       version: '1',
-      ...(association.state === 'valid' && notificationBridgeConfigured(env)
+      ...(notificationRolloutAvailable(env, association.state === 'valid')
         ? { webhookUrl: `${origin}/api/farcaster/webhook` }
         : {}),
     },
@@ -692,6 +700,17 @@ function farcasterManifest(request: Request, env: AppEnv): Response {
     return new Response(null, { headers: responseHeaders })
   }
   return Response.json(body, { headers: responseHeaders })
+}
+
+function notificationRolloutAvailable(
+  env: AppEnv,
+  accountAssociationValid: boolean,
+): boolean {
+  return (
+    accountAssociationValid &&
+    env.FARCASTER_NOTIFICATIONS_ENABLED === 'true' &&
+    notificationBridgeConfigured(env)
+  )
 }
 
 function accountAssociation(env: AppEnv, canonicalDomain: string) {

@@ -21,6 +21,17 @@ const CALLBACK_IDENTIFIER = /^[A-Za-z0-9_-]{8,120}$/u
 const HEX_32 = /^[0-9a-f]{64}$/u
 const GROUP_TOPIC = /^\/xmtp\/mls\/1\/g-[0-9a-f]{32}\/proto$/u
 const VAPID_TICKET = /^vpxet1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u
+const FARCASTER_FAILED_TOKEN_REASONS = [
+  'domain_mismatch',
+  'target_url_mismatch',
+  'no_webhook_url',
+  'invalid_token',
+  'unknown',
+] as const
+type FarcasterFailedTokenReason =
+  typeof FARCASTER_FAILED_TOKEN_REASONS[number]
+const FARCASTER_FAILED_TOKEN_REASON_SET: ReadonlySet<string> =
+  new Set(FARCASTER_FAILED_TOKEN_REASONS)
 
 const responseHeaders = {
   'cache-control': 'no-store',
@@ -633,7 +644,7 @@ function parseTicketRegistration(
     return null
   }
   const identity = parseIdentity(registration.identity)
-  const xmtp = parseRequestedXmtp(registration.xmtp, identity?.installationId)
+  const xmtp = parseRequestedXmtp(registration.xmtp)
   if (
     registration.version !== 1 ||
     !identity ||
@@ -709,7 +720,6 @@ function parseCompleteRegistration(
   ) return null
   const xmtp = parseRequestedXmtp(
     { env: value.xmtp.env, topics: value.xmtp.topics },
-    identity.installationId,
   )
   if (!xmtp) return null
   return {
@@ -743,10 +753,8 @@ function parseIdentity(value: unknown): RegistrationIdentity | null {
 
 function parseRequestedXmtp(
   value: unknown,
-  installationId: string | undefined,
 ): Pick<XmtpCallbackRegistration['xmtp'], 'env' | 'topics'> | null {
   if (
-    !installationId ||
     !isExactRecord(value, ['env', 'topics']) ||
     value.env !== 'production' ||
     !Array.isArray(value.topics) ||
@@ -756,9 +764,7 @@ function parseRequestedXmtp(
 
   const topics: XmtpTopic[] = []
   const seenTopics = new Set<string>()
-  let welcomeTopics = 0
   let persistedRows = 0
-  const expectedWelcomeTopic = `/xmtp/mls/1/w-${installationId}/proto`
 
   for (const candidate of value.topics) {
     if (
@@ -770,12 +776,9 @@ function parseRequestedXmtp(
     ) return null
     seenTopics.add(candidate.topic)
 
-    const isWelcome = candidate.topic === expectedWelcomeTopic
-    if (isWelcome) welcomeTopics += 1
     if (
-      (!isWelcome && !GROUP_TOPIC.test(candidate.topic)) ||
-      (isWelcome && candidate.hmacKeys.length !== 0) ||
-      (!isWelcome && candidate.hmacKeys.length === 0)
+      !GROUP_TOPIC.test(candidate.topic) ||
+      candidate.hmacKeys.length === 0
     ) return null
 
     const epochs = new Set<number>()
@@ -805,12 +808,6 @@ function parseRequestedXmtp(
     persistedRows += 1 + hmacKeys.length
     if (persistedRows > MAX_PERSISTED_TOPIC_ROWS) return null
   }
-  if (welcomeTopics !== 1) return null
-  topics.sort((left, right) => {
-    if (left.topic === expectedWelcomeTopic) return 1
-    if (right.topic === expectedWelcomeTopic) return -1
-    return left.topic.localeCompare(right.topic)
-  })
   return { env: 'production', topics }
 }
 
@@ -1053,10 +1050,10 @@ async function deliverFarcasterNotification(
         configuration,
         dependencies,
       )
-      if (outcome.invalidTokens.length > 0) {
+      if (outcome.tokensToDelete.length > 0) {
         const statements: D1PreparedStatement[] = []
-        for (const invalidToken of outcome.invalidTokens) {
-          for (const row of tokenRows.get(invalidToken) ?? []) {
+        for (const tokenToDelete of outcome.tokensToDelete) {
+          for (const row of tokenRows.get(tokenToDelete) ?? []) {
             statements.push(database.prepare(`
               DELETE FROM farcaster_notification_subscriptions
               WHERE fid = ?1 AND app_fid = ?2
@@ -1079,6 +1076,9 @@ async function deliverFarcasterNotification(
       if (outcome.rateLimitedTokens.length > 0) {
         throw new RetryableDeliveryError(429, outcome.retryAfterSeconds)
       }
+      if (outcome.operationalFailureTokens.length > 0) {
+        throw new RetryableDeliveryError(503)
+      }
     }
   }
   const remaining = await database.prepare(`
@@ -1098,9 +1098,10 @@ async function sendFarcasterNotificationBatch(
   configuration: BridgeConfiguration,
   dependencies: NotificationBridgeDependencies,
 ): Promise<{
-  invalidTokens: string[]
+  operationalFailureTokens: string[]
   rateLimitedTokens: string[]
   retryAfterSeconds?: number
+  tokensToDelete: string[]
 }> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), FARCASTER_TIMEOUT_MS)
@@ -1132,32 +1133,75 @@ async function sendFarcasterNotificationBatch(
       )
     }
     const body = await readJsonResponse(response, UPSTREAM_BODY_LIMIT_BYTES)
-    if (!isRecord(body)) throw new RetryableDeliveryError(503)
-    const successfulTokens = stringArray(body.successfulTokens)
-    const invalidTokens = stringArray(body.invalidTokens)
-    const rateLimitedTokens = stringArray(body.rateLimitedTokens)
+    if (!isRecord(body) || !isRecord(body.result)) {
+      throw new RetryableDeliveryError(503)
+    }
+    const result = body.result
+    const successfulTokens = stringArray(result.successfulTokens)
+    const invalidTokens = stringArray(result.invalidTokens)
+    const rateLimitedTokens = stringArray(result.rateLimitedTokens)
+    const failedTokens = farcasterFailedTokens(result.failedTokens)
     if (!successfulTokens || !invalidTokens || !rateLimitedTokens) {
       throw new RetryableDeliveryError(503)
     }
+    if (failedTokens === null) throw new RetryableDeliveryError(503)
 
     const expected = new Set(tokens)
-    const seen = new Set<string>()
-    for (const token of [
-      ...successfulTokens,
-      ...invalidTokens,
-      ...rateLimitedTokens,
-    ]) {
-      if (!expected.has(token) || seen.has(token)) {
+    const legacyOutcomes = new Map<
+      string,
+      'invalid' | 'rate-limited' | 'successful'
+    >()
+    for (const [outcome, outcomeTokens] of [
+      ['successful', successfulTokens],
+      ['invalid', invalidTokens],
+      ['rate-limited', rateLimitedTokens],
+    ] as const) {
+      for (const token of outcomeTokens) {
+        if (!expected.has(token) || legacyOutcomes.has(token)) {
+          throw new RetryableDeliveryError(503)
+        }
+        legacyOutcomes.set(token, outcome)
+      }
+    }
+
+    const failedOutcomes = new Map<string, FarcasterFailedTokenReason>()
+    const tokensToDelete = new Set(invalidTokens)
+    const operationalFailureTokens: string[] = []
+    for (const failedToken of failedTokens) {
+      if (
+        !expected.has(failedToken.token) ||
+        failedOutcomes.has(failedToken.token)
+      ) {
         throw new RetryableDeliveryError(503)
       }
-      seen.add(token)
+      const legacyOutcome = legacyOutcomes.get(failedToken.token)
+      if (
+        (failedToken.reason === 'invalid_token' &&
+          legacyOutcome !== 'invalid') ||
+        (failedToken.reason !== 'invalid_token' &&
+          legacyOutcome !== undefined)
+      ) {
+        throw new RetryableDeliveryError(503)
+      }
+      failedOutcomes.set(failedToken.token, failedToken.reason)
+      if (failedToken.reason === 'target_url_mismatch') {
+        tokensToDelete.add(failedToken.token)
+      } else if (failedToken.reason !== 'invalid_token') {
+        operationalFailureTokens.push(failedToken.token)
+      }
     }
-    if (seen.size !== expected.size) throw new RetryableDeliveryError(503)
+    for (const token of expected) {
+      if (!legacyOutcomes.has(token) && !failedOutcomes.has(token)) {
+        throw new RetryableDeliveryError(503)
+      }
+    }
+
     const retryAfter = retryAfterSeconds(response.headers.get('retry-after'))
     return {
-      invalidTokens,
+      operationalFailureTokens,
       rateLimitedTokens,
       ...(retryAfter === undefined ? {} : { retryAfterSeconds: retryAfter }),
+      tokensToDelete: [...tokensToDelete],
     }
   } finally {
     clearTimeout(timeout)
@@ -1399,6 +1443,32 @@ function stringArray(value: unknown): string[] | null {
     return null
   }
   return value
+}
+
+type FarcasterFailedToken = {
+  reason: FarcasterFailedTokenReason
+  token: string
+}
+
+function farcasterFailedTokens(value: unknown): FarcasterFailedToken[] | null {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return null
+  const parsed: FarcasterFailedToken[] = []
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      typeof item.token !== 'string' ||
+      typeof item.reason !== 'string' ||
+      !FARCASTER_FAILED_TOKEN_REASON_SET.has(item.reason) ||
+      ('fid' in item &&
+        (!Number.isSafeInteger(item.fid) || (item.fid as number) <= 0))
+    ) return null
+    parsed.push({
+      reason: item.reason as FarcasterFailedTokenReason,
+      token: item.token,
+    })
+  }
+  return parsed
 }
 
 function retryAfterSeconds(value: string | null): number | undefined {

@@ -381,7 +381,7 @@ export class XmtpMessagingSession {
       await this.client.preferences.sync()
       this.#throwIfTerminal()
       const conversations = await this.client.conversations.list({
-        consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+        consentStates: [ConsentState.Allowed],
         includeDuplicateDms: true,
       })
       this.#throwIfTerminal()
@@ -407,7 +407,6 @@ export class XmtpMessagingSession {
       return await buildXmtpPushSnapshot({
         conversations: {
           hmacKeys: async () => merged,
-          topic: this.client.conversations.topic,
         },
         inboxId: this.client.inboxId,
         installationId: this.client.installationId,

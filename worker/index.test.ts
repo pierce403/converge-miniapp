@@ -79,31 +79,63 @@ describe('worker API', () => {
     })
   })
 
-  it('reports notification readiness without exposing token state', async () => {
+  it('reports notifications only with ownership, exact rollout opt-in, and complete configuration', async () => {
+    const configuredEnvironment = notificationEnvironment()
     const unavailable = await handleRequest(
       new Request('https://miniapp.converge.cv/api/notifications/status'),
       environment(),
     )
-    const preferences = fakePreferences()
+    const rolloutOff = await handleRequest(
+      new Request('https://miniapp.converge.cv/api/notifications/status'),
+      environment(configuredEnvironment),
+    )
+    const inexactRollout = await handleRequest(
+      new Request('https://miniapp.converge.cv/api/notifications/status'),
+      environment({
+        ...configuredEnvironment,
+        FARCASTER_NOTIFICATIONS_ENABLED: 'TRUE',
+      }),
+    )
+    const incomplete = await handleRequest(
+      new Request('https://miniapp.converge.cv/api/notifications/status'),
+      environment({ FARCASTER_NOTIFICATIONS_ENABLED: 'true' }),
+    )
+    const missingAssociation = await handleRequest(
+      new Request('https://miniapp.converge.cv/api/notifications/status'),
+      environment({
+        ...configuredEnvironment,
+        FARCASTER_NOTIFICATIONS_ENABLED: 'true',
+      }),
+    )
+    const wrongDomainAssociation = await handleRequest(
+      new Request('https://miniapp.converge.cv/api/notifications/status'),
+      environment({
+        ...association,
+        ...configuredEnvironment,
+        FARCASTER_ACCOUNT_ASSOCIATION_PAYLOAD:
+          'eyJkb21haW4iOiJ3cm9uZy5leGFtcGxlIn0',
+        FARCASTER_NOTIFICATIONS_ENABLED: 'true',
+      }),
+    )
     const available = await handleRequest(
       new Request('https://miniapp.converge.cv/api/notifications/status'),
       environment({
-        FARCASTER_HUB_API_KEY: 'neynar-key',
-        FARCASTER_HUB_URL: 'https://hub-api.neynar.com',
-        FARCASTER_NOTIFICATION_DELIVERY_URLS:
-          'https://api.farcaster.xyz/v1/frame-notifications',
-        FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1:
-          Buffer.alloc(32, 1).toString('base64url'),
-        PREFERENCES: preferences.database,
-        VAPID_PARTY_APP_ID: 'app_12345678',
-        VAPID_PARTY_APP_SECRET: 'app-secret',
-        VAPID_PARTY_ORIGIN: 'https://vapid.party',
-        VAPID_PARTY_PUBLIC_KEY:
-          Buffer.from([4, ...new Uint8Array(64).fill(2)]).toString('base64url'),
+        ...association,
+        ...configuredEnvironment,
+        FARCASTER_NOTIFICATIONS_ENABLED: 'true',
       }),
     )
 
     await expect(unavailable.json()).resolves.toEqual({ available: false })
+    await expect(rolloutOff.json()).resolves.toEqual({ available: false })
+    await expect(inexactRollout.json()).resolves.toEqual({ available: false })
+    await expect(incomplete.json()).resolves.toEqual({ available: false })
+    await expect(missingAssociation.json()).resolves.toEqual({
+      available: false,
+    })
+    await expect(wrongDomainAssociation.json()).resolves.toEqual({
+      available: false,
+    })
     await expect(available.json()).resolves.toEqual({ available: true })
     expect(available.headers.get('cache-control')).toBe('no-store')
   })
@@ -800,6 +832,24 @@ function fakeRateLimiter(success = true): RateLimit {
   }
 }
 
+function notificationEnvironment(): Partial<AppEnv> {
+  const preferences = fakePreferences()
+  return {
+    FARCASTER_HUB_API_KEY: 'neynar-key',
+    FARCASTER_HUB_URL: 'https://hub-api.neynar.com',
+    FARCASTER_NOTIFICATION_DELIVERY_URLS:
+      'https://api.farcaster.xyz/v1/frame-notifications',
+    FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1:
+      Buffer.alloc(32, 1).toString('base64url'),
+    PREFERENCES: preferences.database,
+    VAPID_PARTY_APP_ID: 'app_12345678',
+    VAPID_PARTY_APP_SECRET: 'app-secret',
+    VAPID_PARTY_ORIGIN: 'https://vapid.party',
+    VAPID_PARTY_PUBLIC_KEY:
+      Buffer.from([4, ...new Uint8Array(64).fill(2)]).toString('base64url'),
+  }
+}
+
 function identityDependencies() {
   return {
     discoverEnsIdentity: vi.fn().mockResolvedValue({
@@ -985,29 +1035,29 @@ describe('Farcaster manifest', () => {
     })
   })
 
-  it('advertises the exact webhook only after the full alert bridge is ready', async () => {
-    const preferences = fakePreferences()
+  it('advertises the exact webhook only after rollout and the full alert bridge are ready', async () => {
+    const configuredEnvironment = notificationEnvironment()
     const configured = await handleRequest(
       new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
       environment({
         ...association,
-        FARCASTER_HUB_API_KEY: 'neynar-key',
-        FARCASTER_HUB_URL: 'https://hub-api.neynar.com',
-        FARCASTER_NOTIFICATION_DELIVERY_URLS:
-          'https://api.farcaster.xyz/v1/frame-notifications',
-        FARCASTER_NOTIFICATION_ENCRYPTION_KEY_V1:
-          Buffer.alloc(32, 1).toString('base64url'),
-        PREFERENCES: preferences.database,
-        VAPID_PARTY_APP_ID: 'app_12345678',
-        VAPID_PARTY_APP_SECRET: 'app-secret',
-        VAPID_PARTY_ORIGIN: 'https://vapid.party',
-        VAPID_PARTY_PUBLIC_KEY:
-          Buffer.from([4, ...new Uint8Array(64).fill(2)]).toString('base64url'),
+        ...configuredEnvironment,
+        FARCASTER_NOTIFICATIONS_ENABLED: 'true',
+      }),
+    )
+    const rolloutOff = await handleRequest(
+      new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
+      environment({
+        ...association,
+        ...configuredEnvironment,
       }),
     )
     const incomplete = await handleRequest(
       new Request('https://miniapp.converge.cv/.well-known/farcaster.json'),
-      environment(association),
+      environment({
+        ...association,
+        FARCASTER_NOTIFICATIONS_ENABLED: 'true',
+      }),
     )
 
     await expect(configured.json()).resolves.toMatchObject({
@@ -1015,6 +1065,10 @@ describe('Farcaster manifest', () => {
         webhookUrl: 'https://miniapp.converge.cv/api/farcaster/webhook',
       },
     })
+    const rolloutOffManifest = await rolloutOff.json() as {
+      miniapp: { webhookUrl?: string }
+    }
+    expect(rolloutOffManifest.miniapp.webhookUrl).toBeUndefined()
     const incompleteManifest = await incomplete.json() as {
       miniapp: { webhookUrl?: string }
     }

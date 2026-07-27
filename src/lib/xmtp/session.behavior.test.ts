@@ -509,10 +509,11 @@ describe('XmtpMessagingSession behavior', () => {
     await session.close()
   })
 
-  it('builds push state from consented conversations including stitched DMs', async () => {
+  it('builds push state only from Allowed conversations including stitched DMs', async () => {
     const installationId = 'ef'.repeat(32)
     const firstGroupId = '12'.repeat(16)
     const secondGroupId = '34'.repeat(16)
+    const unknownGroupId = '56'.repeat(16)
     const firstConversation = dm({
       hmacKeys: vi.fn().mockResolvedValue(new Map([
         [firstGroupId, [{ epoch: 1n, key: new Uint8Array([1, 2]) }]],
@@ -524,6 +525,11 @@ describe('XmtpMessagingSession behavior', () => {
         [secondGroupId, [{ epoch: 2n, key: new Uint8Array([3, 4]) }]],
       ])),
     })
+    const unknownConversation = dm({
+      hmacKeys: vi.fn().mockResolvedValue(new Map([
+        [unknownGroupId, [{ epoch: 3n, key: new Uint8Array([5, 6]) }]],
+      ])),
+    })
     const fakeClient = client(dm())
     Object.assign(fakeClient, {
       env: 'production',
@@ -533,7 +539,13 @@ describe('XmtpMessagingSession behavior', () => {
       signWithInstallationKey: vi.fn(),
     })
     Object.assign(fakeClient.conversations, {
-      list: vi.fn().mockResolvedValue([firstConversation, stitchedConversation]),
+      list: vi.fn(async ({
+        consentStates,
+      }: { consentStates?: ConsentState[] }) => (
+        consentStates?.includes(ConsentState.Unknown)
+          ? [firstConversation, stitchedConversation, unknownConversation]
+          : [firstConversation, stitchedConversation]
+      )),
       topic: `/xmtp/mls/1/w-${installationId}/proto`,
     })
     Object.assign(fakeClient.preferences, {
@@ -545,9 +557,10 @@ describe('XmtpMessagingSession behavior', () => {
     const snapshot = await session.pushSnapshot()
 
     expect(fakeClient.conversations.list).toHaveBeenCalledWith({
-      consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+      consentStates: [ConsentState.Allowed],
       includeDuplicateDms: true,
     })
+    expect(unknownConversation.hmacKeys).not.toHaveBeenCalled()
     expect(fakeClient.preferences.sync).toHaveBeenCalledOnce()
     expect(snapshot.topics).toEqual([
       {
@@ -558,11 +571,8 @@ describe('XmtpMessagingSession behavior', () => {
         hmacKeys: [{ epoch: 2, key: 'AwQ' }],
         topic: `/xmtp/mls/1/g-${secondGroupId}/proto`,
       },
-      {
-        hmacKeys: [],
-        topic: `/xmtp/mls/1/w-${installationId}/proto`,
-      },
     ])
+    expect(JSON.stringify(snapshot.topics)).not.toContain('/w-')
   })
 
   it('serializes inbox and conversation syncs while exposing cached messages', async () => {

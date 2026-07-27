@@ -23,10 +23,7 @@ import type {
 } from './types'
 import type { ParsedConvosInvite } from '../../lib/convos/invite'
 import { ConvosInviteError } from '../../lib/convos/error'
-import {
-  disableXmtpAlertRegistration,
-  syncXmtpAlertRegistration,
-} from '../../lib/xmtp/alertRegistration'
+import { syncXmtpAlertRegistration } from '../../lib/xmtp/alertRegistration'
 
 export type ConnectionPhase =
   | 'idle'
@@ -131,6 +128,7 @@ export function useXmtpMessaging({
   const noticeRevisionRef = useRef(0)
   const alertSyncPromiseRef = useRef<Promise<void> | null>(null)
   const alertSyncDirtyRef = useRef(false)
+  const alertSyncGenerationRef = useRef(0)
   const alertSyncCallbackRef = useRef<() => Promise<void>>(async () => undefined)
   const alertsEnabledRef = useRef(false)
   const notificationFidRef = useRef(notificationFid)
@@ -187,6 +185,7 @@ export function useXmtpMessaging({
         alertSyncDirtyRef.current = false
         const session = sessionRef.current
         const fid = notificationFidRef.current
+        const generation = alertSyncGenerationRef.current
         if (!session || !fid) return
         try {
           await session.startPushTopicStream(() => {
@@ -194,8 +193,18 @@ export function useXmtpMessaging({
             alertSyncDirtyRef.current = true
             void alertSyncCallbackRef.current().catch(() => undefined)
           })
+          if (!alertsEnabledRef.current) return
+          if (
+            alertSyncGenerationRef.current !== generation ||
+            sessionRef.current !== session ||
+            notificationFidRef.current !== fid
+          ) {
+            alertSyncDirtyRef.current = true
+            continue
+          }
           await syncXmtpAlertRegistration(session, fid)
         } catch (error) {
+          if (!alertsEnabledRef.current) return
           if (alertsEnabledRef.current && sessionRef.current !== session) {
             alertSyncDirtyRef.current = true
             continue
@@ -227,12 +236,12 @@ export function useXmtpMessaging({
     }
   }, [notificationFid])
 
-  const disableAlerts = useCallback(async () => {
+  const disableAlerts = useCallback(() => {
     alertsEnabledRef.current = false
     alertSyncDirtyRef.current = false
-    await sessionRef.current?.stopPushTopicStream()
-    await alertSyncPromiseRef.current?.catch(() => undefined)
-    await disableXmtpAlertRegistration()
+    alertSyncGenerationRef.current += 1
+    void sessionRef.current?.stopPushTopicStream().catch(() => undefined)
+    void alertSyncPromiseRef.current?.catch(() => undefined)
   }, [])
 
   const upsertMessage = useCallback((message: MessageItem) => {

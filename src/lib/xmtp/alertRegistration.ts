@@ -21,6 +21,13 @@ export async function syncXmtpAlertRegistration(
   }
 
   const snapshot = await session.pushSnapshot()
+  // XMTP consent is inbox-wide, so retaining an old route here could alert on a
+  // now-denied topic. This account-wide cleanup is intentionally distinct from
+  // one Farcaster client disabling native notifications, which stays local.
+  if (snapshot.topics.length === 0) {
+    await revokeXmtpAlertRegistration()
+    return
+  }
   const ticketRequest: RequestInit = {
     body: JSON.stringify({
       registration: {
@@ -87,7 +94,9 @@ async function wait(milliseconds: number): Promise<void> {
   await new Promise((resolve) => window.setTimeout(resolve, milliseconds))
 }
 
-export async function disableXmtpAlertRegistration(): Promise<void> {
+// This removes the authenticated Farcaster account's shared XMTP route. A
+// single client disabling native notifications must only stop its local sync.
+export async function revokeXmtpAlertRegistration(): Promise<void> {
   const response = await sdk.quickAuth.fetch(SUBSCRIPTION_PATH, {
     cache: 'no-store',
     method: 'DELETE',

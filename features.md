@@ -62,7 +62,7 @@ Delivery sequence and gates:
 
 | Gate | Status | Required evidence before advancing |
 | --- | --- | --- |
-| 1. Freeze the live contracts and repair Converge safety issues | In progress | Current wrapped Farcaster outcomes parse correctly; unknown-consent topics are excluded; one Farcaster client's disable cannot revoke another client's route; an explicit rollout flag keeps credentials separate from public enablement; focused tests and the full gate pass. |
+| 1. Freeze the live contracts and repair Converge safety issues | Implemented locally | The current wrapped Farcaster outcomes parse correctly; only HMAC-backed `Allowed` topics are registered; a client-local disable cannot revoke another client's route; zero account-wide allowed topics revoke the shared route; and an exact rollout flag keeps credentials separate from public enablement. The 595-test full gate and a sequential preview-config dry run pass. Deployment through Workers Builds and live fail-closed verification remain before this gate is production-complete. |
 | 2. Verify the production vapid.party app and DNS binding | Planned | The configured app ID, secret, public key, exact `miniapp.converge.cv` profile domain, and published `_vapid-party` TXT challenge match; vapid.party reports fresh domain verification without replacing a retained secret unnecessarily. |
 | 3. Prove the two Workers together with rollout disabled | Planned | Preview D1 migration `0003` is applied; a real Browser SDK installation enrolls; a listener event yields one verified opaque callback; callback replay and wrong-key cases fail; no public alert prompt is exposed. |
 | 4. Configure and promote production token lifecycle | Blocked on credential | A reviewed current-Hub credential verifies signed Farcaster webhook app keys; production secrets and migrations are present; the exact canonical webhook is published; a real add/enable event creates one encrypted `(fid, appFid)` row. |
@@ -77,16 +77,21 @@ Promotion rules:
 - Push each repository checkpoint only after its full local gate passes. Deploy
   Converge through Cloudflare Workers Builds from `main`; deploy vapid.party
   only after its listener-specific production gate passes.
-- Treat Farcaster `failedTokens` caused by domain, target, or missing-webhook
-  drift as operational failures. Do not silently count them as delivered and
-  do not delete a token unless Farcaster explicitly marks it invalid.
-- Register only `Allowed` conversation topics plus the installation welcome
-  topic. Unknown/request conversations must not produce alerts before the
-  product exposes and accepts message requests.
+- Treat Farcaster `failedTokens` caused by domain or missing-webhook drift as
+  operational failures. Do not silently count them as delivered. Farcaster
+  documents `target_url_mismatch` as permanently invalidating the affected
+  token, so delete that token just like one returned in `invalidTokens`.
+- Register only HMAC-backed `Allowed` conversation topics. Do not register the
+  installation welcome topic: vapid.party treats every welcome as pushable,
+  while the minimal callback has no consent metadata with which Mini could
+  suppress an unknown/request conversation. A newly allowed topic begins
+  producing alerts after the open app's preference stream refreshes the
+  registration.
 - A client-specific host disable event stops local refresh and relies on its
   verified signed webhook to remove that `(fid, appFid)` token. Account-wide
-  upstream route revocation is reserved for explicit account deletion or when
-  the final verified native token is gone.
+  upstream route revocation is reserved for an inbox with no `Allowed` XMTP
+  topics, explicit account deletion, or when the final verified native token is
+  gone.
 - Keep the same stable notification ID across retries and batches.
 - Users who added Converge before the webhook existed may have a display-only
   host token with no server row. After promotion, a persistent `425` must guide

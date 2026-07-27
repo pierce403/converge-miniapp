@@ -187,13 +187,15 @@ export function MessagingApp({
     previousNotificationsEnabledRef.current = alerts.notificationsEnabled
     if (!alerts.notificationsEnabled && !wasEnabled) return
 
-    const update = alerts.notificationsEnabled ? syncMessagingAlerts : disableMessagingAlerts
-    void update().catch(() => {
+    if (!alerts.notificationsEnabled) {
+      disableMessagingAlerts()
+      return
+    }
+
+    void syncMessagingAlerts().catch(() => {
       if (cancelled) return
       setMessagingNotice(
-        alerts.notificationsEnabled
-          ? 'Farcaster alerts are on, but this inbox could not finish alert registration. Reopen Converge Mini while online to retry.'
-          : 'Farcaster notifications are off, but alert cleanup could not reach the relay. Converge Mini will retry while it is open.',
+        'Farcaster alerts are on, but this inbox could not finish alert registration. Reopen Converge Mini online; if it persists, turn alerts off and on or remove and re-add the Mini App.',
       )
     })
 

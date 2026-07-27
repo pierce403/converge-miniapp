@@ -21,9 +21,9 @@ const mocks = vi.hoisted(() => ({
   connectWalletConnectWallet: vi.fn(),
   createSession: vi.fn(),
   disconnectWalletConnect: vi.fn(),
-  disableAlert: vi.fn(),
   parseConvosInvite: vi.fn(),
   prepareStorage: vi.fn(),
+  revokeAlert: vi.fn(),
   syncAlert: vi.fn(),
   verifyHostWalletSource: vi.fn(),
 }))
@@ -60,7 +60,7 @@ vi.mock('../../lib/convos/invite', () => ({
 }))
 
 vi.mock('../../lib/xmtp/alertRegistration', () => ({
-  disableXmtpAlertRegistration: mocks.disableAlert,
+  revokeXmtpAlertRegistration: mocks.revokeAlert,
   syncXmtpAlertRegistration: mocks.syncAlert,
 }))
 
@@ -290,6 +290,32 @@ describe('useXmtpMessaging', () => {
 
     expect(mocks.syncAlert).toHaveBeenCalledTimes(2)
     expect(mocks.syncAlert).toHaveBeenLastCalledWith(session, 403)
+  })
+
+  it('disables during stream startup without registering or revoking account state', async () => {
+    const streamStarted = deferred<void>()
+    const stopPushTopicStream = vi.fn().mockResolvedValue(undefined)
+    const session = createSession({
+      startPushTopicStream: vi.fn(() => streamStarted.promise),
+      stopPushTopicStream,
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging({ notificationFid: 403 }))
+    await act(async () => result.current.connect())
+
+    let registration!: Promise<void>
+    act(() => {
+      registration = result.current.syncAlerts()
+    })
+    await waitFor(() => expect(session.startPushTopicStream).toHaveBeenCalledOnce())
+
+    act(() => result.current.disableAlerts())
+    streamStarted.resolve()
+    await act(async () => registration)
+
+    expect(stopPushTopicStream).toHaveBeenCalledOnce()
+    expect(mocks.syncAlert).not.toHaveBeenCalled()
+    expect(mocks.revokeAlert).not.toHaveBeenCalled()
   })
 
   it('automatically opens one host-wallet session through Strict Mode replay', async () => {

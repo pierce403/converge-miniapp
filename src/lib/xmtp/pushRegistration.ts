@@ -4,7 +4,7 @@ export type XmtpPushHmacKey = {
 }
 
 export type XmtpPushTopic = {
-  hmacKeys: XmtpPushHmacKey[]
+  hmacKeys: [XmtpPushHmacKey, ...XmtpPushHmacKey[]]
   topic: string
 }
 
@@ -23,7 +23,6 @@ type HmacKey = {
 type PushSnapshotClient = {
   conversations: {
     hmacKeys(): Promise<Map<string, HmacKey[]>>
-    topic: string | undefined
   }
   inboxId: string | undefined
   installationId: string | undefined
@@ -32,7 +31,6 @@ type PushSnapshotClient = {
 
 const GROUP_TOPIC = /^\/xmtp\/mls\/1\/g-[0-9a-f]{32}\/proto$/
 const GROUP_ID = /^[0-9a-f]{32}$/
-const WELCOME_TOPIC = /^\/xmtp\/mls\/1\/w-[0-9a-f]{64}\/proto$/
 const MAX_TOPICS = 400
 const MAX_PERSISTED_ROWS = 800
 const MAX_HMAC_KEYS_PER_TOPIC = 16
@@ -53,11 +51,6 @@ export async function buildXmtpPushSnapshot(
     throw new Error('XMTP returned a mismatched installation public key.')
   }
 
-  const welcomeTopic = client.conversations.topic
-  if (!welcomeTopic || !WELCOME_TOPIC.test(welcomeTopic)) {
-    throw new Error('XMTP did not provide a canonical installation welcome topic.')
-  }
-
   const keysByTopic = await client.conversations.hmacKeys()
   const topics: XmtpPushTopic[] = []
   for (const [groupIdOrTopic, keys] of keysByTopic) {
@@ -68,7 +61,7 @@ export async function buildXmtpPushSnapshot(
     if (!keys.length || keys.length > MAX_HMAC_KEYS_PER_TOPIC) {
       throw new Error('XMTP returned an unsupported HMAC key set.')
     }
-    const hmacKeys = keys.map(({ epoch, key }) => {
+    const mappedKeys = keys.map(({ epoch, key }) => {
       if (epoch < 0n || epoch > 0xffff_ffffn) {
         throw new Error('XMTP returned an unsupported HMAC epoch.')
       }
@@ -80,10 +73,13 @@ export async function buildXmtpPushSnapshot(
         key: bytesToBase64Url(key),
       }
     }).sort((left, right) => left.epoch - right.epoch)
-    topics.push({ hmacKeys, topic })
+    const [firstKey, ...remainingKeys] = mappedKeys
+    if (!firstKey) {
+      throw new Error('XMTP returned an unsupported HMAC key set.')
+    }
+    topics.push({ hmacKeys: [firstKey, ...remainingKeys], topic })
   }
   topics.sort((left, right) => left.topic.localeCompare(right.topic))
-  topics.push({ hmacKeys: [], topic: welcomeTopic })
 
   if (topics.length > MAX_TOPICS) {
     throw new Error('This inbox has too many XMTP push topics to register safely.')

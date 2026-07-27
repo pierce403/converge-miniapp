@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  disableXmtpAlertRegistration,
+  revokeXmtpAlertRegistration,
   syncXmtpAlertRegistration,
 } from './alertRegistration'
 
@@ -86,6 +86,24 @@ describe('XMTP alert registration', () => {
     expect(mocks.fetch).not.toHaveBeenCalled()
   })
 
+  it('revokes stale inbox-wide state when the inbox has no Allowed topics', async () => {
+    mocks.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const activeSession = session()
+    activeSession.pushSnapshot.mockResolvedValue({
+      ...snapshot,
+      topics: [],
+    })
+
+    await syncXmtpAlertRegistration(activeSession as never, 403)
+
+    expect(mocks.fetch).toHaveBeenCalledOnce()
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      '/api/me/notifications/xmtp-subscription',
+      { cache: 'no-store', method: 'DELETE' },
+    )
+    expect(activeSession.signPushEnrollmentTicket).not.toHaveBeenCalled()
+  })
+
   it('briefly retries while the native token webhook is still arriving', async () => {
     mocks.fetch
       .mockResolvedValueOnce(new Response(null, {
@@ -156,10 +174,10 @@ describe('XMTP alert registration', () => {
     expect(activeSession.signPushEnrollmentTicket).not.toHaveBeenCalled()
   })
 
-  it('revokes the app-owned route on opt-out', async () => {
+  it('preserves an explicit account-wide route revocation operation', async () => {
     mocks.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
 
-    await disableXmtpAlertRegistration()
+    await revokeXmtpAlertRegistration()
 
     expect(mocks.fetch).toHaveBeenCalledWith(
       '/api/me/notifications/xmtp-subscription',

@@ -265,7 +265,7 @@ describe('MessagingApp storage and installation states', () => {
     expect(syncAlerts).not.toHaveBeenCalled()
   })
 
-  it('revokes XMTP alert material after host permission changes from on to off', async () => {
+  it('stops local XMTP alert refresh after host permission changes from on to off', async () => {
     const disableAlerts = vi.fn().mockResolvedValue(undefined)
     const syncAlerts = vi.fn().mockResolvedValue(undefined)
     let notificationsEnabled = true
