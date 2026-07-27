@@ -31,7 +31,67 @@ As of 2026-07-27, the deployed product implementation includes commits through `
 
 The application implementation is deployed through Task 7, including the compact Mini App shell, Farcaster-wallet XMTP identity, cached/live messaging, address-or-ENS compose, explicit ENS-backed identity binding, verified Convos group import, and the fail-closed Farcaster/XMTP alert bridge. “Deployed” does not mean “launch-ready”: real Farcaster desktop/iOS/Android acceptance, canonical-origin OPFS re-entry, independent two-client message exchange, embedded keyboard review, and the authenticated payer/Gateway production-send proof remain open release gates.
 
-The notification bridge is optional P1 and remains disabled unless all production verifier, encryption, D1, and vapid.party dependencies are configured. Its deployed fail-closed code is not evidence of live closed-app delivery.
+The notification bridge is the active P1 milestone. It remains disabled unless all production verifier, encryption, D1, and vapid.party dependencies are configured. Its deployed fail-closed code is not evidence of live closed-app delivery.
+
+### Active milestone: closed-app Farcaster alerts
+
+Goal: after a user deliberately enables alerts, an incoming XMTP message must
+produce a generic native alert in the Farcaster app while Converge Mini is
+closed. The relay may learn that an authorized encrypted XMTP topic received an
+event, but it must not receive message plaintext, sender identity, conversation
+identity, or decryption keys.
+
+Live baseline recorded on 2026-07-27:
+
+- production correctly reports `{"available":false}` and omits `webhookUrl`
+  from the manifest;
+- production D1 migrations `0001` through `0003` are applied;
+- the account-association, notification-encryption, and three vapid.party
+  secrets exist, while `FARCASTER_HUB_API_KEY` is not configured;
+- vapid.party production is on its version-5 API, and its listener, queue,
+  bridge sync, installation-owned XMTP enrollment, and signed HTTPS callback
+  contract are ready; the sibling local checkout exposes an older contract and
+  must not be treated as the deployed source of truth;
+- neither `_vapid-party.miniapp.converge.cv` nor
+  `_vapid-party.converge.cv` currently has the required DNS TXT binding; and
+- Converge Mini parses the obsolete flat Farcaster send response even though
+  the current official response nests token outcomes under `result` and may
+  include `failedTokens`.
+
+Delivery sequence and gates:
+
+| Gate | Status | Required evidence before advancing |
+| --- | --- | --- |
+| 1. Freeze the live contracts and repair Converge safety issues | In progress | Current wrapped Farcaster outcomes parse correctly; unknown-consent topics are excluded; one Farcaster client's disable cannot revoke another client's route; an explicit rollout flag keeps credentials separate from public enablement; focused tests and the full gate pass. |
+| 2. Verify the production vapid.party app and DNS binding | Planned | The configured app ID, secret, public key, exact `miniapp.converge.cv` profile domain, and published `_vapid-party` TXT challenge match; vapid.party reports fresh domain verification without replacing a retained secret unnecessarily. |
+| 3. Prove the two Workers together with rollout disabled | Planned | Preview D1 migration `0003` is applied; a real Browser SDK installation enrolls; a listener event yields one verified opaque callback; callback replay and wrong-key cases fail; no public alert prompt is exposed. |
+| 4. Configure and promote production token lifecycle | Blocked on credential | A reviewed current-Hub credential verifies signed Farcaster webhook app keys; production secrets and migrations are present; the exact canonical webhook is published; a real add/enable event creates one encrypted `(fid, appFid)` row. |
+| 5. Prove a closed-app alert in Farcaster | Planned | With Converge closed, a second XMTP client sends a message; exactly one generic native alert arrives, opens the canonical app, and contains no sender, message, or conversation data. |
+| 6. Prove cleanup, recovery, and operations | Planned | Disable, re-enable, remove, invalid-token, throttling, retry, route-revocation, and sampled-log checks pass; the runbook records rollback and health checks. |
+
+Promotion rules:
+
+- Keep `GET /api/notifications/status` false and keep `webhookUrl` out of the
+  manifest until gates 1 through 4 are complete and the explicit rollout flag
+  is enabled.
+- Push each repository checkpoint only after its full local gate passes. Deploy
+  Converge through Cloudflare Workers Builds from `main`; deploy vapid.party
+  only after its listener-specific production gate passes.
+- Treat Farcaster `failedTokens` caused by domain, target, or missing-webhook
+  drift as operational failures. Do not silently count them as delivered and
+  do not delete a token unless Farcaster explicitly marks it invalid.
+- Register only `Allowed` conversation topics plus the installation welcome
+  topic. Unknown/request conversations must not produce alerts before the
+  product exposes and accepts message requests.
+- A client-specific host disable event stops local refresh and relies on its
+  verified signed webhook to remove that `(fid, appFid)` token. Account-wide
+  upstream route revocation is reserved for explicit account deletion or when
+  the final verified native token is gone.
+- Keep the same stable notification ID across retries and batches.
+- Users who added Converge before the webhook existed may have a display-only
+  host token with no server row. After promotion, a persistent `425` must guide
+  them to toggle notifications off and on or remove and re-add the Mini App;
+  reopening alone is not a documented token-backfill mechanism.
 
 Priority vocabulary:
 
@@ -1488,7 +1548,7 @@ Exit criteria:
 - unknown conversations never enter the allowed list before acceptance;
 - accept/decline state agrees with a reference XMTP client after resync.
 
-### Task 10: notification permission and delivery (optional P1)
+### Task 10: notification permission and delivery (active P1)
 
 Deliverables:
 
@@ -1669,7 +1729,9 @@ These are deliberately not guessed into existence.
 1. **P1 recipient discovery:** When handle/name search is promoted, should it use official Farcaster infrastructure, Neynar, or another verified directory source?
 2. **Deep-link behavior:** Which future intent schema should open a specific conversation rather than the default allowed inbox?
 3. **Message requests:** Keep request accept/decline as post-core P1, or explicitly promote it after real-user inbox testing?
-4. **Notifications:** Should add/notification permission be the next milestone after messaging, or wait for a proven closed-app XMTP observer?
+4. **Notifications (decided 2026-07-27):** Notification permission and a proven
+   closed-app XMTP observer are the active milestone. Keep the feature
+   fail-closed until the delivery gates above are complete.
 5. **Brand separation:** How closely should the final icon/name relate to `converge.cv` while remaining recognizable as a distinct Mini App?
 6. **Public standalone mode:** After development fallback is stable, should non-Farcaster visitors be able to connect a wallet and message?
 7. **Directory/backend dependency:** Is a managed Farcaster data provider acceptable if it materially simplifies reliable handle search and webhook verification?
