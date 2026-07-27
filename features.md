@@ -28,8 +28,8 @@ Status vocabulary:
 ## Current delivery checkpoint
 
 As of 2026-07-27, the deployed product implementation includes commits through
-`c66a260`. Cloudflare Worker version
-`9d8af11a-e9f8-471f-be3a-d8d2483c2182` reports healthy canonical production
+`4537c17`. Cloudflare Worker version
+`4833dffd-5c3a-4dde-b29a-4d92194a60a0` reports healthy canonical production
 metadata, Farcaster account association remains present on the exact domain,
 and the 623-test local gate passed for that source checkpoint.
 
@@ -43,11 +43,11 @@ Farcaster identity now resolves another inbox. The canonical `deanpierce.eth`
 Farcaster re-entry and two-client send/receive acceptance remain explicit gates
 rather than inferred success.
 
-The 2026-07-27 compact identity-menu extension is implemented locally. It
-displays the full inbox ID from the validated mounted XMTP session, never from
-the saved migration journal, and clears that value on disconnect or reassignment
-quarantine. The 623-test full local gate passes; canonical deployment remains
-pending.
+The 2026-07-27 compact identity-menu extension is deployed in the Worker above.
+It displays the full inbox ID from the validated mounted XMTP session, never
+from the saved migration journal, and clears that value on disconnect or
+reassignment quarantine. The 623-test full local gate and canonical
+bundle-content check pass.
 
 The notification bridge is the active P1 milestone. Its production status and
 manifest webhook are enabled now that the verifier, encryption, D1, DNS, and
@@ -410,7 +410,7 @@ Success condition: the optional label flow never moves identity state; the expli
 | Identity | Stable XMTP inbox/installation reuse | P0 | Deployed; acceptance pending | Persistent OPFS defaults and a single-owner Web Lock exist; launch, confirmed foreground re-entry, online actions, streams, and push enrollment resolve the Farcaster identity from the XMTP network, and a changed assignment closes/recreates the mounted client before old-inbox use. Canonical-origin host re-entry proof remains. |
 | Identity | Forward-verified ENS primary-name offer | P1 | Deployed; acceptance pending | Trusted-FID discovery, reverse/forward ENS proof, read-only XMTP relationship checks, remembered acceptance/dismissal, safe label-only use, and truthful separate-inbox states are tested; canonical-host proof remains. |
 | Identity | Peer fname, ENS, and Basename labels | P1 | Deployed; acceptance pending | Bounded, rate-limited protected batches resolve public wallet metadata without persistence; ambiguous/broken sources fall back to the visible address. A registered fname is secondary registry metadata, not a canonical profile or authorization. |
-| Identity | Compact identity/privacy menu | P0 | Implemented locally | Full active wallet and authoritative XMTP inbox ID, network, local-storage disclosure, ENS recheck, label selection/deletion, and an explicit signer-backed identity binding remain available after onboarding. Full-value wrapping is covered locally; canonical deployment and short-viewport host proof remain. |
+| Identity | Compact identity/privacy menu | P0 | Deployed; acceptance pending | Full active wallet and authoritative XMTP inbox ID, network, local-storage disclosure, ENS recheck, label selection/deletion, and an explicit signer-backed identity binding remain available after onboarding. Full-value wrapping is covered locally and the canonical bundle contains the disclosure; short-viewport host proof remains. |
 | Identity | ENS-backed Farcaster identity binding | P1 | Deployed; acceptance pending | A fresh different-inbox candidate requires exact external ENS-owner authorization plus explicit permanent/no-merge confirmation; the target is journaled before mutation, old-inbox recovery authority is preserved, and XMTP's stateless network assignment plus target state must both confirm the Farcaster identity on B. WalletConnect disconnects and later sessions use only Farcaster. Canonical-host repair of the existing `deanpierce.eth` migration plus two-client send/receive proof remains. |
 | Inbox | Allowed DM conversation list | P0 | Deployed; acceptance pending | Allowed-only cached-first sync/list/stream UI exists; two-client and offline-host acceptance remain. |
 | Inbox | Separate message requests | P1 | Later | Unknown contacts stay excluded from the P0 allowed list; later accept/decline updates consent. |
