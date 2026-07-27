@@ -27,7 +27,11 @@ Status vocabulary:
 
 ## Current delivery checkpoint
 
-As of 2026-07-27, the deployed product implementation includes commits through `fb0020c`. The canonical Worker reports healthy production metadata for the 2026-07-20 deployment, Farcaster account association remains publicly verified, and GitHub's latest checks for that deployed product head are green.
+As of 2026-07-27, the deployed product implementation includes commits through
+`b799f13`. Cloudflare Worker version
+`432ac428-7520-4180-8128-69412aa5e06b` reports healthy canonical production
+metadata, Farcaster account association remains present on the exact domain,
+and the 595-test local gate passed for that source checkpoint.
 
 The application implementation is deployed through Task 7, including the compact Mini App shell, Farcaster-wallet XMTP identity, cached/live messaging, address-or-ENS compose, explicit ENS-backed identity binding, verified Convos group import, and the fail-closed Farcaster/XMTP alert bridge. “Deployed” does not mean “launch-ready”: real Farcaster desktop/iOS/Android acceptance, canonical-origin OPFS re-entry, independent two-client message exchange, embedded keyboard review, and the authenticated payer/Gateway production-send proof remain open release gates.
 
@@ -43,28 +47,35 @@ identity, or decryption keys.
 
 Live baseline recorded on 2026-07-27:
 
+- Cloudflare Workers Builds deployed the hardened checkpoint as immutable
+  Worker version `432ac428-7520-4180-8128-69412aa5e06b`; its committed
+  production rollout value is exactly `"false"`;
 - production correctly reports `{"available":false}` and omits `webhookUrl`
   from the manifest;
-- production D1 migrations `0001` through `0003` are applied;
+- production and preview D1 migrations `0001` through `0003` are applied with
+  no pending migrations; both notification-table baselines are empty, and the
+  production aggregate is zero tokens, active/revoking routes, delivered rows,
+  and retry rows;
 - the account-association, notification-encryption, and three vapid.party
   secrets exist, while `FARCASTER_HUB_API_KEY` is not configured;
-- vapid.party production is on its version-5 API, and its listener, queue,
-  bridge sync, installation-owned XMTP enrollment, and signed HTTPS callback
-  contract are ready; the sibling local checkout exposes an older contract and
-  must not be treated as the deployed source of truth;
-- neither `_vapid-party.miniapp.converge.cv` nor
-  `_vapid-party.converge.cv` currently has the required DNS TXT binding; and
-- Converge Mini parses the obsolete flat Farcaster send response even though
-  the current official response nests token outcomes under `result` and may
-  include `failedTokens`.
+- vapid.party production health reports delivery ready, listener ready, and
+  bridge synced; its live OpenAPI exposes the version-5
+  installation-owned XMTP enrollment and signed HTTPS callback contract, while
+  the sibling local checkout exposes an older contract and must not be treated
+  as the deployed source of truth;
+- authoritative DNS returns `NXDOMAIN` for the required
+  `_vapid-party.miniapp.converge.cv` TXT binding; and
+- there is no safe unauthenticated substitute for the current-Hub verifier:
+  unauthenticated Neynar signer reads fail, while accepting the event signature
+  without current key state would permit forged lifecycle events.
 
 Delivery sequence and gates:
 
 | Gate | Status | Required evidence before advancing |
 | --- | --- | --- |
-| 1. Freeze the live contracts and repair Converge safety issues | Implemented locally | The current wrapped Farcaster outcomes parse correctly; only HMAC-backed `Allowed` topics are registered; a client-local disable cannot revoke another client's route; zero account-wide allowed topics revoke the shared route; and an exact rollout flag keeps credentials separate from public enablement. The 595-test full gate and a sequential preview-config dry run pass. Deployment through Workers Builds and live fail-closed verification remain before this gate is production-complete. |
-| 2. Verify the production vapid.party app and DNS binding | Planned | The configured app ID, secret, public key, exact `miniapp.converge.cv` profile domain, and published `_vapid-party` TXT challenge match; vapid.party reports fresh domain verification without replacing a retained secret unnecessarily. |
-| 3. Prove the two Workers together with rollout disabled | Planned | Preview D1 migration `0003` is applied; a real Browser SDK installation enrolls; a listener event yields one verified opaque callback; callback replay and wrong-key cases fail; no public alert prompt is exposed. |
+| 1. Freeze the live contracts and repair Converge safety issues | Deployed; acceptance pending | The current wrapped Farcaster outcomes parse correctly; only HMAC-backed `Allowed` topics are registered; a client-local disable cannot revoke another client's route; zero account-wide allowed topics revoke the shared route; valid ownership is required for readiness; and an exact rollout flag keeps credentials separate from public enablement. The 595-test full gate, sequential preview-config dry run, immutable production deployment, and live fail-closed checks pass. Real delivery remains in gate 5. |
+| 2. Verify the production vapid.party app and DNS binding | Blocked on operator authentication | The retained public app ID/key are known and all three Worker app-secret names remain configured, but authoritative DNS still returns `NXDOMAIN` for `_vapid-party.miniapp.converge.cv`. Publish the one exact TXT challenge through the Cloudflare account, then require vapid.party fresh verification without replacing its retained secret. |
+| 3. Prove the two Workers together with rollout disabled | Deployed; acceptance pending | Preview migration `0003` is applied, no migrations are pending, and the empty table baseline is verified. A real Browser SDK installation must still enroll; a listener event must yield one verified opaque callback; callback replay and wrong-key cases must fail; no public alert prompt may be exposed. |
 | 4. Configure and promote production token lifecycle | Blocked on credential | A reviewed current-Hub credential verifies signed Farcaster webhook app keys; production secrets and migrations are present; the exact canonical webhook is published; a real add/enable event creates one encrypted `(fid, appFid)` row. |
 | 5. Prove a closed-app alert in Farcaster | Planned | With Converge closed, a second XMTP client sends a message; exactly one generic native alert arrives, opens the canonical app, and contains no sender, message, or conversation data. |
 | 6. Prove cleanup, recovery, and operations | Planned | Disable, re-enable, remove, invalid-token, throttling, retry, route-revocation, and sampled-log checks pass; the runbook records rollback and health checks. |
