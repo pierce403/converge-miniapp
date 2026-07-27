@@ -568,7 +568,11 @@ export function MessagingApp({
     )
   }
 
-  if (messaging.connection.phase !== 'ready' || !messaging.address) return null
+  if (
+    messaging.connection.phase !== 'ready' ||
+    !messaging.address ||
+    !messaging.inboxId
+  ) return null
 
   const setEnsPreference = async (choice: Exclude<EnsPreference, null>) => {
     try {
@@ -663,6 +667,7 @@ export function MessagingApp({
           ensIdentity={ensIdentity}
           ensTargetNameVerified={verifiedTargetName !== undefined}
           environment={`${messaging.environment} · ${messaging.walletKind ?? 'wallet'}`}
+          inboxId={messaging.inboxId}
           onClearEnsPreference={() => void clearEnsPreference()}
           onJoinConvos={() => {
             setConversationReturnFocusId(null)

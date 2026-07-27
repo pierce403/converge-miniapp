@@ -46,6 +46,8 @@ vi.mock('../notifications/useFarcasterAlerts', () => ({
 }))
 
 const user = { fid: 403, username: 'pierce' }
+const activeInboxId =
+  'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899'
 
 describe('MessagingApp storage and installation states', () => {
   beforeEach(() => {
@@ -858,6 +860,8 @@ describe('MessagingApp storage and installation states', () => {
     })
     fireEvent.click(screen.getByLabelText('Identity and privacy'))
     expect(screen.getByRole('heading', { name: 'Farcaster wallet' })).toBeVisible()
+    expect(screen.getByText('XMTP inbox ID')).toBeVisible()
+    expect(screen.getByText(activeInboxId)).toBeVisible()
     expect(screen.queryByRole('button', { name: /Reconnect external wallet/i })).not.toBeInTheDocument()
   })
 
@@ -1283,6 +1287,7 @@ function readyMessaging() {
     disconnect: vi.fn(),
     environment: 'dev',
     hasOlderMessages: false,
+    inboxId: activeInboxId,
     inspectIdentityRelationship: vi.fn(),
     bindEnsInbox: vi.fn(),
     canMessageAddress: vi.fn(),

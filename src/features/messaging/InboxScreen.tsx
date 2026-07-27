@@ -32,6 +32,7 @@ type InboxScreenProps = {
   ensIdentity: EnsIdentityState
   ensTargetNameVerified?: boolean | undefined
   environment: string
+  inboxId: string
   onJoinConvos: () => void
   onNewDm: () => void
   onOpen: (conversationId: string) => void
@@ -61,6 +62,7 @@ export function InboxScreen({
   ensIdentity,
   ensTargetNameVerified = false,
   environment,
+  inboxId,
   onJoinConvos,
   onNewDm,
   onOpen,
@@ -123,6 +125,10 @@ export function InboxScreen({
               Farcaster wallet
             </h2>
             <code>{address}</code>
+            <div className="identity-menu__inbox">
+              <strong>XMTP inbox ID</strong>
+              <code>{inboxId}</code>
+            </div>
             <p>{environment}</p>
             {alerts ? <FarcasterAlertsMenu alerts={alerts} /> : null}
             <EnsMenuIdentity

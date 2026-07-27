@@ -363,6 +363,7 @@ describe('useXmtpMessaging', () => {
 
     expect(mocks.connectHostWallet).toHaveBeenCalledOnce()
     expect(mocks.createSession).toHaveBeenCalledOnce()
+    expect(result.current.inboxId).toBe('own-inbox')
   })
 
   it('opens a bound ENS inbox with only the Farcaster source signer', async () => {
@@ -1893,6 +1894,7 @@ describe('useXmtpMessaging', () => {
     })
 
     expect(result.current.connection.phase).toBe('idle')
+    expect(result.current.inboxId).toBeNull()
     expect(result.current.streamHealth).toBe('live')
     expect(session.startMessageStream).not.toHaveBeenCalled()
   })
@@ -2470,6 +2472,7 @@ describe('useXmtpMessaging', () => {
       expect(oldSession.close).toHaveBeenCalledOnce()
       expect(mocks.createSession.mock.calls[1]?.[2]).toBe('target-inbox')
       expect(targetSession.loadInbox).toHaveBeenCalledOnce()
+      expect(result.current.inboxId).toBe('target-inbox')
       expect(result.current.conversations).toEqual([movedConversation])
     },
   )

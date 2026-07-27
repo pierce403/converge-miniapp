@@ -43,6 +43,12 @@ Farcaster identity now resolves another inbox. The canonical `deanpierce.eth`
 Farcaster re-entry and two-client send/receive acceptance remain explicit gates
 rather than inferred success.
 
+The 2026-07-27 compact identity-menu extension is implemented locally. It
+displays the full inbox ID from the validated mounted XMTP session, never from
+the saved migration journal, and clears that value on disconnect or reassignment
+quarantine. The 623-test full local gate passes; canonical deployment remains
+pending.
+
 The notification bridge is the active P1 milestone. Its production status and
 manifest webhook are enabled now that the verifier, encryption, D1, DNS, and
 vapid.party dependencies are configured. Public availability is not evidence
@@ -404,7 +410,7 @@ Success condition: the optional label flow never moves identity state; the expli
 | Identity | Stable XMTP inbox/installation reuse | P0 | Deployed; acceptance pending | Persistent OPFS defaults and a single-owner Web Lock exist; launch, confirmed foreground re-entry, online actions, streams, and push enrollment resolve the Farcaster identity from the XMTP network, and a changed assignment closes/recreates the mounted client before old-inbox use. Canonical-origin host re-entry proof remains. |
 | Identity | Forward-verified ENS primary-name offer | P1 | Deployed; acceptance pending | Trusted-FID discovery, reverse/forward ENS proof, read-only XMTP relationship checks, remembered acceptance/dismissal, safe label-only use, and truthful separate-inbox states are tested; canonical-host proof remains. |
 | Identity | Peer fname, ENS, and Basename labels | P1 | Deployed; acceptance pending | Bounded, rate-limited protected batches resolve public wallet metadata without persistence; ambiguous/broken sources fall back to the visible address. A registered fname is secondary registry metadata, not a canonical profile or authorization. |
-| Identity | Compact identity/privacy menu | P0 | Deployed; acceptance pending | Active wallet, network, local-storage disclosure, ENS recheck, label selection/deletion, and an explicit signer-backed identity binding remain available after onboarding. Short-viewport host proof remains. |
+| Identity | Compact identity/privacy menu | P0 | Implemented locally | Full active wallet and authoritative XMTP inbox ID, network, local-storage disclosure, ENS recheck, label selection/deletion, and an explicit signer-backed identity binding remain available after onboarding. Full-value wrapping is covered locally; canonical deployment and short-viewport host proof remain. |
 | Identity | ENS-backed Farcaster identity binding | P1 | Deployed; acceptance pending | A fresh different-inbox candidate requires exact external ENS-owner authorization plus explicit permanent/no-merge confirmation; the target is journaled before mutation, old-inbox recovery authority is preserved, and XMTP's stateless network assignment plus target state must both confirm the Farcaster identity on B. WalletConnect disconnects and later sessions use only Farcaster. Canonical-host repair of the existing `deanpierce.eth` migration plus two-client send/receive proof remains. |
 | Inbox | Allowed DM conversation list | P0 | Deployed; acceptance pending | Allowed-only cached-first sync/list/stream UI exists; two-client and offline-host acceptance remain. |
 | Inbox | Separate message requests | P1 | Later | Unknown contacts stay excluded from the P0 allowed list; later accept/decline updates consent. |
@@ -815,12 +821,12 @@ A Convos slug is a bearer capability. It exposes public preview fields and the c
 
 ### 12. Identity/privacy menu and expanded settings sheet
 
-The compact menu is available from the inbox header rather than as a permanent navigation destination. It shows the active Farcaster wallet, XMTP environment/wallet kind, local-storage disclosure, and the ENS discovery/relationship state. It can rerun discovery, opt into a safe same-inbox ENS label after a prior dismissal, delete the saved ENS choice, or open the explicit permanent-binding confirmation for an existing separate ENS inbox. The external ENS wallet appears only inside that binding action; wrong-account/cancelled pairings leave the current inbox unchanged.
+The compact menu is available from the inbox header rather than as a permanent navigation destination. It shows the active Farcaster wallet, the full authoritative XMTP inbox ID from the validated mounted session, XMTP environment/wallet kind, local-storage disclosure, and the ENS discovery/relationship state. The ID wraps rather than truncates on narrow screens and is cleared on disconnect or reassignment quarantine. The menu can rerun discovery, opt into a safe same-inbox ENS label after a prior dismissal, delete the saved ENS choice, or open the explicit permanent-binding confirmation for an existing separate ENS inbox. The external ENS wallet appears only inside that binding action; wrong-account/cancelled pairings leave the current inbox unchanged.
 
 The expanded P1 modal/sheet remains Later. Include:
 
 - Farcaster profile and trusted FID;
-- active wallet address and XMTP inbox ID;
+- copy actions for the active wallet address and XMTP inbox ID;
 - current installation ID/label where useful;
 - notification enabled/disabled state;
 - short explanation of local unencrypted browser storage;

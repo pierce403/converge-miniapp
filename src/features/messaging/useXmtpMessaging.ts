@@ -142,6 +142,7 @@ export function useXmtpMessaging({
 
   const [connection, setConnection] = useState<ConnectionState>(initialConnection)
   const [address, setAddress] = useState<`0x${string}` | null>(null)
+  const [inboxId, setInboxId] = useState<string | null>(null)
   const [walletKind, setWalletKind] = useState<'EOA' | 'SCW' | null>(null)
   const [environment, setEnvironment] = useState('')
   const [storageDurability, setStorageDurability] = useState<StorageDurability | null>(null)
@@ -455,6 +456,7 @@ export function useXmtpMessaging({
     activeRef.current = null
     setConnection(initialConnection)
     setAddress(null)
+    setInboxId(null)
     setWalletKind(null)
     setEnvironment('')
     setStorageDurability(null)
@@ -488,6 +490,7 @@ export function useXmtpMessaging({
     let clientCreationFailed = false
     let failureStage: XmtpOperationStage = 'preflight'
     setConnection({ error: null, phase: 'storage' })
+    setInboxId(null)
     setStorageDurability(null)
     updateConvosAccessRequest(null)
     updateNotice(null)
@@ -564,6 +567,7 @@ export function useXmtpMessaging({
           phase: pendingSessionFactoryRef.current ? 'restart-required' : phase,
         })
         setAddress(null)
+        setInboxId(null)
         setWalletKind(null)
         setEnvironment('')
         setStorageDurability(null)
@@ -761,6 +765,7 @@ export function useXmtpMessaging({
         return
       }
       sessionRef.current = session
+      setInboxId(session.inboxId)
       if (
         !inboxTarget &&
         transientInboxTargetRef.current === session.inboxId
@@ -1171,6 +1176,7 @@ export function useXmtpMessaging({
   const clearMountedInboxView = useCallback(() => {
     activeRef.current = null
     setAddress(null)
+    setInboxId(null)
     setWalletKind(null)
     setEnvironment('')
     setStorageDurability(null)
@@ -2126,6 +2132,7 @@ export function useXmtpMessaging({
     loadingOlder,
     hasOlderMessages,
     inspectIdentityRelationship,
+    inboxId,
     bindEnsInbox,
     loadOlderMessages,
     messages,

@@ -5,6 +5,7 @@ import { InboxScreen } from './InboxScreen'
 import type { ConversationSummary } from './types'
 
 const address = '0x1111111111111111111111111111111111111111' as const
+const inboxId = 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899'
 
 function renderInbox(
   conversations: ConversationSummary[],
@@ -21,6 +22,7 @@ function renderInbox(
         status: 'none',
       }}
       environment="dev · EOA"
+      inboxId={inboxId}
       onClearEnsPreference={vi.fn()}
       onJoinConvos={vi.fn()}
       onNewDm={vi.fn()}
