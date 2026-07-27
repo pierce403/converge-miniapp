@@ -59,6 +59,8 @@ type PendingSessionFactory = {
   promise: Promise<XmtpMessagingSession>
 }
 
+type InboxAssignmentCheck = 'current' | 'reconnected' | 'stale' | 'stopped'
+
 const initialConnection: ConnectionState = {
   error: null,
   phase: 'idle',
@@ -82,7 +84,7 @@ export type InboxBindingResult = {
 }
 
 type InboxSwitchOptions = {
-  onCommitting?: (() => void) | undefined
+  onCommitting?: ((binding: InboxBindingResult) => void) | undefined
   onPairingUri?: (uri: string) => void
   signal?: AbortSignal
 }
@@ -116,6 +118,8 @@ export function useXmtpMessaging({
   const pendingSessionFactoryRef = useRef<PendingSessionFactory | null>(null)
   const leaseRef = useRef<XmtpLease | null>(null)
   const poisonedLeaseRef = useRef<XmtpLease | null>(null)
+  const transientInboxTargetRef = useRef<string | null>(null)
+  const reassignmentReconnectRef = useRef(false)
   const walletRef = useRef<WalletConnection | null>(null)
   const validateWalletRef = useRef<(() => Promise<boolean>) | null>(null)
   const removeWalletListenerRef = useRef<(() => void) | null>(null)
@@ -130,6 +134,9 @@ export function useXmtpMessaging({
   const alertSyncDirtyRef = useRef(false)
   const alertSyncGenerationRef = useRef(0)
   const alertSyncCallbackRef = useRef<() => Promise<void>>(async () => undefined)
+  const assignmentGuardCallbackRef = useRef<
+    (session: XmtpMessagingSession) => Promise<boolean>
+  >(async () => false)
   const alertsEnabledRef = useRef(false)
   const notificationFidRef = useRef(notificationFid)
 
@@ -188,6 +195,11 @@ export function useXmtpMessaging({
         const generation = alertSyncGenerationRef.current
         if (!session || !fid) return
         try {
+          if (!await assignmentGuardCallbackRef.current(session)) {
+            alertSyncDirtyRef.current = true
+            if (sessionRef.current !== session) continue
+            return
+          }
           await session.startPushTopicStream(() => {
             if (!alertsEnabledRef.current) return
             alertSyncDirtyRef.current = true
@@ -400,25 +412,14 @@ export function useXmtpMessaging({
     if (inboxRefreshTimerRef.current !== null) return
     inboxRefreshTimerRef.current = window.setTimeout(() => {
       inboxRefreshTimerRef.current = null
-      const session = sessionRef.current
-      if (!session || refreshingRef.current) return
-      const generation = operationGenerationRef.current
-      const request = ++inboxRequestRef.current
-      void session.readInbox().then((next) => {
-        if (
-          mountedRef.current &&
-          operationGenerationRef.current === generation &&
-          inboxRequestRef.current === request &&
-          sessionRef.current === session
-        ) {
-          setConversations(next)
-          applyConvosAccessSnapshot(session.convosAccessSnapshot)
-        }
-      }).catch(() => {
-        // The next explicit foreground/manual sync will surface the failure.
-      })
+      if (!sessionRef.current) return
+      // Stream events are hints, not proof that the mounted database is still
+      // authoritative. Route them through the same guarded network refresh as
+      // foreground/manual work before accepting any message into React state.
+      onlineRefreshPendingRef.current = true
+      visibleRefreshCallbackRef.current()
     }, 300)
-  }, [applyConvosAccessSnapshot])
+  }, [])
 
   const startMessageStream = useCallback(async (session: XmtpMessagingSession) => {
     if (browserIsKnownOffline()) {
@@ -426,9 +427,8 @@ export function useXmtpMessaging({
       return
     }
     const outcome = await settleUntilOffline(session.startMessageStream(
-      (message) => {
+      () => {
         if (sessionRef.current !== session) return
-        if (activeRef.current?.id === message.conversationId) upsertMessage(message)
         scheduleInboxRefresh()
       },
       (health) => {
@@ -443,9 +443,10 @@ export function useXmtpMessaging({
       mountedRef.current &&
       sessionRef.current === session
     ) setStreamHealth('offline')
-  }, [scheduleInboxRefresh, upsertMessage])
+  }, [scheduleInboxRefresh])
 
   const disconnect = useCallback(async () => {
+    transientInboxTargetRef.current = null
     await releaseResources()
     if (!mountedRef.current) return
 
@@ -719,10 +720,13 @@ export function useXmtpMessaging({
       setConnection({ error: null, phase: 'xmtp' })
       failureStage = 'initialize'
       let session: XmtpMessagingSession
+      const expectedInboxId = inboxTarget?.inboxId ??
+        transientInboxTargetRef.current ??
+        undefined
       const sessionPromise = XmtpMessagingSession.create(
         wallet.signer,
         wallet.address,
-        inboxTarget?.inboxId,
+        expectedInboxId,
         () => invalidateWallet(
           'XMTP stopped responding while synchronizing. Reconnect the inbox to restart it safely.',
         ),
@@ -757,6 +761,10 @@ export function useXmtpMessaging({
         return
       }
       sessionRef.current = session
+      if (
+        !inboxTarget &&
+        transientInboxTargetRef.current === session.inboxId
+      ) transientInboxTargetRef.current = null
       // Wallet approval can blur/focus the host while the initial client is
       // still opening. That belongs to setup, not to foreground recovery. A
       // genuinely hidden document still needs one refresh when it returns.
@@ -892,6 +900,16 @@ export function useXmtpMessaging({
         return
       }
 
+      const transientTargetFailure = !inboxTarget &&
+        transientInboxTargetRef.current
+        ? inboxTargetFailure(error)
+        : null
+      if (transientTargetFailure === 'target-mismatch') {
+        // The identity moved again between the stateless lookup and client
+        // creation. Drop the one-shot constraint so an explicit retry resolves
+        // the newest authoritative assignment instead of looping on a stale ID.
+        transientInboxTargetRef.current = null
+      }
       await releaseResources()
       if (shouldReport && mountedRef.current) {
         const targetFailure = inboxTarget ? inboxTargetFailure(error) : null
@@ -904,7 +922,9 @@ export function useXmtpMessaging({
         }
         const failure = classifyXmtpFailure(error, failureStage)
         setConnection({
-          error: failure.kind === 'unknown'
+          error: transientTargetFailure === 'target-mismatch'
+            ? 'The XMTP inbox assignment changed again while reconnecting. Try again to open its current assignment.'
+            : failure.kind === 'unknown'
             ? 'XMTP could not open this inbox.'
             : failure.message,
           phase: connectionFailurePhase(failure.kind),
@@ -960,6 +980,7 @@ export function useXmtpMessaging({
     if (!sourceSession || !sourceWallet || connection.phase !== 'ready') {
       throw new Error('Open the current XMTP inbox before binding an identity.')
     }
+    const sourceInboxId = sourceSession.inboxId
     if (candidateAddress.toLowerCase() === sourceSession.address.toLowerCase()) {
       throw new Error('That address already opens the current inbox.')
     }
@@ -973,7 +994,7 @@ export function useXmtpMessaging({
     if (!targetInboxId) {
       throw new Error('That ENS address does not have an existing XMTP inbox to join.')
     }
-    if (targetInboxId === sourceSession.inboxId) {
+    if (targetInboxId === sourceInboxId) {
       throw new Error('That ENS address is already part of the current XMTP inbox.')
     }
 
@@ -1000,13 +1021,92 @@ export function useXmtpMessaging({
         throw new DOMException('The identity binding was cancelled.', 'AbortError')
       }
 
-      // Everything above is reversible. From this callback onward, the dialog
-      // and host back handler must remain mounted until XMTP confirms or fails.
-      options.onCommitting?.()
+      // WalletConnect can remain open long enough for either identity to move
+      // elsewhere. Recheck both sides from XMTP's network ledger before
+      // journaling the target or mutating inbox A.
+      const [currentSourceInboxId, currentTargetInboxId] = await Promise.all([
+        sourceSession.resolveCurrentInboxId(),
+        sourceSession.findInboxId(candidateAddress),
+      ])
+      if (
+        sessionRef.current !== sourceSession ||
+        operationGenerationRef.current !== generation
+      ) throw new Error('The current inbox changed during the final safety check.')
       if (options.signal?.aborted) {
         throw new DOMException('The identity binding was cancelled.', 'AbortError')
       }
+      if (currentTargetInboxId !== targetInboxId) {
+        throw new Error('The ENS inbox changed during the wallet check.')
+      }
+      let sourceAlreadyTargetsInbox = currentSourceInboxId === targetInboxId
+      if (
+        !sourceAlreadyTargetsInbox &&
+        currentSourceInboxId !== sourceInboxId
+      ) throw new Error('The Farcaster inbox changed during the wallet check.')
+
+      // Prepare and sign A's recovery update while every failure is still
+      // reversible. The returned closure contains the first network mutation
+      // and is invoked only after the browser durably journals target B.
+      let commitRecoveryReassignment = sourceAlreadyTargetsInbox
+        ? null
+        : await sourceSession.prepareIdentityReassignment(
+          targetWallet.signer,
+          targetWallet.address,
+          sourceWallet.signer,
+        )
+
+      // Preparing the recovery update can itself show a wallet signature
+      // prompt. Repeat the ledger checks after that unbounded pause so a
+      // prepared request can never be applied to superseded inbox assignments.
+      const [confirmedSourceInboxId, confirmedTargetInboxId] = await Promise.all([
+        sourceSession.resolveCurrentInboxId(),
+        sourceSession.findInboxId(candidateAddress),
+      ])
+      if (
+        sessionRef.current !== sourceSession ||
+        operationGenerationRef.current !== generation
+      ) throw new Error('The current inbox changed during the recovery check.')
+      if (options.signal?.aborted) {
+        throw new DOMException('The identity binding was cancelled.', 'AbortError')
+      }
+      if (confirmedTargetInboxId !== targetInboxId) {
+        throw new Error('The ENS inbox changed during the recovery check.')
+      }
+      if (confirmedSourceInboxId === targetInboxId) {
+        sourceAlreadyTargetsInbox = true
+        commitRecoveryReassignment = null
+      } else if (
+        confirmedSourceInboxId !== sourceInboxId ||
+        sourceAlreadyTargetsInbox
+      ) {
+        throw new Error('The Farcaster inbox changed during the recovery check.')
+      }
+
+      // Everything above is reversible. From this callback onward, the dialog
+      // and host back handler must remain mounted until XMTP confirms or fails.
+      const binding = {
+        address: targetWallet.address,
+        chainId: sourceWallet.chainId.toString(10),
+        inboxId: targetInboxId,
+        walletKind: sourceWallet.kind,
+      } satisfies InboxBindingResult
+      options.onCommitting?.(binding)
       committed = true
+      transientInboxTargetRef.current = targetInboxId
+
+      // A previous attempt may already have completed the network reassignment
+      // while this document still has inbox A mounted. In that repair case,
+      // never apply a second identity update: close A and let the normal reload
+      // open the already-authoritative B database.
+      if (sourceAlreadyTargetsInbox) {
+        await releaseResources()
+        return binding
+      }
+
+      // A recovery identity cannot move between XMTP inboxes. Apply and verify
+      // the prepared A recovery update before asking B to associate the
+      // Farcaster identity.
+      await commitRecoveryReassignment?.()
 
       // The browser SDK permits only one OPFS-backed client in this document.
       // Close inbox A before opening B; successful completion intentionally ends
@@ -1026,14 +1126,13 @@ export function useXmtpMessaging({
         targetWallet.address,
         targetInboxId,
       )
-      await targetSession.bindIdentity(sourceWallet.signer, sourceWallet.address)
+      await targetSession.bindIdentity(
+        sourceWallet.signer,
+        sourceWallet.address,
+        sourceInboxId,
+      )
 
-      return {
-        address: targetWallet.address,
-        chainId: sourceWallet.chainId.toString(10),
-        inboxId: targetInboxId,
-        walletKind: sourceWallet.kind,
-      }
+      return binding
     } catch (error) {
       if (!committed) throw error
       if (
@@ -1046,7 +1145,10 @@ export function useXmtpMessaging({
       }
       if (
         error && typeof error === 'object' &&
-        'name' in error && error.name === 'XmtpIdentityBindingVerificationError'
+        'name' in error && (
+          error.name === 'XmtpIdentityBindingVerificationError' ||
+          error.name === 'XmtpRecoveryIdentityVerificationError'
+        )
       ) {
         throw Object.assign(
           new Error('XMTP could not confirm whether the Farcaster identity binding completed. Reload Converge Mini and verify the inbox before trying again.'),
@@ -1066,12 +1168,120 @@ export function useXmtpMessaging({
     }
   }, [connection.phase, releaseResources])
 
+  const clearMountedInboxView = useCallback(() => {
+    activeRef.current = null
+    setAddress(null)
+    setWalletKind(null)
+    setEnvironment('')
+    setStorageDurability(null)
+    setConversations([])
+    setActiveConversation(null)
+    setMessages([])
+    setView('inbox')
+    setLoadingConversation(false)
+    setLoadingOlder(false)
+    setHasOlderMessages(false)
+    setRefreshing(false)
+    setSending(false)
+    updateConvosAccessRequest(null)
+    updateNotice(null)
+  }, [updateConvosAccessRequest, updateNotice])
+
+  const ensureCurrentInboxAssignment = useCallback(async (
+    session: XmtpMessagingSession,
+    generation: number,
+  ): Promise<InboxAssignmentCheck> => {
+    // Preserve the documented already-open offline reading path. No network
+    // mutation can be performed from this app while the browser is offline.
+    if (browserIsKnownOffline()) return 'current'
+
+    let currentInboxId: string | null
+    try {
+      currentInboxId = await session.resolveCurrentInboxId()
+    } catch {
+      currentInboxId = null
+    }
+    if (
+      operationGenerationRef.current !== generation ||
+      sessionRef.current !== session
+    ) return 'stale'
+
+    if (!currentInboxId) {
+      const error =
+        'Converge Mini could not verify which XMTP inbox the Farcaster wallet currently opens. It closed the previous session before reading, sending, or refreshing more messages.'
+      const cleanup = releaseResources()
+      clearMountedInboxView()
+      setStreamHealth('failed')
+      setConnection({ error, phase: 'error' })
+      await cleanup
+      if (mountedRef.current && !sessionRef.current && !connectingRef.current) {
+        setConnection({ error, phase: 'error' })
+      }
+      return 'stopped'
+    }
+    if (currentInboxId === session.inboxId) return 'current'
+    if (reassignmentReconnectRef.current) return 'stale'
+
+    reassignmentReconnectRef.current = true
+    transientInboxTargetRef.current = currentInboxId
+    setConnection({ error: null, phase: 'xmtp' })
+    clearMountedInboxView()
+    setStreamHealth('retrying')
+    try {
+      await releaseResources()
+      if (!mountedRef.current) return 'stale'
+      setConnection(initialConnection)
+      await connectWithWalletPrompt()
+    } finally {
+      reassignmentReconnectRef.current = false
+    }
+    return 'reconnected'
+  }, [
+    clearMountedInboxView,
+    connectWithWalletPrompt,
+    releaseResources,
+  ])
+
+  const requireCurrentInboxAssignment = useCallback(async (
+    session: XmtpMessagingSession,
+  ): Promise<void> => {
+    const generation = operationGenerationRef.current
+    const assignment = await ensureCurrentInboxAssignment(session, generation)
+    if (
+      assignment !== 'current' ||
+      operationGenerationRef.current !== generation ||
+      sessionRef.current !== session
+    ) {
+      throw new Error(assignment === 'reconnected'
+        ? 'Your XMTP identity moved to another inbox. Reopen the conversation there before continuing.'
+        : 'Converge Mini could not verify the current XMTP inbox. Reconnect before continuing.')
+    }
+  }, [ensureCurrentInboxAssignment])
+
+  useEffect(() => {
+    const guard = async (session: XmtpMessagingSession) => {
+      const generation = operationGenerationRef.current
+      return await ensureCurrentInboxAssignment(session, generation) === 'current' &&
+        operationGenerationRef.current === generation &&
+        sessionRef.current === session
+    }
+    assignmentGuardCallbackRef.current = guard
+    return () => {
+      if (assignmentGuardCallbackRef.current === guard) {
+        assignmentGuardCallbackRef.current = async () => false
+      }
+    }
+  }, [ensureCurrentInboxAssignment])
+
   const inspectIdentityRelationship = useCallback(async (
     candidateAddress: `0x${string}`,
   ): Promise<XmtpIdentityRelationship> => {
     const session = sessionRef.current
     if (!session) throw new Error('Open the XMTP inbox before checking another identity.')
     try {
+      if (!browserIsKnownOffline()) {
+        await requireCurrentInboxAssignment(session)
+      }
       return await session.inspectIdentityRelationship(candidateAddress)
     } catch (error) {
       throw new Error(
@@ -1083,7 +1293,7 @@ export function useXmtpMessaging({
         { cause: error },
       )
     }
-  }, [])
+  }, [requireCurrentInboxAssignment])
 
   const canMessageAddress = useCallback(async (
     candidateAddress: `0x${string}`,
@@ -1094,6 +1304,7 @@ export function useXmtpMessaging({
       throw new Error('Reconnect before checking a new recipient.')
     }
     try {
+      await requireCurrentInboxAssignment(session)
       return await session.canMessageAddress(candidateAddress)
     } catch (error) {
       throw new Error(
@@ -1105,7 +1316,7 @@ export function useXmtpMessaging({
         { cause: error },
       )
     }
-  }, [])
+  }, [requireCurrentInboxAssignment])
 
   const openConversation = useCallback(async (
     conversationId: string,
@@ -1114,6 +1325,7 @@ export function useXmtpMessaging({
     const session = sessionRef.current
     if (!session) return
 
+    const generation = operationGenerationRef.current
     const request = ++openRequestRef.current
     loadingOlderRequestRef.current = null
     loadedMessageWindowRef.current = 0
@@ -1134,6 +1346,14 @@ export function useXmtpMessaging({
     let cachedConversationRead = false
     try {
       let offline = browserIsKnownOffline()
+      if (!offline) {
+        await requireCurrentInboxAssignment(session)
+      }
+      if (
+        operationGenerationRef.current !== generation ||
+        request !== openRequestRef.current ||
+        sessionRef.current !== session
+      ) return
       const onCachedConversation = (cached: Awaited<ReturnType<
         XmtpMessagingSession['readConversation']
       >>) => {
@@ -1219,7 +1439,7 @@ export function useXmtpMessaging({
         setLoadingConversation(false)
       }
     }
-  }, [conversations, updateNotice])
+  }, [conversations, requireCurrentInboxAssignment, updateNotice])
 
   const loadOlderMessages = useCallback(async () => {
     const session = sessionRef.current
@@ -1236,6 +1456,14 @@ export function useXmtpMessaging({
     loadingOlderRequestRef.current = request
     setLoadingOlder(true)
     try {
+      if (!browserIsKnownOffline()) {
+        await requireCurrentInboxAssignment(session)
+      }
+      if (
+        operationGenerationRef.current !== generation ||
+        openRequestRef.current !== request ||
+        sessionRef.current !== session
+      ) return
       const page = await session.loadOlderMessages(
         conversation.id,
         loadedMessageWindowRef.current,
@@ -1270,7 +1498,7 @@ export function useXmtpMessaging({
         if (mountedRef.current) setLoadingOlder(false)
       }
     }
-  }, [hasOlderMessages, updateNotice])
+  }, [hasOlderMessages, requireCurrentInboxAssignment, updateNotice])
 
   const createDm = useCallback(async (recipient: `0x${string}`) => {
     const session = sessionRef.current
@@ -1287,6 +1515,12 @@ export function useXmtpMessaging({
     const request = openRequestRef.current
     creatingDmRef.current = true
     try {
+      await requireCurrentInboxAssignment(session)
+      if (
+        operationGenerationRef.current !== generation ||
+        openRequestRef.current !== request ||
+        sessionRef.current !== session
+      ) return
       const conversation = await session.createDm(recipient)
       if (
         operationGenerationRef.current !== generation ||
@@ -1309,7 +1543,7 @@ export function useXmtpMessaging({
         creatingDmRef.current = false
       }
     }
-  }, [loadInbox, openConversation])
+  }, [loadInbox, openConversation, requireCurrentInboxAssignment])
 
   const requestConvosAccess = useCallback(async (invite: ParsedConvosInvite) => {
     const session = sessionRef.current
@@ -1331,6 +1565,7 @@ export function useXmtpMessaging({
       status: 'sending',
     })
     try {
+      await requireCurrentInboxAssignment(session)
       const result = await session.requestConvosAccess(invite)
       if (
         !mountedRef.current ||
@@ -1374,7 +1609,11 @@ export function useXmtpMessaging({
         }
       }
     }
-  }, [applyConvosAccessSnapshot, updateConvosAccessRequest])
+  }, [
+    applyConvosAccessSnapshot,
+    requireCurrentInboxAssignment,
+    updateConvosAccessRequest,
+  ])
 
   const retryConvosAccess = useCallback(async () => {
     const session = sessionRef.current
@@ -1399,6 +1638,7 @@ export function useXmtpMessaging({
       status: 'sending',
     })
     try {
+      await requireCurrentInboxAssignment(session)
       const { parseConvosInvite } = await import('../../lib/convos/invite')
       const freshInvite = parseConvosInvite(pending.invite.slug)
       const result = await session.requestConvosAccess(freshInvite)
@@ -1445,7 +1685,11 @@ export function useXmtpMessaging({
         }
       }
     }
-  }, [applyConvosAccessSnapshot, updateConvosAccessRequest])
+  }, [
+    applyConvosAccessSnapshot,
+    requireCurrentInboxAssignment,
+    updateConvosAccessRequest,
+  ])
 
   const resetConvosAccessRequest = useCallback(() => {
     const pending = convosAccessRequestRef.current
@@ -1474,6 +1718,7 @@ export function useXmtpMessaging({
     setSending(true)
     updateNotice(null)
     try {
+      await requireCurrentInboxAssignment(session)
       const result = await session.sendText(
         conversation.id,
         text,
@@ -1510,7 +1755,12 @@ export function useXmtpMessaging({
         if (mountedRef.current) setSending(false)
       }
     }
-  }, [scheduleInboxRefresh, updateNotice, upsertMessage])
+  }, [
+    requireCurrentInboxAssignment,
+    scheduleInboxRefresh,
+    updateNotice,
+    upsertMessage,
+  ])
 
   const retryMessage = useCallback(async (messageId: string) => {
     const session = sessionRef.current
@@ -1527,6 +1777,7 @@ export function useXmtpMessaging({
       message.id === messageId ? { ...message, delivery: 'sending' } : message
     )))
     try {
+      await requireCurrentInboxAssignment(session)
       const result = await session.retryMessage(conversation.id, messageId)
       if (
         operationGenerationRef.current === generation &&
@@ -1554,7 +1805,12 @@ export function useXmtpMessaging({
         retryingMessageIdsRef.current.delete(messageId)
       }
     }
-  }, [scheduleInboxRefresh, updateNotice, upsertMessage])
+  }, [
+    requireCurrentInboxAssignment,
+    scheduleInboxRefresh,
+    updateNotice,
+    upsertMessage,
+  ])
 
   const backToInbox = useCallback(() => {
     openRequestRef.current += 1
@@ -1574,12 +1830,30 @@ export function useXmtpMessaging({
     if (!session || visibleRefreshRef.current) return
 
     const generation = operationGenerationRef.current
+    visibleRefreshRef.current = true
+    let offline = browserIsKnownOffline()
+    if (
+      !offline &&
+      await ensureCurrentInboxAssignment(session, generation) !== 'current'
+    ) {
+      if (operationGenerationRef.current === generation) {
+        visibleRefreshRef.current = false
+      }
+      return
+    }
+    if (
+      operationGenerationRef.current !== generation ||
+      sessionRef.current !== session
+    ) {
+      if (operationGenerationRef.current === generation) {
+        visibleRefreshRef.current = false
+      }
+      return
+    }
     const activeConversationIdAtStart = activeRef.current?.id ?? null
     const openRequestAtStart = openRequestRef.current
-    let offline = browserIsKnownOffline()
     onlineRefreshPendingRef.current = false
     if (offline) setStreamHealth('offline')
-    visibleRefreshRef.current = true
     try {
       await loadInbox(false)
       offline = browserIsKnownOffline()
@@ -1686,7 +1960,12 @@ export function useXmtpMessaging({
         }
       }
     }
-  }, [loadInbox, startMessageStream, updateNotice])
+  }, [
+    ensureCurrentInboxAssignment,
+    loadInbox,
+    startMessageStream,
+    updateNotice,
+  ])
 
   useEffect(() => {
     const refreshForeground = async () => {
@@ -1708,6 +1987,7 @@ export function useXmtpMessaging({
           operationGenerationRef.current !== generation ||
           sessionRef.current !== session
         ) return
+
         await refreshVisibleState()
       } finally {
         if (foregroundCheckRef.current === owner) {
@@ -1800,6 +2080,21 @@ export function useXmtpMessaging({
     }
   }, [refreshVisibleState])
 
+  const refresh = useCallback(async () => {
+    const session = sessionRef.current
+    if (!session) return
+    const generation = operationGenerationRef.current
+    if (
+      await ensureCurrentInboxAssignment(session, generation) === 'current' &&
+      operationGenerationRef.current === generation &&
+      sessionRef.current === session
+    ) await loadInbox(true)
+  }, [ensureCurrentInboxAssignment, loadInbox])
+
+  const retryLiveUpdates = useCallback(async () => {
+    await refreshVisibleState()
+  }, [refreshVisibleState])
+
   useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -1836,10 +2131,10 @@ export function useXmtpMessaging({
     messages,
     notice,
     openConversation,
-    refresh: () => loadInbox(true),
+    refresh,
     requestConvosAccess,
     resetConvosAccessRequest,
-    retryLiveUpdates: refreshVisibleState,
+    retryLiveUpdates,
     retryConvosAccess,
     refreshing,
     retryMessage,

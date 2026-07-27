@@ -261,7 +261,8 @@ describe('JoinConvosScreen', () => {
     fireEvent.change(input, { target: { value: 'signed-invite' } })
     fireEvent.click(screen.getByRole('button', { name: 'Check invite' }))
 
-    expect(await screen.findByRole('heading', { name: 'Garden chat' })).toHaveFocus()
+    const previewHeading = await screen.findByRole('heading', { name: 'Garden chat' })
+    await waitFor(() => expect(previewHeading).toHaveFocus())
     expect(screen.getByRole('button', { name: 'Request access' })).toBeDisabled()
     expect(screen.getByRole('status')).toHaveTextContent(/check an invite offline/i)
   })

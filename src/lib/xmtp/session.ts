@@ -2,8 +2,10 @@ import {
   Client,
   ConsentState,
   ContentType,
+  createBackend,
   DeliveryStatus,
   Dm,
+  getInboxIdForIdentifier,
   Group,
   GroupMessageKind,
   IdentifierKind,
@@ -87,6 +89,7 @@ const INBOX_LIMIT = 50n
 const MESSAGE_PAGE_SIZE = 50n
 const CLIENT_INITIALIZATION_TIMEOUT_MS = 30_000
 const SYNC_OPERATION_TIMEOUT_MS = 120_000
+const INBOX_ASSIGNMENT_RETRY_DELAYS_MS = [0, 100, 250, 500, 1_000, 2_000, 4_000] as const
 const NON_TIMELINE_CONTENT_TYPES = [ContentType.Reaction, ContentType.ReadReceipt]
 const SUPPORTED_ENVS: readonly XmtpEnv[] = [
   'local',
@@ -201,9 +204,22 @@ export class XmtpInboxTargetMismatchError extends Error {
 }
 
 export class XmtpIdentityBindingVerificationError extends Error {
-  constructor() {
-    super('XMTP did not confirm the Farcaster identity on the target inbox.')
+  constructor(cause?: unknown) {
+    super(
+      'XMTP did not confirm the Farcaster identity on the target inbox.',
+      cause === undefined ? undefined : { cause },
+    )
     this.name = 'XmtpIdentityBindingVerificationError'
+  }
+}
+
+export class XmtpRecoveryIdentityVerificationError extends Error {
+  constructor(cause?: unknown) {
+    super(
+      'XMTP did not confirm the recovery identity needed for this inbox reassignment.',
+      cause === undefined ? undefined : { cause },
+    )
+    this.name = 'XmtpRecoveryIdentityVerificationError'
   }
 }
 
@@ -325,6 +341,11 @@ export class XmtpMessagingSession {
     onTerminal?: (error: Error) => void,
   ) {
     const options = clientOptions()
+    const identifier = await signer.getIdentifier()
+    const networkInboxId = await resolveNetworkInboxId(identifier, options)
+    if (expectedInboxId && networkInboxId !== expectedInboxId) {
+      throw new XmtpInboxTargetMismatchError()
+    }
     let client: AppClient
     let clientPromise: Promise<AppClient> | null = null
 
@@ -348,11 +369,31 @@ export class XmtpMessagingSession {
     }
 
     try {
-      if (expectedInboxId && client.inboxId !== expectedInboxId) {
+      const isNewInstallation = !(await client.isRegistered())
+      // Client.create performs its own ledger lookup before selecting the
+      // per-inbox database. Resolve once more after it returns so an identity
+      // move during initialization cannot leave this document registered
+      // against the database chosen from a superseded assignment.
+      const currentNetworkInboxId = await resolveNetworkInboxId(identifier, options)
+      if (
+        (expectedInboxId && currentNetworkInboxId !== expectedInboxId) ||
+        (!currentNetworkInboxId && (networkInboxId || !isNewInstallation))
+      ) {
         throw new XmtpInboxTargetMismatchError()
       }
-      const isNewInstallation = !(await client.isRegistered())
-      await client.register()
+      const openedInboxId = client.inboxId
+      if (!openedInboxId) throw new XmtpInboxTargetMismatchError()
+      const resolvedInboxId = expectedInboxId ?? currentNetworkInboxId
+      if (resolvedInboxId && openedInboxId !== resolvedInboxId) {
+        throw new XmtpInboxTargetMismatchError()
+      }
+      if (isNewInstallation) await client.register()
+      const confirmedNetworkInboxId = currentNetworkInboxId
+        ? await resolveNetworkInboxId(identifier, options)
+        : await waitForNetworkInboxId(identifier, openedInboxId, options)
+      if (confirmedNetworkInboxId !== openedInboxId) {
+        throw new XmtpInboxTargetMismatchError()
+      }
       return new XmtpMessagingSession(
         client,
         address,
@@ -372,6 +413,19 @@ export class XmtpMessagingSession {
 
   get environment(): XmtpEnv {
     return this.client.env ?? configuredEnvironment()
+  }
+
+  /**
+   * Resolve the active Farcaster identity against the network ledger without
+   * consulting this client's local database. A mounted client never retargets
+   * itself after an identity reassignment, so callers must close and recreate
+   * the session when this value differs from `inboxId`.
+   */
+  async resolveCurrentInboxId(): Promise<string | null> {
+    return await resolveNetworkInboxId(
+      ethereumIdentifier(this.address),
+      clientOptions(),
+    )
   }
 
   async pushSnapshot(): Promise<XmtpPushSnapshot> {
@@ -519,11 +573,86 @@ export class XmtpMessagingSession {
    * target that must still match after the document restarts.
    */
   async findInboxId(address: `0x${string}`): Promise<string | null> {
-    if (address.toLowerCase() === this.address.toLowerCase()) return this.inboxId
-
-    return await this.client.fetchInboxIdByIdentifier(
+    return await resolveNetworkInboxId(
       ethereumIdentifier(address),
-    ) ?? null
+      clientOptions(),
+    )
+  }
+
+  /**
+   * A recovery identity is permanently pinned to its inbox and cannot be
+   * reassigned. Before moving the Farcaster identity into the ENS inbox, make
+   * the authenticated ENS identity the old inbox's recovery identifier. This
+   * operation does not add the ENS identity as a routable member of the old
+   * inbox; it only preserves recovery authority after the Farcaster identity
+   * leaves.
+   */
+  async prepareIdentityReassignment(
+    recoverySigner: Signer,
+    recoveryAddress: `0x${string}`,
+    sourceSigner: Signer,
+  ): Promise<() => Promise<void>> {
+    const sourceIdentifier = ethereumIdentifier(this.address)
+    const [recoveryIdentifier, authenticatedSourceIdentifier] = await Promise.all([
+      recoverySigner.getIdentifier(),
+      sourceSigner.getIdentifier(),
+    ])
+    if (
+      recoveryIdentifier.identifierKind !== IdentifierKind.Ethereum ||
+      recoveryIdentifier.identifier.toLowerCase() !== recoveryAddress.toLowerCase() ||
+      recoveryAddress.toLowerCase() === this.address.toLowerCase() ||
+      !identifiersEqual(authenticatedSourceIdentifier, sourceIdentifier)
+    ) throw new XmtpRecoveryIdentityVerificationError()
+
+    const before = await this.client.preferences.fetchInboxState()
+    if (
+      before.inboxId !== this.inboxId ||
+      !hasIdentifier(before, sourceIdentifier)
+    ) throw new XmtpRecoveryIdentityVerificationError()
+
+    const recoveryAlreadyPrepared = identifiersEqual(
+      before.recoveryIdentifier,
+      recoveryIdentifier,
+    )
+    if (
+      !recoveryAlreadyPrepared &&
+      !identifiersEqual(before.recoveryIdentifier, sourceIdentifier)
+    ) {
+      throw new XmtpRecoveryIdentityVerificationError()
+    }
+
+    let applyRecoveryUpdate: (() => Promise<void>) | null = null
+    if (!recoveryAlreadyPrepared) {
+      const { signatureText, signatureRequestId } =
+        await this.client.unsafe_changeRecoveryIdentifierSignatureText(
+          recoveryIdentifier,
+        )
+      const signature = await sourceSigner.signMessage(signatureText)
+      const safeSigner = await toSafeSigner(sourceSigner, signature)
+      applyRecoveryUpdate = async () => {
+        try {
+          await this.client.unsafe_applySignatureRequest(
+            safeSigner,
+            signatureRequestId,
+          )
+        } catch (error) {
+          throw new XmtpRecoveryIdentityVerificationError(error)
+        }
+      }
+    }
+
+    return async () => {
+      await applyRecoveryUpdate?.()
+      const after = await waitForNetworkInboxState(
+        this.client,
+        (state) => (
+          state.inboxId === this.inboxId &&
+          identifiersEqual(state.recoveryIdentifier, recoveryIdentifier) &&
+          hasIdentifier(state, sourceIdentifier)
+        ),
+      )
+      if (!after) throw new XmtpRecoveryIdentityVerificationError()
+    }
   }
 
   /**
@@ -532,32 +661,93 @@ export class XmtpMessagingSession {
    * so use the SDK's equivalent request/sign/apply workflow and verify the
    * resulting address-log and inbox state from the network before returning.
    */
-  async bindIdentity(signer: Signer, address: `0x${string}`): Promise<void> {
+  async bindIdentity(
+    signer: Signer,
+    address: `0x${string}`,
+    expectedSourceInboxId: string,
+  ): Promise<void> {
     const identifier = await signer.getIdentifier()
     if (
       identifier.identifierKind !== IdentifierKind.Ethereum ||
-      identifier.identifier.toLowerCase() !== address.toLowerCase()
+      identifier.identifier.toLowerCase() !== address.toLowerCase() ||
+      !expectedSourceInboxId ||
+      expectedSourceInboxId === this.inboxId
     ) throw new XmtpIdentityBindingVerificationError()
+
+    const targetIdentifier = ethereumIdentifier(this.address)
+    const resolveAssignments = async () => {
+      try {
+        const [sourceInboxId, targetInboxId] = await Promise.all([
+          resolveNetworkInboxId(identifier, clientOptions()),
+          resolveNetworkInboxId(targetIdentifier, clientOptions()),
+        ])
+        if (
+          targetInboxId !== this.inboxId ||
+          (
+            sourceInboxId !== expectedSourceInboxId &&
+            sourceInboxId !== this.inboxId
+          )
+        ) throw new XmtpIdentityBindingVerificationError()
+        return sourceInboxId
+      } catch (error) {
+        if (error instanceof XmtpIdentityBindingVerificationError) throw error
+        throw new XmtpIdentityBindingVerificationError(error)
+      }
+    }
+    const verifyTargetState = async () => {
+      const inboxState = await waitForNetworkInboxState(
+        this.client,
+        (state) => state.inboxId === this.inboxId && hasIdentifier(state, identifier),
+      )
+      if (!inboxState) throw new XmtpIdentityBindingVerificationError()
+      try {
+        if (
+          await resolveNetworkInboxId(targetIdentifier, clientOptions()) !==
+          this.inboxId
+        ) throw new XmtpIdentityBindingVerificationError()
+      } catch (error) {
+        if (error instanceof XmtpIdentityBindingVerificationError) throw error
+        throw new XmtpIdentityBindingVerificationError(error)
+      }
+    }
+
+    if (await resolveAssignments() === this.inboxId) {
+      await verifyTargetState()
+      return
+    }
 
     const { signatureText, signatureRequestId } =
       await this.client.unsafe_addAccountSignatureText(identifier, true)
     const signature = await signer.signMessage(signatureText)
-    await this.client.unsafe_applySignatureRequest(
-      await toSafeSigner(signer, signature),
-      signatureRequestId,
-    )
+    const safeSigner = await toSafeSigner(signer, signature)
 
-    const [resolvedInboxId, inboxState] = await Promise.all([
-      this.client.fetchInboxIdByIdentifier(identifier),
-      this.client.preferences.fetchInboxState(),
-    ])
-    const identityPresent = inboxState.accountIdentifiers.some((candidate) => (
-      candidate.identifierKind === identifier.identifierKind &&
-      candidate.identifier.toLowerCase() === identifier.identifier.toLowerCase()
-    ))
-    if (resolvedInboxId !== this.inboxId || !identityPresent) {
+    // The source wallet prompt can remain open while another client moves
+    // either identity. Never use allowReassign=true against a third inbox that
+    // appeared after the user started this migration.
+    if (await resolveAssignments() === this.inboxId) {
+      await verifyTargetState()
+      return
+    }
+    try {
+      await this.client.unsafe_applySignatureRequest(
+        safeSigner,
+        signatureRequestId,
+      )
+    } catch (error) {
+      throw new XmtpIdentityBindingVerificationError(error)
+    }
+    const resolvedInboxId = await waitForNetworkInboxId(
+      identifier,
+      this.inboxId,
+      clientOptions(),
+    )
+    // Read B after the stateless address log resolves to B. Fetching these in
+    // parallel can capture a pre-apply inbox state even when reassignment
+    // propagation completes during the bounded address-log poll.
+    if (resolvedInboxId !== this.inboxId) {
       throw new XmtpIdentityBindingVerificationError()
     }
+    await verifyTargetState()
   }
 
   async requestHistorySync(): Promise<boolean> {
@@ -1467,12 +1657,76 @@ function clientOptions(): ReturnType<typeof xmtpClientOptions> {
   )
 }
 
+async function resolveNetworkInboxId(
+  identifier: Identifier,
+  options: ReturnType<typeof xmtpClientOptions>,
+): Promise<string | null> {
+  const backend = await createBackend({
+    appVersion: options.appVersion,
+    env: options.env,
+    ...(options.gatewayHost ? { gatewayHost: options.gatewayHost } : {}),
+  })
+  return await getInboxIdForIdentifier(backend, identifier) ?? null
+}
+
+async function waitForNetworkInboxId(
+  identifier: Identifier,
+  expectedInboxId: string,
+  options: ReturnType<typeof xmtpClientOptions>,
+): Promise<string | null> {
+  let resolvedInboxId: string | null = null
+  for (const delayMs of INBOX_ASSIGNMENT_RETRY_DELAYS_MS) {
+    if (delayMs) await wait(delayMs)
+    try {
+      resolvedInboxId = await resolveNetworkInboxId(identifier, options)
+    } catch {
+      // Address-log propagation and transport availability can both be
+      // transient immediately after an identity update. Exhaust the same
+      // bounded window before classifying the binding as ambiguous.
+      resolvedInboxId = null
+    }
+    if (resolvedInboxId === expectedInboxId) return resolvedInboxId
+  }
+  return resolvedInboxId
+}
+
+async function waitForNetworkInboxState(
+  client: AppClient,
+  accepts: (state: InboxState) => boolean,
+): Promise<InboxState | null> {
+  for (const delayMs of INBOX_ASSIGNMENT_RETRY_DELAYS_MS) {
+    if (delayMs) await wait(delayMs)
+    try {
+      const state = await client.preferences.fetchInboxState()
+      if (accepts(state)) return state
+    } catch {
+      // The bounded retry below remains fail closed if every fresh read fails.
+    }
+  }
+  return null
+}
+
 function configuredEnvironment(): XmtpEnv {
   const configured = import.meta.env.VITE_XMTP_ENV?.trim()
   if (configured && SUPPORTED_ENVS.includes(configured as XmtpEnv)) {
     return configured as XmtpEnv
   }
   return import.meta.env.PROD ? 'production' : 'dev'
+}
+
+function identifiersEqual(left: Identifier, right: Identifier): boolean {
+  return left.identifierKind === right.identifierKind &&
+    left.identifier.toLowerCase() === right.identifier.toLowerCase()
+}
+
+function hasIdentifier(state: InboxState, identifier: Identifier): boolean {
+  return state.accountIdentifiers.some((candidate) => (
+    identifiersEqual(candidate, identifier)
+  ))
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, delayMs))
 }
 
 function displayAddress(state: InboxState | undefined): string | null {

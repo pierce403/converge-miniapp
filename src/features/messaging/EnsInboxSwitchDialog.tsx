@@ -125,7 +125,10 @@ export function EnsInboxSwitchDialog({
             The inboxes do not merge. Your Farcaster wallet will lose normal access to its old XMTP inbox, and those old messages will not move into {candidate.name}.
           </p>
           <p>
-            The ENS owner wallet is used only once to grant this installation access. Your Farcaster wallet then signs the binding and becomes the everyday signer; future launches will not reconnect this external wallet. Neither signature is a transaction or costs gas.
+            XMTP does not let an inbox&apos;s recovery identity move directly. Before reassigning the Farcaster wallet, Converge Mini will make the verified {candidate.name} address the old inbox&apos;s recovery authority. This does not route {candidate.name} messages into the old inbox.
+          </p>
+          <p>
+            The ENS owner wallet is used only for this migration. Your Farcaster wallet then becomes the everyday signer for {candidate.name}; future launches will not reconnect the external wallet. None of these signatures is a transaction or costs gas.
           </p>
           <p>
             After XMTP confirms the binding, Converge Mini reloads once to open the target inbox with your Farcaster wallet.

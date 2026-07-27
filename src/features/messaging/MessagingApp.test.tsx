@@ -469,11 +469,20 @@ describe('MessagingApp storage and installation states', () => {
     }
     const refresh = vi.fn().mockResolvedValue(fresh)
     const setPreference = vi.fn().mockResolvedValue(undefined)
-    const bindEnsInbox = vi.fn().mockResolvedValue({
+    const bindingResult = {
       address: candidate.address,
       chainId: '1',
       inboxId: 'deanpierce-inbox',
-      walletKind: 'EOA',
+      walletKind: 'EOA' as const,
+    }
+    const bindEnsInbox = vi.fn((
+      _address: typeof candidate.address,
+      options: {
+        onCommitting?: ((binding: typeof bindingResult) => void) | undefined
+      },
+    ) => {
+      options.onCommitting?.(bindingResult)
+      return Promise.resolve(bindingResult)
     })
     const reloadDocument = vi.fn()
     mocks.ens.mockReturnValue(readyEns({
@@ -652,9 +661,21 @@ describe('MessagingApp storage and installation states', () => {
     }>()
     const bindEnsInbox = vi.fn((
       _address: typeof candidate.address,
-      options: { onCommitting?: (() => void) | undefined },
+      options: {
+        onCommitting?: ((binding: {
+          address: typeof candidate.address
+          chainId: string
+          inboxId: string
+          walletKind: 'EOA'
+        }) => void) | undefined
+      },
     ) => {
-      options.onCommitting?.()
+      options.onCommitting?.({
+        address: candidate.address,
+        chainId: '1',
+        inboxId: 'target-inbox',
+        walletKind: 'EOA',
+      })
       return binding.promise
     })
     const reloadDocument = vi.fn()
@@ -711,7 +732,7 @@ describe('MessagingApp storage and installation states', () => {
     )).not.toBeNull()
   })
 
-  it('still reloads after a confirmed network binding when its label cannot be saved', async () => {
+  it('keeps the current inbox untouched when the migration target cannot be saved', async () => {
     const candidate = {
       address: '0x2222222222222222222222222222222222222222' as const,
       name: 'deanpierce.eth',
@@ -727,14 +748,24 @@ describe('MessagingApp storage and installation states', () => {
       ...fresh,
       refresh: vi.fn().mockResolvedValue(fresh),
     }))
+    const bindingResult = {
+      address: candidate.address,
+      chainId: '1',
+      inboxId: 'target-inbox',
+      walletKind: 'EOA' as const,
+    }
+    const bindEnsInbox = vi.fn((
+      _address: typeof candidate.address,
+      options: {
+        onCommitting?: ((binding: typeof bindingResult) => void) | undefined
+      },
+    ) => {
+      options.onCommitting?.(bindingResult)
+      return Promise.resolve(bindingResult)
+    })
     mocks.messaging.mockReturnValue({
       ...readyMessaging(),
-      bindEnsInbox: vi.fn().mockResolvedValue({
-        address: candidate.address,
-        chainId: '1',
-        inboxId: 'target-inbox',
-        walletKind: 'EOA',
-      }),
+      bindEnsInbox,
     })
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('storage full')
@@ -753,8 +784,11 @@ describe('MessagingApp storage and installation states', () => {
       name: 'Bind Farcaster wallet to deanpierce.eth',
     }))
 
-    await waitFor(() => expect(reloadDocument).toHaveBeenCalledOnce())
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+      /could not save the target inbox.*current inbox is unchanged/i,
+    ))
+    expect(reloadDocument).not.toHaveBeenCalled()
+    expect(bindEnsInbox).toHaveBeenCalledOnce()
     setItem.mockRestore()
     expect(window.localStorage.getItem(
       `converge-miniapp:ens-inbox-target:${user.fid}`,
@@ -825,6 +859,97 @@ describe('MessagingApp storage and installation states', () => {
     fireEvent.click(screen.getByLabelText('Identity and privacy'))
     expect(screen.getByRole('heading', { name: 'Farcaster wallet' })).toBeVisible()
     expect(screen.queryByRole('button', { name: /Reconnect external wallet/i })).not.toBeInTheDocument()
+  })
+
+  it('lets a saved-target mismatch follow XMTP’s fresh current assignment', () => {
+    window.localStorage.setItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+      JSON.stringify({
+        address: '0x2222222222222222222222222222222222222222',
+        chainId: '1',
+        inboxId: 'target-inbox',
+        name: 'deanpierce.eth',
+        sourceAddress: '0x1111111111111111111111111111111111111111',
+        version: 4,
+        walletKind: 'EOA',
+      }),
+    )
+    const connect = vi.fn()
+    const reloadDocument = vi.fn()
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      connect,
+      connection: {
+        error: 'XMTP opened a different inbox than the verified target.',
+        phase: 'target-mismatch',
+      },
+    })
+
+    render(
+      <MessagingApp
+        canUseBack={false}
+        canUseWallet
+        reloadDocument={reloadDocument}
+        user={user}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    expect(connect).toHaveBeenCalledOnce()
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Open XMTP’s current inbox',
+    }))
+    expect(window.localStorage.getItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+    )).toBeNull()
+    expect(reloadDocument).toHaveBeenCalledOnce()
+  })
+
+  it('follows XMTP for this session when a valid saved target cannot be removed', () => {
+    window.localStorage.setItem(
+      `converge-miniapp:ens-inbox-target:${user.fid}`,
+      JSON.stringify({
+        address: '0x2222222222222222222222222222222222222222',
+        chainId: '1',
+        inboxId: 'target-inbox',
+        name: 'deanpierce.eth',
+        sourceAddress: '0x1111111111111111111111111111111111111111',
+        version: 4,
+        walletKind: 'EOA',
+      }),
+    )
+    const reloadDocument = vi.fn()
+    mocks.messaging.mockReturnValue({
+      ...readyMessaging(),
+      connection: {
+        error: 'The saved source signer is unavailable.',
+        phase: 'target-unavailable',
+      },
+    })
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('storage unavailable')
+    })
+
+    render(
+      <MessagingApp
+        canUseBack={false}
+        canUseWallet
+        reloadDocument={reloadDocument}
+        user={user}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Open XMTP’s current inbox',
+    }))
+
+    expect(mocks.messaging).toHaveBeenLastCalledWith({
+      autoConnect: true,
+      inboxTarget: null,
+      notificationFid: user.fid,
+    })
+    expect(reloadDocument).not.toHaveBeenCalled()
+    removeItem.mockRestore()
   })
 
   it('never shows WalletConnect recovery during routine bound-inbox startup', () => {

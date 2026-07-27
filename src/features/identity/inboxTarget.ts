@@ -17,8 +17,9 @@ type InboxTargetBase = {
 export type InboxTargetWalletKind = 'EOA' | 'SCW'
 
 /**
- * A confirmed XMTP identity binding. `address` owns the ENS name/inbox while
- * `sourceAddress` is the Farcaster wallet that was reassigned into that inbox.
+ * A fail-closed XMTP target selection. It is written immediately before an
+ * identity update and retained through ambiguous outcomes, so readers must
+ * still prove `sourceAddress` resolves `inboxId` before rendering messages.
  * Future sessions always authenticate with the Farcaster wallet.
  */
 export type InboxTarget = InboxTargetBase & {

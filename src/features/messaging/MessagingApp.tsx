@@ -288,7 +288,23 @@ export function MessagingApp({
     let binding: Awaited<ReturnType<typeof messaging.bindEnsInbox>>
     try {
       binding = await messaging.bindEnsInbox(candidate.address, {
-        onCommitting: () => {
+        onCommitting: (target) => {
+          if (
+            target.address.toLowerCase() !== candidate.address.toLowerCase() ||
+            !writeInboxTarget(user.fid, {
+              address: target.address,
+              chainId: target.chainId,
+              inboxId: target.inboxId,
+              name: candidate.name,
+              sourceAddress,
+              walletKind: target.walletKind,
+            })
+          ) {
+            throw new EnsInboxSwitchFailure(
+              'ens-switch-storage-failed',
+              'This browser could not save the target inbox before XMTP changed anything. Your current inbox is unchanged.',
+            )
+          }
           switchCommittedRef.current = true
           onCommitting()
         },
@@ -302,7 +318,8 @@ export function MessagingApp({
         'code' in error &&
         typeof error.code === 'string' &&
         (error.code.startsWith('walletconnect-') ||
-          error.code.startsWith('ens-binding-'))
+          error.code.startsWith('ens-binding-') ||
+          error.code.startsWith('ens-switch-'))
       ) throw error
       throw new EnsInboxSwitchFailure(
         'ens-switch-preflight-failed',
@@ -317,32 +334,19 @@ export function MessagingApp({
       )
     }
 
-    writeInboxTarget(user.fid, {
-      address: binding.address,
-      inboxId: binding.inboxId,
-      name: candidate.name,
-      sourceAddress,
-      walletKind: binding.walletKind,
-      chainId: binding.chainId,
-    })
     allowAutomaticEnsDiscovery(user.fid)
   }, [ensIdentity, messaging, user.fid])
   const useFarcasterInbox = useCallback(() => {
     setTargetRecoveryError(null)
     if (!clearInboxTarget(user.fid)) {
-      if (selectionBlocked) {
-        // The user explicitly chose the host-preferred inbox. If Web Storage
-        // cannot be mutated, honor that choice for this mounted session only.
-        setIgnoreInboxSelection(true)
-        return
-      }
-      setTargetRecoveryError(
-        'The saved inbox could not be cleared from this browser. No inbox was changed.',
-      )
+      // The user explicitly chose XMTP's current network assignment. If Web
+      // Storage cannot be mutated, honor that choice for this mounted session
+      // only rather than trapping a valid selector in a terminal state.
+      setIgnoreInboxSelection(true)
       return
     }
     reloadDocument()
-  }, [reloadDocument, selectionBlocked, user.fid])
+  }, [reloadDocument, user.fid])
   const describeRecovery = useCallback((description: string) => (
     targetRecoveryError ? `${description} ${targetRecoveryError}` : description
   ), [targetRecoveryError])
@@ -501,6 +505,9 @@ export function MessagingApp({
         actions={(
           <>
             <Button onClick={messaging.connect}>Check again</Button>
+            <Button variant="ghost" onClick={useFarcasterInbox}>
+              Open XMTP’s current inbox
+            </Button>
           </>
         )}
         description={describeRecovery(`Farcaster is not exposing the bound wallet ${inboxTarget.sourceAddress}. The ENS owner wallet is intentionally not used for routine sign-in.`)}
@@ -514,6 +521,14 @@ export function MessagingApp({
   if (messaging.connection.phase === 'target-mismatch' && inboxTarget) {
     return (
       <StatePanel
+        actions={(
+          <>
+            <Button onClick={messaging.connect}>Check again</Button>
+            <Button variant="ghost" onClick={useFarcasterInbox}>
+              Open XMTP’s current inbox
+            </Button>
+          </>
+        )}
         description={describeRecovery('XMTP no longer opens the inbox verified for the saved ENS address. Converge Mini closed the unexpected client without rendering its messages.')}
         eyebrow="Saved inbox changed"
         icon={<AlertTriangle aria-hidden="true" />}
@@ -525,6 +540,14 @@ export function MessagingApp({
   if (messaging.connection.phase === 'target-source-mismatch' && inboxTarget) {
     return (
       <StatePanel
+        actions={(
+          <>
+            <Button onClick={messaging.connect}>Check again</Button>
+            <Button variant="ghost" onClick={useFarcasterInbox}>
+              Open XMTP’s current inbox
+            </Button>
+          </>
+        )}
         description={describeRecovery('This ENS inbox was bound to a different Farcaster wallet. Converge Mini did not request an XMTP signature or open another inbox.')}
         eyebrow="Farcaster account changed"
         icon={<AlertTriangle aria-hidden="true" />}

@@ -15,6 +15,8 @@ import {
 
 const sdkMocks = vi.hoisted(() => ({
   create: vi.fn(),
+  createBackend: vi.fn(),
+  getInboxIdForIdentifier: vi.fn(),
   toSafeSigner: vi.fn(),
 }))
 
@@ -35,6 +37,8 @@ vi.mock('@xmtp/browser-sdk', () => {
     LogLevel: { Off: 0 },
     ReactionAction: { Added: 1, Removed: 2 },
     SortDirection: { Ascending: 0, Descending: 1 },
+    createBackend: sdkMocks.createBackend,
+    getInboxIdForIdentifier: sdkMocks.getInboxIdForIdentifier,
     toSafeSigner: sdkMocks.toSafeSigner,
     isActions: (message: DecodedMessage) => message.contentType?.typeId === 'actions',
     isAttachment: (message: DecodedMessage) => message.contentType?.typeId === 'attachment',
@@ -74,6 +78,7 @@ import {
 import { parseConvosInvite, type ParsedConvosInvite } from '../convos/invite'
 
 const address = '0x52908400098527886E0F7030069857D2E4169EE7'
+const targetAddress = '0x2222222222222222222222222222222222222222'
 const CONVOS_TEST_SCAN_LIMIT = 20n
 const CONVOS_CREATOR_BYTES = new Uint8Array(32).fill(0xab)
 const CONVOS_CREATOR_INBOX_ID = 'ab'.repeat(32)
@@ -83,6 +88,14 @@ const signer = {
   type: 'EOA',
   getIdentifier: () => ({
     identifier: address.toLowerCase(),
+    identifierKind: IdentifierKind.Ethereum,
+  }),
+  signMessage: vi.fn(),
+} satisfies Signer
+const targetSigner = {
+  type: 'EOA',
+  getIdentifier: () => ({
+    identifier: targetAddress,
     identifierKind: IdentifierKind.Ethereum,
   }),
   signMessage: vi.fn(),
@@ -349,6 +362,7 @@ function client(conversation: Dm) {
     isRegistered: vi.fn().mockResolvedValue(false),
     register: vi.fn(),
     sendSyncRequest: vi.fn(),
+    unsafe_changeRecoveryIdentifierSignatureText: vi.fn(),
     unsafe_addAccountSignatureText: vi.fn(),
     unsafe_applySignatureRequest: vi.fn(),
   }
@@ -443,8 +457,11 @@ function convosErrorMessage(
 describe('XmtpMessagingSession behavior', () => {
   beforeEach(() => {
     sdkMocks.create.mockReset()
+    sdkMocks.createBackend.mockReset().mockResolvedValue({ network: true })
+    sdkMocks.getInboxIdForIdentifier.mockReset().mockResolvedValue('own-inbox')
     sdkMocks.toSafeSigner.mockReset()
     signer.signMessage.mockReset()
+    targetSigner.signMessage.mockReset()
   })
 
   afterEach(() => {
@@ -552,6 +569,7 @@ describe('XmtpMessagingSession behavior', () => {
       sync: vi.fn().mockResolvedValue(undefined),
     })
     sdkMocks.create.mockResolvedValue(fakeClient)
+    sdkMocks.getInboxIdForIdentifier.mockResolvedValue(fakeClient.inboxId)
 
     const session = await XmtpMessagingSession.create(signer, address)
     const snapshot = await session.pushSnapshot()
@@ -635,6 +653,7 @@ describe('XmtpMessagingSession behavior', () => {
       return finishAlertSync.promise
     })
     sdkMocks.create.mockResolvedValue(fakeClient)
+    sdkMocks.getInboxIdForIdentifier.mockResolvedValue(fakeClient.inboxId)
     const session = await XmtpMessagingSession.create(signer, address)
 
     const snapshot = session.pushSnapshot()
@@ -2011,14 +2030,98 @@ describe('XmtpMessagingSession behavior', () => {
     expect(resumedClient.sendSyncRequest).not.toHaveBeenCalled()
   })
 
-  it('closes before registration when an explicit inbox target changed', async () => {
+  it('rejects before client creation when an explicit inbox target changed', async () => {
     const fakeClient = client(dm())
     sdkMocks.create.mockResolvedValue(fakeClient)
+    sdkMocks.getInboxIdForIdentifier.mockResolvedValue('another-inbox')
 
     await expect(XmtpMessagingSession.create(
       signer,
       address,
       'expected-inbox',
+    )).rejects.toMatchObject({ name: 'XmtpInboxTargetMismatchError' })
+
+    expect(sdkMocks.create).not.toHaveBeenCalled()
+    expect(fakeClient.register).not.toHaveBeenCalled()
+    expect(fakeClient.close).not.toHaveBeenCalled()
+  })
+
+  it('closes before registration when the inbox changes during client creation', async () => {
+    const fakeClient = client(dm())
+    fakeClient.inboxId = 'another-inbox'
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    sdkMocks.getInboxIdForIdentifier.mockResolvedValue('expected-inbox')
+
+    await expect(XmtpMessagingSession.create(
+      signer,
+      address,
+      'expected-inbox',
+    )).rejects.toMatchObject({ name: 'XmtpInboxTargetMismatchError' })
+
+    expect(fakeClient.register).not.toHaveBeenCalled()
+    expect(fakeClient.close).toHaveBeenCalledOnce()
+  })
+
+  it('rechecks the network after client creation before registering a stale database', async () => {
+    const fakeClient = client(dm())
+    fakeClient.inboxId = 'old-inbox'
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    sdkMocks.getInboxIdForIdentifier
+      .mockResolvedValueOnce('old-inbox')
+      .mockResolvedValueOnce('current-inbox')
+
+    await expect(XmtpMessagingSession.create(
+      signer,
+      address,
+    )).rejects.toMatchObject({ name: 'XmtpInboxTargetMismatchError' })
+
+    expect(fakeClient.register).not.toHaveBeenCalled()
+    expect(fakeClient.close).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a registered local client when the network has no assignment', async () => {
+    const fakeClient = client(dm())
+    fakeClient.isRegistered.mockResolvedValue(true)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    sdkMocks.getInboxIdForIdentifier.mockResolvedValue(null)
+
+    await expect(XmtpMessagingSession.create(
+      signer,
+      address,
+    )).rejects.toMatchObject({ name: 'XmtpInboxTargetMismatchError' })
+
+    expect(fakeClient.register).not.toHaveBeenCalled()
+    expect(fakeClient.close).toHaveBeenCalledOnce()
+  })
+
+  it('closes when the assignment changes while a new installation registers', async () => {
+    const registration = deferred<void>()
+    const fakeClient = client(dm())
+    fakeClient.inboxId = 'old-inbox'
+    fakeClient.register.mockReturnValue(registration.promise)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    sdkMocks.getInboxIdForIdentifier.mockResolvedValue('old-inbox')
+
+    const creating = XmtpMessagingSession.create(signer, address)
+    await vi.waitFor(() => expect(fakeClient.register).toHaveBeenCalledOnce())
+    sdkMocks.getInboxIdForIdentifier.mockResolvedValue('current-inbox')
+    registration.resolve()
+
+    await expect(creating).rejects.toMatchObject({
+      name: 'XmtpInboxTargetMismatchError',
+    })
+    expect(fakeClient.close).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a stale client after a network reassignment without a saved target', async () => {
+    const fakeClient = client(dm())
+    fakeClient.inboxId = 'old-inbox'
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    sdkMocks.getInboxIdForIdentifier.mockResolvedValue('current-inbox')
+
+    await expect(XmtpMessagingSession.create(
+      signer,
+      address,
     )).rejects.toMatchObject({ name: 'XmtpInboxTargetMismatchError' })
 
     expect(fakeClient.register).not.toHaveBeenCalled()
@@ -2033,9 +2136,8 @@ describe('XmtpMessagingSession behavior', () => {
     await expect(session.inspectIdentityRelationship(address)).resolves.toBe(
       'active-address',
     )
-    expect(fakeClient.fetchInboxIdByIdentifier).not.toHaveBeenCalled()
 
-    fakeClient.fetchInboxIdByIdentifier
+    sdkMocks.getInboxIdForIdentifier
       .mockResolvedValueOnce('own-inbox')
       .mockResolvedValueOnce('another-inbox')
       .mockResolvedValueOnce(undefined)
@@ -2051,22 +2153,265 @@ describe('XmtpMessagingSession behavior', () => {
     sdkMocks.create.mockResolvedValue(fakeClient)
     const session = await XmtpMessagingSession.create(signer, address)
     const candidate = '0x1111111111111111111111111111111111111111'
-    fakeClient.fetchInboxIdByIdentifier.mockResolvedValueOnce('target-inbox')
+    sdkMocks.getInboxIdForIdentifier
+      .mockResolvedValueOnce('target-inbox')
+      .mockResolvedValueOnce('own-inbox')
 
     await expect(session.findInboxId(candidate)).resolves.toBe('target-inbox')
     await expect(session.findInboxId(address)).resolves.toBe('own-inbox')
-    expect(fakeClient.fetchInboxIdByIdentifier).toHaveBeenCalledOnce()
+    expect(sdkMocks.getInboxIdForIdentifier).toHaveBeenCalledTimes(5)
+  })
+
+  it('resolves a reassigned active identity from the network instead of the mounted client', async () => {
+    const fakeClient = client(dm())
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+    sdkMocks.getInboxIdForIdentifier.mockResolvedValueOnce('reassigned-inbox')
+
+    await expect(session.resolveCurrentInboxId()).resolves.toBe('reassigned-inbox')
+
+    expect(fakeClient.fetchInboxIdByIdentifier).not.toHaveBeenCalled()
+    expect(sdkMocks.createBackend).toHaveBeenCalledTimes(4)
+  })
+
+  it('moves recovery authority before reassigning the active Farcaster identity', async () => {
+    const recoveryAddress = '0xde709f2102306220921060314715629080e2fb77'
+    const sourceIdentifier = await signer.getIdentifier()
+    const recoveryIdentifier = {
+      identifier: recoveryAddress,
+      identifierKind: IdentifierKind.Ethereum,
+    }
+    const recoverySigner = {
+      type: 'EOA',
+      getIdentifier: vi.fn().mockResolvedValue(recoveryIdentifier),
+      signMessage: vi.fn(),
+    } satisfies Signer
+    const fakeClient = client(dm())
+    const signature = new Uint8Array([4, 5, 6])
+    const safeSigner = { identifier: 'safe-source' }
+    fakeClient.unsafe_changeRecoveryIdentifierSignatureText.mockResolvedValue({
+      signatureRequestId: 'recovery-1',
+      signatureText: 'Move recovery authority',
+    })
+    fakeClient.preferences.fetchInboxState
+      .mockResolvedValueOnce({
+        accountIdentifiers: [sourceIdentifier],
+        inboxId: 'own-inbox',
+        installations: [],
+        recoveryIdentifier: sourceIdentifier,
+      })
+      .mockResolvedValueOnce({
+        accountIdentifiers: [sourceIdentifier],
+        inboxId: 'own-inbox',
+        installations: [],
+        recoveryIdentifier,
+      })
+    signer.signMessage.mockResolvedValueOnce(signature)
+    sdkMocks.toSafeSigner.mockResolvedValueOnce(safeSigner)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    const commit = await session.prepareIdentityReassignment(
+      recoverySigner,
+      recoveryAddress,
+      signer,
+    )
+
+    expect(fakeClient.unsafe_applySignatureRequest).not.toHaveBeenCalled()
+
+    await commit()
+
+    expect(fakeClient.unsafe_changeRecoveryIdentifierSignatureText).toHaveBeenCalledWith(
+      recoveryIdentifier,
+    )
+    expect(signer.signMessage).toHaveBeenCalledWith('Move recovery authority')
+    expect(sdkMocks.toSafeSigner).toHaveBeenCalledWith(signer, signature)
+    expect(fakeClient.unsafe_applySignatureRequest).toHaveBeenCalledWith(
+      safeSigner,
+      'recovery-1',
+    )
+    expect(fakeClient.preferences.fetchInboxState).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not mutate recovery state when the source wallet rejects its signature', async () => {
+    const recoveryAddress = '0xde709f2102306220921060314715629080e2fb77'
+    const sourceIdentifier = await signer.getIdentifier()
+    const recoveryIdentifier = {
+      identifier: recoveryAddress,
+      identifierKind: IdentifierKind.Ethereum,
+    }
+    const rejection = new Error('signature rejected')
+    const recoverySigner = {
+      type: 'EOA',
+      getIdentifier: vi.fn().mockResolvedValue(recoveryIdentifier),
+      signMessage: vi.fn(),
+    } satisfies Signer
+    const fakeClient = client(dm())
+    fakeClient.preferences.fetchInboxState.mockResolvedValue({
+      accountIdentifiers: [sourceIdentifier],
+      inboxId: 'own-inbox',
+      installations: [],
+      recoveryIdentifier: sourceIdentifier,
+    })
+    fakeClient.unsafe_changeRecoveryIdentifierSignatureText.mockResolvedValue({
+      signatureRequestId: 'recovery-1',
+      signatureText: 'Move recovery authority',
+    })
+    signer.signMessage.mockRejectedValueOnce(rejection)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    await expect(session.prepareIdentityReassignment(
+      recoverySigner,
+      recoveryAddress,
+      signer,
+    )).rejects.toBe(rejection)
+
+    expect(fakeClient.unsafe_applySignatureRequest).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when recovery rotation never reaches fresh inbox state', async () => {
+    vi.useFakeTimers()
+    try {
+      const recoveryAddress = '0xde709f2102306220921060314715629080e2fb77'
+      const sourceIdentifier = await signer.getIdentifier()
+      const recoveryIdentifier = {
+        identifier: recoveryAddress,
+        identifierKind: IdentifierKind.Ethereum,
+      }
+      const recoverySigner = {
+        type: 'EOA',
+        getIdentifier: vi.fn().mockResolvedValue(recoveryIdentifier),
+        signMessage: vi.fn(),
+      } satisfies Signer
+      const fakeClient = client(dm())
+      fakeClient.unsafe_changeRecoveryIdentifierSignatureText.mockResolvedValue({
+        signatureRequestId: 'recovery-1',
+        signatureText: 'Move recovery authority',
+      })
+      fakeClient.preferences.fetchInboxState
+        .mockResolvedValueOnce({
+          accountIdentifiers: [sourceIdentifier],
+          inboxId: 'own-inbox',
+          installations: [],
+          recoveryIdentifier: sourceIdentifier,
+        })
+        .mockResolvedValue({
+          accountIdentifiers: [sourceIdentifier],
+          inboxId: 'own-inbox',
+          installations: [],
+          recoveryIdentifier: sourceIdentifier,
+        })
+      signer.signMessage.mockResolvedValueOnce(new Uint8Array([4, 5, 6]))
+      sdkMocks.toSafeSigner.mockResolvedValueOnce({ identifier: 'safe-source' })
+      sdkMocks.create.mockResolvedValue(fakeClient)
+      const session = await XmtpMessagingSession.create(signer, address)
+
+      const commit = await session.prepareIdentityReassignment(
+        recoverySigner,
+        recoveryAddress,
+        signer,
+      )
+      const rotation = expect(commit()).rejects.toMatchObject({
+        name: 'XmtpRecoveryIdentityVerificationError',
+      })
+      await vi.runAllTimersAsync()
+      await rotation
+
+      expect(fakeClient.unsafe_changeRecoveryIdentifierSignatureText).toHaveBeenCalledWith(
+        recoveryIdentifier,
+      )
+      expect(fakeClient.unsafe_applySignatureRequest).toHaveBeenCalledOnce()
+      expect(fakeClient.preferences.fetchInboxState).toHaveBeenCalledTimes(8)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resumes recovery preparation after recovery authority already moved', async () => {
+    const recoveryAddress = '0xde709f2102306220921060314715629080e2fb77'
+    const sourceIdentifier = await signer.getIdentifier()
+    const recoveryIdentifier = {
+      identifier: recoveryAddress,
+      identifierKind: IdentifierKind.Ethereum,
+    }
+    const recoverySigner = {
+      type: 'EOA',
+      getIdentifier: vi.fn().mockResolvedValue(recoveryIdentifier),
+      signMessage: vi.fn(),
+    } satisfies Signer
+    const state = {
+      accountIdentifiers: [sourceIdentifier],
+      inboxId: 'own-inbox',
+      installations: [],
+      recoveryIdentifier,
+    }
+    const fakeClient = client(dm())
+    fakeClient.preferences.fetchInboxState.mockResolvedValue(state)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    const commit = await session.prepareIdentityReassignment(
+      recoverySigner,
+      recoveryAddress,
+      signer,
+    )
+    await commit()
+
+    expect(fakeClient.unsafe_changeRecoveryIdentifierSignatureText).not.toHaveBeenCalled()
+    expect(fakeClient.unsafe_applySignatureRequest).not.toHaveBeenCalled()
+    expect(fakeClient.preferences.fetchInboxState).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses reassignment when the old inbox has an unexpected recovery identity', async () => {
+    const recoveryAddress = '0xde709f2102306220921060314715629080e2fb77'
+    const sourceIdentifier = await signer.getIdentifier()
+    const recoveryIdentifier = {
+      identifier: recoveryAddress,
+      identifierKind: IdentifierKind.Ethereum,
+    }
+    const recoverySigner = {
+      type: 'EOA',
+      getIdentifier: vi.fn().mockResolvedValue(recoveryIdentifier),
+      signMessage: vi.fn(),
+    } satisfies Signer
+    const fakeClient = client(dm())
+    fakeClient.preferences.fetchInboxState.mockResolvedValue({
+      accountIdentifiers: [sourceIdentifier],
+      inboxId: 'own-inbox',
+      installations: [],
+      recoveryIdentifier: {
+        identifier: '0x1111111111111111111111111111111111111111',
+        identifierKind: IdentifierKind.Ethereum,
+      },
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    await expect(session.prepareIdentityReassignment(
+      recoverySigner,
+      recoveryAddress,
+      signer,
+    )).rejects.toMatchObject({
+      name: 'XmtpRecoveryIdentityVerificationError',
+    })
+
+    expect(fakeClient.unsafe_changeRecoveryIdentifierSignatureText).not.toHaveBeenCalled()
+    expect(fakeClient.unsafe_applySignatureRequest).not.toHaveBeenCalled()
   })
 
   it('binds an already-associated Farcaster identity through the low-level SDK flow', async () => {
     const fakeClient = client(dm())
     const signature = new Uint8Array([1, 2, 3])
     const safeSigner = { identifier: 'safe-source' }
+    let sourceInboxId = 'source-inbox'
     fakeClient.unsafe_addAccountSignatureText.mockResolvedValue({
       signatureRequestId: 'request-1',
       signatureText: 'Bind this Farcaster identity',
     })
-    fakeClient.fetchInboxIdByIdentifier.mockResolvedValue('own-inbox')
+    fakeClient.unsafe_applySignatureRequest.mockImplementation(() => {
+      sourceInboxId = 'own-inbox'
+    })
     fakeClient.preferences.fetchInboxState.mockResolvedValue({
       accountIdentifiers: [await signer.getIdentifier()],
       inboxId: 'own-inbox',
@@ -2076,9 +2421,20 @@ describe('XmtpMessagingSession behavior', () => {
     signer.signMessage.mockResolvedValueOnce(signature)
     sdkMocks.toSafeSigner.mockResolvedValueOnce(safeSigner)
     sdkMocks.create.mockResolvedValue(fakeClient)
-    const session = await XmtpMessagingSession.create(signer, address)
+    sdkMocks.getInboxIdForIdentifier.mockImplementation(
+      (_backend: unknown, identifier: { identifier: string }) => (
+        identifier.identifier.toLowerCase() === targetAddress
+          ? 'own-inbox'
+          : sourceInboxId
+      ),
+    )
+    const session = await XmtpMessagingSession.create(targetSigner, targetAddress)
 
-    await expect(session.bindIdentity(signer, address)).resolves.toBeUndefined()
+    await expect(session.bindIdentity(
+      signer,
+      address,
+      'source-inbox',
+    )).resolves.toBeUndefined()
 
     const identifier = await signer.getIdentifier()
     expect(fakeClient.unsafe_addAccountSignatureText).toHaveBeenCalledWith(
@@ -2091,32 +2447,199 @@ describe('XmtpMessagingSession behavior', () => {
       safeSigner,
       'request-1',
     )
-    expect(fakeClient.fetchInboxIdByIdentifier).toHaveBeenCalledWith(identifier)
+    expect(sdkMocks.getInboxIdForIdentifier).toHaveBeenCalledWith(
+      expect.anything(),
+      identifier,
+    )
     expect(fakeClient.preferences.fetchInboxState).toHaveBeenCalledOnce()
   })
 
+  it('waits through transient address and inbox-state propagation after binding', async () => {
+    vi.useFakeTimers()
+    try {
+      const fakeClient = client(dm())
+      const identifier = await signer.getIdentifier()
+      let recoveryApplied = false
+      let propagatedLookup = 0
+      fakeClient.unsafe_addAccountSignatureText.mockResolvedValue({
+        signatureRequestId: 'request-eventual',
+        signatureText: 'Bind this Farcaster identity',
+      })
+      fakeClient.unsafe_applySignatureRequest.mockImplementation(() => {
+        recoveryApplied = true
+      })
+      fakeClient.preferences.fetchInboxState
+        .mockResolvedValueOnce({
+          accountIdentifiers: [],
+          inboxId: 'own-inbox',
+          installations: [],
+          recoveryIdentifier: identifier,
+        })
+        .mockResolvedValue({
+          accountIdentifiers: [identifier],
+          inboxId: 'own-inbox',
+          installations: [],
+          recoveryIdentifier: identifier,
+        })
+      signer.signMessage.mockResolvedValueOnce(new Uint8Array([7, 8, 9]))
+      sdkMocks.toSafeSigner.mockResolvedValueOnce({ identifier: 'safe-source' })
+      sdkMocks.create.mockResolvedValue(fakeClient)
+      sdkMocks.getInboxIdForIdentifier.mockImplementation(
+        (_backend: unknown, candidate: { identifier: string }) => {
+          if (candidate.identifier.toLowerCase() === targetAddress) {
+            return 'own-inbox'
+          }
+          if (!recoveryApplied) return 'source-inbox'
+          propagatedLookup += 1
+          if (propagatedLookup === 1) return 'another-inbox'
+          if (propagatedLookup === 2) {
+            throw new Error('temporary address-log outage')
+          }
+          return 'own-inbox'
+        },
+      )
+      const session = await XmtpMessagingSession.create(targetSigner, targetAddress)
+
+      const binding = expect(
+        session.bindIdentity(signer, address, 'source-inbox'),
+      ).resolves.toBeUndefined()
+      await vi.runAllTimersAsync()
+      await binding
+
+      expect(fakeClient.preferences.fetchInboxState).toHaveBeenCalledTimes(2)
+      expect(fakeClient.unsafe_applySignatureRequest).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('fails closed when the address moves but target inbox state omits it', async () => {
+    vi.useFakeTimers()
+    try {
+      const fakeClient = client(dm())
+      let sourceInboxId = 'source-inbox'
+      fakeClient.unsafe_addAccountSignatureText.mockResolvedValue({
+        signatureRequestId: 'request-missing-state',
+        signatureText: 'Bind this Farcaster identity',
+      })
+      fakeClient.unsafe_applySignatureRequest.mockImplementation(() => {
+        sourceInboxId = 'own-inbox'
+      })
+      fakeClient.preferences.fetchInboxState.mockResolvedValue({
+        accountIdentifiers: [],
+        inboxId: 'own-inbox',
+        installations: [],
+        recoveryIdentifier: await signer.getIdentifier(),
+      })
+      signer.signMessage.mockResolvedValueOnce(new Uint8Array([10, 11, 12]))
+      sdkMocks.toSafeSigner.mockResolvedValueOnce({ identifier: 'safe-source' })
+      sdkMocks.create.mockResolvedValue(fakeClient)
+      sdkMocks.getInboxIdForIdentifier.mockImplementation(
+        (_backend: unknown, identifier: { identifier: string }) => (
+          identifier.identifier.toLowerCase() === targetAddress
+            ? 'own-inbox'
+            : sourceInboxId
+        ),
+      )
+      const session = await XmtpMessagingSession.create(targetSigner, targetAddress)
+
+      const binding = expect(
+        session.bindIdentity(signer, address, 'source-inbox'),
+      ).rejects.toMatchObject({
+        name: 'XmtpIdentityBindingVerificationError',
+      })
+      await vi.runAllTimersAsync()
+      await binding
+
+      expect(sdkMocks.getInboxIdForIdentifier).toHaveBeenLastCalledWith(
+        expect.anything(),
+        await signer.getIdentifier(),
+      )
+      expect(fakeClient.preferences.fetchInboxState).toHaveBeenCalledTimes(7)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('fails closed when the network cannot verify an applied identity binding', async () => {
+    vi.useFakeTimers()
+    try {
+      const fakeClient = client(dm())
+      let recoveryApplied = false
+      fakeClient.unsafe_addAccountSignatureText.mockResolvedValue({
+        signatureRequestId: 'request-2',
+        signatureText: 'Bind this Farcaster identity',
+      })
+      fakeClient.unsafe_applySignatureRequest.mockImplementation(() => {
+        recoveryApplied = true
+      })
+      fakeClient.preferences.fetchInboxState.mockResolvedValue({
+        accountIdentifiers: [],
+        inboxId: 'own-inbox',
+        installations: [],
+        recoveryIdentifier: await signer.getIdentifier(),
+      })
+      signer.signMessage.mockResolvedValueOnce(new Uint8Array([4, 5, 6]))
+      sdkMocks.toSafeSigner.mockResolvedValueOnce({ identifier: 'safe-source' })
+      sdkMocks.create.mockResolvedValue(fakeClient)
+      sdkMocks.getInboxIdForIdentifier.mockImplementation(
+        (_backend: unknown, identifier: { identifier: string }) => {
+          if (identifier.identifier.toLowerCase() === targetAddress) {
+            return 'own-inbox'
+          }
+          return recoveryApplied ? 'another-inbox' : 'source-inbox'
+        },
+      )
+      const session = await XmtpMessagingSession.create(targetSigner, targetAddress)
+
+      const binding = expect(
+        session.bindIdentity(signer, address, 'source-inbox'),
+      ).rejects.toMatchObject({
+        name: 'XmtpIdentityBindingVerificationError',
+      })
+      await vi.runAllTimersAsync()
+      await binding
+      expect(fakeClient.unsafe_applySignatureRequest).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not pull the Farcaster identity from a third inbox after signing', async () => {
+    const signature = deferred<Uint8Array>()
     const fakeClient = client(dm())
+    let sourceInboxId = 'source-inbox'
     fakeClient.unsafe_addAccountSignatureText.mockResolvedValue({
-      signatureRequestId: 'request-2',
+      signatureRequestId: 'request-raced',
       signatureText: 'Bind this Farcaster identity',
     })
-    fakeClient.fetchInboxIdByIdentifier.mockResolvedValue('another-inbox')
     fakeClient.preferences.fetchInboxState.mockResolvedValue({
       accountIdentifiers: [],
       inboxId: 'own-inbox',
       installations: [],
-      recoveryIdentifier: await signer.getIdentifier(),
+      recoveryIdentifier: await targetSigner.getIdentifier(),
     })
-    signer.signMessage.mockResolvedValueOnce(new Uint8Array([4, 5, 6]))
-    sdkMocks.toSafeSigner.mockResolvedValueOnce({ identifier: 'safe-source' })
+    signer.signMessage.mockReturnValue(signature.promise)
+    sdkMocks.toSafeSigner.mockResolvedValue({ identifier: 'safe-source' })
     sdkMocks.create.mockResolvedValue(fakeClient)
-    const session = await XmtpMessagingSession.create(signer, address)
+    sdkMocks.getInboxIdForIdentifier.mockImplementation(
+      (_backend: unknown, identifier: { identifier: string }) => (
+        identifier.identifier.toLowerCase() === targetAddress
+          ? 'own-inbox'
+          : sourceInboxId
+      ),
+    )
+    const session = await XmtpMessagingSession.create(targetSigner, targetAddress)
 
-    await expect(session.bindIdentity(signer, address)).rejects.toMatchObject({
+    const binding = session.bindIdentity(signer, address, 'source-inbox')
+    await vi.waitFor(() => expect(signer.signMessage).toHaveBeenCalledOnce())
+    sourceInboxId = 'third-inbox'
+    signature.resolve(new Uint8Array([9, 8, 7]))
+
+    await expect(binding).rejects.toMatchObject({
       name: 'XmtpIdentityBindingVerificationError',
     })
-    expect(fakeClient.unsafe_applySignatureRequest).toHaveBeenCalledOnce()
+    expect(fakeClient.unsafe_applySignatureRequest).not.toHaveBeenCalled()
   })
 
   it('checks recipient reachability without creating a DM and rechecks on creation', async () => {

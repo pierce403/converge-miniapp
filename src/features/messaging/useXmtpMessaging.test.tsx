@@ -182,6 +182,7 @@ function message(id: string, text: string, sentAt: string): MessageItem {
 }
 
 function createSession(overrides: Record<string, unknown> = {}) {
+  const commitIdentityReassignment = vi.fn().mockResolvedValue(undefined)
   return {
     address,
     bindIdentity: vi.fn().mockResolvedValue(undefined),
@@ -197,10 +198,15 @@ function createSession(overrides: Record<string, unknown> = {}) {
     loadConversation: vi.fn(),
     loadInbox: vi.fn().mockResolvedValue([cachedConversation]),
     loadOlderMessages: vi.fn(),
+    commitIdentityReassignment,
+    prepareIdentityReassignment: vi.fn().mockResolvedValue(
+      commitIdentityReassignment,
+    ),
     readConversation: vi.fn(),
     readInbox: vi.fn().mockResolvedValue([cachedConversation]),
     requestConvosAccess: vi.fn(),
     requestHistorySync: vi.fn().mockResolvedValue(false),
+    resolveCurrentInboxId: vi.fn().mockResolvedValue('own-inbox'),
     startMessageStream: vi.fn().mockResolvedValue(undefined),
     startPushTopicStream: vi.fn().mockResolvedValue(undefined),
     stopPushTopicStream: vi.fn().mockResolvedValue(undefined),
@@ -316,6 +322,30 @@ describe('useXmtpMessaging', () => {
     expect(stopPushTopicStream).toHaveBeenCalledOnce()
     expect(mocks.syncAlert).not.toHaveBeenCalled()
     expect(mocks.revokeAlert).not.toHaveBeenCalled()
+  })
+
+  it('retargets before synchronizing push topics from a stale session', async () => {
+    const oldSession = createSession({
+      inboxId: 'old-inbox',
+      resolveCurrentInboxId: vi.fn().mockResolvedValue('target-inbox'),
+    })
+    const targetSession = createSession({
+      inboxId: 'target-inbox',
+      resolveCurrentInboxId: vi.fn().mockResolvedValue('target-inbox'),
+    })
+    mocks.createSession
+      .mockResolvedValueOnce(oldSession)
+      .mockResolvedValueOnce(targetSession)
+    const { result } = renderHook(() => useXmtpMessaging({ notificationFid: 403 }))
+    await act(async () => result.current.connect())
+
+    await act(async () => result.current.syncAlerts())
+
+    expect(oldSession.startPushTopicStream).not.toHaveBeenCalled()
+    expect(oldSession.close).toHaveBeenCalledOnce()
+    expect(targetSession.startPushTopicStream).toHaveBeenCalledOnce()
+    expect(mocks.syncAlert).toHaveBeenCalledWith(targetSession, 403)
+    expect(mocks.syncAlert).not.toHaveBeenCalledWith(oldSession, 403)
   })
 
   it('automatically opens one host-wallet session through Strict Mode replay', async () => {
@@ -659,16 +689,233 @@ describe('useXmtpMessaging', () => {
       },
     )
     expect(sourceSession.close).toHaveBeenCalledOnce()
-    expect(onCommitting).toHaveBeenCalledOnce()
+    expect(onCommitting).toHaveBeenCalledWith({
+      address: targetAddress,
+      chainId: '10',
+      inboxId: 'target-inbox',
+      walletKind: 'EOA',
+    })
+    expect(sourceSession.prepareIdentityReassignment.mock.invocationCallOrder[0]).toBeLessThan(
+      onCommitting.mock.invocationCallOrder[0] ??
+        Number.POSITIVE_INFINITY,
+    )
+    expect(sourceSession.prepareIdentityReassignment).toHaveBeenCalledWith(
+      { external: true },
+      targetAddress,
+      {},
+    )
     expect(onCommitting.mock.invocationCallOrder[0]).toBeLessThan(
+      sourceSession.commitIdentityReassignment.mock.invocationCallOrder[0] ??
+        Number.POSITIVE_INFINITY,
+    )
+    expect(sourceSession.commitIdentityReassignment.mock.invocationCallOrder[0]).toBeLessThan(
       sourceSession.close.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     )
     expect(sourceLease.release).toHaveBeenCalledOnce()
-    expect(targetSession.bindIdentity).toHaveBeenCalledWith({}, address)
+    expect(targetSession.bindIdentity).toHaveBeenCalledWith(
+      {},
+      address,
+      'own-inbox',
+    )
     expect(targetSession.close).toHaveBeenCalledOnce()
     expect(targetLease.release).toHaveBeenCalledOnce()
     expect(mocks.disconnectWalletConnect).toHaveBeenCalledOnce()
     expect(result.current.connection.phase).toBe('ready')
+  })
+
+  it('repairs a resident old client when the network reassignment already completed', async () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222' as const
+    const sourceSession = createSession({
+      resolveCurrentInboxId: vi.fn().mockResolvedValue('target-inbox'),
+    })
+    const sourceLease = { release: vi.fn().mockResolvedValue(undefined) }
+    mocks.acquireXmtpLease.mockResolvedValueOnce(sourceLease)
+    mocks.createSession.mockResolvedValueOnce(sourceSession)
+    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
+      address: targetAddress,
+      chainId: 1n,
+      kind: 'EOA',
+      provider: externalProvider,
+      signer: { external: true },
+    })
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    const onCommitting = vi.fn()
+
+    await expect(result.current.bindEnsInbox(targetAddress, {
+      onCommitting,
+    })).resolves.toMatchObject({
+      address: targetAddress,
+      inboxId: 'target-inbox',
+    })
+
+    expect(onCommitting).toHaveBeenCalledOnce()
+    expect(sourceSession.prepareIdentityReassignment).not.toHaveBeenCalled()
+    expect(sourceSession.close).toHaveBeenCalledOnce()
+    expect(sourceLease.release).toHaveBeenCalledOnce()
+    expect(mocks.createSession).toHaveBeenCalledOnce()
+    expect(mocks.disconnectWalletConnect).toHaveBeenCalledOnce()
+  })
+
+  it('rechecks both identities after WalletConnect before committing', async () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222' as const
+    const sourceSession = createSession({
+      resolveCurrentInboxId: vi.fn().mockResolvedValue('third-inbox'),
+    })
+    mocks.createSession.mockResolvedValueOnce(sourceSession)
+    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
+      address: targetAddress,
+      chainId: 1n,
+      kind: 'EOA',
+      provider: externalProvider,
+      signer: { external: true },
+    })
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    const onCommitting = vi.fn()
+
+    await expect(result.current.bindEnsInbox(targetAddress, {
+      onCommitting,
+    })).rejects.toThrow(/Farcaster inbox changed during the wallet check/i)
+
+    expect(onCommitting).not.toHaveBeenCalled()
+    expect(sourceSession.prepareIdentityReassignment).not.toHaveBeenCalled()
+    expect(sourceSession.close).not.toHaveBeenCalled()
+    expect(mocks.createSession).toHaveBeenCalledOnce()
+  })
+
+  it('rechecks the target again after preparing the recovery signature', async () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222' as const
+    const sourceSession = createSession({
+      findInboxId: vi.fn()
+        .mockResolvedValueOnce('target-inbox')
+        .mockResolvedValueOnce('target-inbox')
+        .mockResolvedValueOnce('third-inbox'),
+    })
+    mocks.createSession.mockResolvedValueOnce(sourceSession)
+    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
+      address: targetAddress,
+      chainId: 1n,
+      kind: 'EOA',
+      provider: externalProvider,
+      signer: { external: true },
+    })
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    const onCommitting = vi.fn()
+
+    await expect(result.current.bindEnsInbox(targetAddress, {
+      onCommitting,
+    })).rejects.toThrow(/ENS inbox changed during the recovery check/i)
+
+    expect(sourceSession.prepareIdentityReassignment).toHaveBeenCalledOnce()
+    expect(sourceSession.commitIdentityReassignment).not.toHaveBeenCalled()
+    expect(onCommitting).not.toHaveBeenCalled()
+    expect(sourceSession.close).not.toHaveBeenCalled()
+    expect(mocks.createSession).toHaveBeenCalledOnce()
+  })
+
+  it('uses the repair path if reassignment completes during recovery signing', async () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222' as const
+    const sourceSession = createSession({
+      resolveCurrentInboxId: vi.fn()
+        .mockResolvedValueOnce('own-inbox')
+        .mockResolvedValueOnce('target-inbox'),
+    })
+    const sourceLease = { release: vi.fn().mockResolvedValue(undefined) }
+    mocks.acquireXmtpLease.mockResolvedValueOnce(sourceLease)
+    mocks.createSession.mockResolvedValueOnce(sourceSession)
+    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
+      address: targetAddress,
+      chainId: 1n,
+      kind: 'EOA',
+      provider: externalProvider,
+      signer: { external: true },
+    })
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    const onCommitting = vi.fn()
+
+    await expect(result.current.bindEnsInbox(targetAddress, {
+      onCommitting,
+    })).resolves.toMatchObject({
+      address: targetAddress,
+      inboxId: 'target-inbox',
+    })
+
+    expect(sourceSession.prepareIdentityReassignment).toHaveBeenCalledOnce()
+    expect(sourceSession.commitIdentityReassignment).not.toHaveBeenCalled()
+    expect(onCommitting).toHaveBeenCalledOnce()
+    expect(sourceSession.close).toHaveBeenCalledOnce()
+    expect(sourceLease.release).toHaveBeenCalledOnce()
+    expect(mocks.createSession).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a committed journal when recovery rotation becomes ambiguous', async () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222' as const
+    const verificationError = new Error('recovery state did not converge')
+    verificationError.name = 'XmtpRecoveryIdentityVerificationError'
+    const commitIdentityReassignment = vi.fn().mockRejectedValue(verificationError)
+    const sourceSession = createSession({
+      commitIdentityReassignment,
+      prepareIdentityReassignment: vi.fn().mockResolvedValue(
+        commitIdentityReassignment,
+      ),
+    })
+    const sourceLease = { release: vi.fn().mockResolvedValue(undefined) }
+    mocks.acquireXmtpLease.mockResolvedValueOnce(sourceLease)
+    mocks.createSession.mockResolvedValueOnce(sourceSession)
+    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
+      address: targetAddress,
+      chainId: 1n,
+      kind: 'EOA',
+      provider: externalProvider,
+      signer: { external: true },
+    })
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    const onCommitting = vi.fn()
+
+    await expect(result.current.bindEnsInbox(targetAddress, {
+      onCommitting,
+    })).rejects.toMatchObject({ code: 'ens-binding-ambiguous' })
+
+    expect(onCommitting).toHaveBeenCalledOnce()
+    expect(sourceSession.prepareIdentityReassignment).toHaveBeenCalledOnce()
+    expect(commitIdentityReassignment).toHaveBeenCalledOnce()
+    expect(sourceSession.close).not.toHaveBeenCalled()
+    expect(sourceLease.release).not.toHaveBeenCalled()
+    expect(mocks.createSession).toHaveBeenCalledOnce()
+    expect(result.current.connection.phase).toBe('ready')
+  })
+
+  it('does not mutate the old inbox when the target journal cannot be committed', async () => {
+    const targetAddress = '0x2222222222222222222222222222222222222222' as const
+    const sourceSession = createSession()
+    mocks.createSession.mockResolvedValueOnce(sourceSession)
+    mocks.connectWalletConnectWallet.mockResolvedValueOnce({
+      address: targetAddress,
+      chainId: 1n,
+      kind: 'EOA',
+      provider: externalProvider,
+      signer: { external: true },
+    })
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    const storageFailure = new Error('target journal unavailable')
+
+    await expect(result.current.bindEnsInbox(targetAddress, {
+      onCommitting: () => {
+        throw storageFailure
+      },
+    })).rejects.toBe(storageFailure)
+
+    expect(sourceSession.prepareIdentityReassignment).toHaveBeenCalledOnce()
+    expect(sourceSession.commitIdentityReassignment).not.toHaveBeenCalled()
+    expect(sourceSession.close).not.toHaveBeenCalled()
+    expect(result.current.connection.phase).toBe('ready')
+    expect(mocks.createSession).toHaveBeenCalledOnce()
+    expect(mocks.disconnectWalletConnect).toHaveBeenCalledOnce()
   })
 
   it('disconnects a paired ENS wallet if it returns the wrong account', async () => {
@@ -1702,7 +1949,7 @@ describe('useXmtpMessaging', () => {
       invite,
       status: 'sending',
     })
-    expect(requestConvosAccess).toHaveBeenCalledOnce()
+    await waitFor(() => expect(requestConvosAccess).toHaveBeenCalledOnce())
     await duplicate
     await act(async () => {
       sending.resolve({
@@ -1930,7 +2177,7 @@ describe('useXmtpMessaging', () => {
     }
     const session = createSession({
       loadConversation: vi.fn().mockResolvedValue(groupLoad),
-      readInbox: vi.fn().mockResolvedValue([groupSummary]),
+      loadInbox: vi.fn().mockResolvedValue([groupSummary]),
       startMessageStream: vi.fn(async (
         _onMessage: unknown,
         _onHealth: unknown,
@@ -2181,6 +2428,152 @@ describe('useXmtpMessaging', () => {
     await waitFor(() => expect(session.loadInbox).toHaveBeenCalledTimes(2))
     expect(provider.request).toHaveBeenCalledWith({ method: 'eth_accounts' })
     expect(provider.request).not.toHaveBeenCalledWith({ method: 'eth_chainId' })
+  })
+
+  it.each([
+    ['hidden and visible', dispatchConfirmedResume],
+    ['persisted pageshow', () => {
+      const event = new Event('pageshow')
+      Object.defineProperty(event, 'persisted', { value: true })
+      window.dispatchEvent(event)
+    }],
+  ] as const)(
+    'reopens the authoritative inbox after reassignment on %s',
+    async (_name, resume) => {
+      const movedConversation = {
+        ...cachedConversation,
+        id: 'moved-conversation',
+        preview: 'Arrived in the reassigned inbox',
+      }
+      const oldSession = createSession({
+        inboxId: 'old-inbox',
+        resolveCurrentInboxId: vi.fn().mockResolvedValue('target-inbox'),
+      })
+      const targetSession = createSession({
+        inboxId: 'target-inbox',
+        loadInbox: vi.fn().mockResolvedValue([movedConversation]),
+        readInbox: vi.fn().mockResolvedValue([movedConversation]),
+        resolveCurrentInboxId: vi.fn().mockResolvedValue('target-inbox'),
+      })
+      mocks.createSession
+        .mockResolvedValueOnce(oldSession)
+        .mockResolvedValueOnce(targetSession)
+      const { result } = renderHook(() => useXmtpMessaging())
+      await act(async () => result.current.connect())
+
+      act(() => resume())
+
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(result.current.connection.phase).toBe('ready'))
+      expect(oldSession.resolveCurrentInboxId).toHaveBeenCalledOnce()
+      expect(oldSession.loadInbox).toHaveBeenCalledOnce()
+      expect(oldSession.close).toHaveBeenCalledOnce()
+      expect(mocks.createSession.mock.calls[1]?.[2]).toBe('target-inbox')
+      expect(targetSession.loadInbox).toHaveBeenCalledOnce()
+      expect(result.current.conversations).toEqual([movedConversation])
+    },
+  )
+
+  it('rechecks the authoritative inbox before a manual refresh', async () => {
+    const movedConversation = {
+      ...cachedConversation,
+      id: 'manual-refresh-target',
+      preview: 'Loaded from the current inbox',
+    }
+    const oldSession = createSession({
+      inboxId: 'old-inbox',
+      resolveCurrentInboxId: vi.fn().mockResolvedValue('target-inbox'),
+    })
+    const targetSession = createSession({
+      inboxId: 'target-inbox',
+      loadInbox: vi.fn().mockResolvedValue([movedConversation]),
+    })
+    mocks.createSession
+      .mockResolvedValueOnce(oldSession)
+      .mockResolvedValueOnce(targetSession)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    await act(async () => result.current.refresh())
+
+    expect(oldSession.loadInbox).toHaveBeenCalledOnce()
+    expect(oldSession.close).toHaveBeenCalledOnce()
+    expect(mocks.createSession).toHaveBeenCalledTimes(2)
+    expect(mocks.createSession.mock.calls[1]?.[2]).toBe('target-inbox')
+    expect(targetSession.loadInbox).toHaveBeenCalledOnce()
+    expect(result.current.conversations).toEqual([movedConversation])
+  })
+
+  it('does not render an old-stream message after the identity moves', async () => {
+    let onMessage: ((message: MessageItem) => void) | undefined
+    let authoritativeInboxId = 'old-inbox'
+    const staleMessage = message(
+      'stale-stream-message',
+      'Must not render from the old inbox',
+      '2026-07-14T12:02:00Z',
+    )
+    const movedConversation = {
+      ...cachedConversation,
+      id: 'stream-target',
+      preview: 'Loaded from the reassigned inbox',
+    }
+    const oldSession = createSession({
+      inboxId: 'old-inbox',
+      loadConversation: vi.fn().mockResolvedValue({
+        conversation: activeConversation,
+        hasOlder: false,
+        messages: [],
+      }),
+      resolveCurrentInboxId: vi.fn(
+        () => Promise.resolve(authoritativeInboxId),
+      ),
+      startMessageStream: vi.fn(async (
+        nextOnMessage: (message: MessageItem) => void,
+      ) => {
+        onMessage = nextOnMessage
+      }),
+    })
+    const targetSession = createSession({
+      inboxId: 'target-inbox',
+      loadInbox: vi.fn().mockResolvedValue([movedConversation]),
+      resolveCurrentInboxId: vi.fn().mockResolvedValue('target-inbox'),
+    })
+    mocks.createSession
+      .mockResolvedValueOnce(oldSession)
+      .mockResolvedValueOnce(targetSession)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    await act(async () => result.current.openConversation(activeConversation.id))
+
+    authoritativeInboxId = 'target-inbox'
+    act(() => onMessage?.(staleMessage))
+
+    await waitFor(
+      () => expect(mocks.createSession).toHaveBeenCalledTimes(2),
+      { timeout: 2_000 },
+    )
+    await waitFor(() => expect(result.current.connection.phase).toBe('ready'))
+    expect(oldSession.close).toHaveBeenCalledOnce()
+    expect(result.current.messages).not.toContainEqual(staleMessage)
+    expect(result.current.conversations).toEqual([movedConversation])
+  })
+
+  it('closes and clears an online session whose inbox assignment is unverifiable', async () => {
+    const session = createSession({
+      resolveCurrentInboxId: vi.fn().mockResolvedValue(null),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+    expect(result.current.conversations).toEqual([cachedConversation])
+
+    await act(async () => result.current.refresh())
+
+    expect(session.close).toHaveBeenCalledOnce()
+    expect(session.loadInbox).toHaveBeenCalledOnce()
+    expect(result.current.conversations).toEqual([])
+    expect(result.current.connection.phase).toBe('error')
+    expect(result.current.connection.error).toMatch(/closed the previous session/i)
   })
 
   it('ignores a non-persisted pageshow from initial navigation', async () => {
