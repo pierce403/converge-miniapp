@@ -58,7 +58,7 @@ describe('InboxScreen', () => {
     expect(screen.queryByRole('button', { name: 'Refresh now' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Refresh inbox' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'New DM' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Join Convos' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Join Convo' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Check ENS identity' })).toBeDisabled()
   })
 

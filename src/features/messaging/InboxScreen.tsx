@@ -194,7 +194,7 @@ export function InboxScreen({
           </button>
           <Button data-join-convos="true" onClick={onJoinConvos} variant="secondary">
             <Link2 aria-hidden="true" />
-            Join Convos
+            Join Convo
           </Button>
           <Button disabled={offline} onClick={onNewDm}>
             <Plus aria-hidden="true" />

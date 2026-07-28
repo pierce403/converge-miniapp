@@ -347,7 +347,7 @@ describe('MessagingApp storage and installation states', () => {
     mocks.messaging.mockReturnValue({ ...readyMessaging(), setView })
 
     render(<MessagingApp canUseBack={false} canUseWallet user={user} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Join Convos' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Join Convo' }))
 
     expect(setView).toHaveBeenCalledWith('join-convos')
   })

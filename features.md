@@ -1040,7 +1040,7 @@ Converge Mini may consume and re-share a signed invite created by Convos or anot
 
 #### Join and group UX acceptance criteria
 
-- **Join Convos conversation** opens a paste/import surface. Successful local parsing shows only safe public preview text and an explicit **Request access** action; parsing alone sends no message, creates no conversation, and makes no “joined” claim.
+- **Join Convo** opens a paste/import surface. The singular wording distinguishes this in-app invite action from the external **Open in Convos** handoff. Successful local parsing shows only safe public preview text and an explicit **Request access** action; parsing alone sends no message, creates no conversation, and makes no “joined” claim.
 - A request is sent at most once per deliberate attempt. After send, copy says **Request sent. Waiting for the inviter's device…** because the creator device automatically validates the signed invite when available; do not imply a person must approve it.
 - Keep the invite only in memory and the local encrypted XMTP database as typed request/fallback content. Recover a pending invite from that local message after restart when possible, but never duplicate it into browser key/value storage.
 - Sync and stream allowed groups as well as DMs. Consider the import successful only when an allowed group with the exact invite tag arrives and membership evidence is consistent with the declared creator; a handled marker alone is not success, and a wrong-tag or unknown-creator group must never satisfy the request.
@@ -1806,7 +1806,7 @@ First-interaction follow-up added on 2026-07-20:
 
 - an exact deferred conversation-entry regression proved that a visible host blur/focus was starting a second inbox load after XMTP was already ready;
 - visible empty-account and provider-disconnect churn from host-owned overlays no longer destroys an open XMTP session immediately; a bounded wallet-only recheck still closes a persistently lost wallet, while a concrete different account closes immediately and the next confirmed resume rechecks the exact Farcaster wallet;
-- the Farcaster native back-state toggle is disabled for routine nested views pending canonical-host proof because its first `updateBackState` roundtrip is shared by Conversation, New DM, and Join Convos and can disturb the embedded webview. The always-visible local back controls remain their supported navigation path; capability-gated host back remains mounted for the ENS-binding dialog so it cannot dismiss the irreversible operation.
+- the Farcaster native back-state toggle is disabled for routine nested views pending canonical-host proof because its first `updateBackState` roundtrip is shared by Conversation, New DM, and Join Convo and can disturb the embedded webview. The always-visible local back controls remain their supported navigation path; capability-gated host back remains mounted for the ENS-binding dialog so it cannot dismiss the irreversible operation.
 - synthetic mobile layout E2E probes now wait for the completed standalone bootstrap before retaining shell nodes across an animation frame, preventing slower CI runners from measuring React's detached initial shell.
 
 Canonical-host persistence, storage eviction, cancellable SDK retry timers, embedded keyboard resize, and two-client dev-network receive evidence remain. Browser SDK 7 exposes neither insertion timestamps on decoded messages nor an archive-import completion event, so history loading can remain honest and gap-safe through a growing contiguous window but cannot claim an immutable insertion-time snapshot.
@@ -2010,7 +2010,7 @@ Exit evidence:
 Implemented and locally verified:
 
 - the join-request codec is registered when the XMTP client is constructed, without loading the full invite parser on the initial inbox path;
-- the compact **Join Convos** surface parses only on device, exposes only the clamped name/emoji preview, rechecks expiry at the explicit **Request access** tap, and never copies the bearer slug into browser key/value storage;
+- the compact **Join Convo** surface parses only on device, exposes only the clamped name/emoji preview, rechecks expiry at the explicit **Request access** tap, and never copies the bearer slug into browser key/value storage;
 - the request path synchronizes conversations, reuses or creates a DM to the exact declared creator inbox, rejects a self-invite, and uses XMTP's normal published send with push intent without changing consent or opening the transport DM; it deliberately creates no optimistic draft that a later unrelated batch publication could revive;
 - exact `convos.org/join_request:1.0`, `invite_join_error:1.0`, and `invite_join_handled:1.0` content is removed before fallback rendering in cached timelines, inbox previews, and live streams, while near-miss future content remains visible through its fallback;
 - a complete control-only transport DM is hidden, but a bounded scan can neither hide an older real DM nor claim that uncertain older history is empty; and
