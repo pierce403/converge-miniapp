@@ -91,7 +91,10 @@ Live baseline recorded on 2026-07-27:
   `503` on Worker version `252f7971-634a-416f-a203-70a539a94674`, while D1
   remained at zero subscriptions and routes. The canary does not exercise
   authorized-key metadata decoding or lifecycle persistence, so those stages
-  now emit only fixed, identifier-free diagnostic categories;
+  now emit only fixed, identifier-free diagnostic categories. A subsequent
+  live toggle isolated both failures to current-network verification rather
+  than configuration, timeout, or lifecycle persistence; the deployed follow-up
+  separates provider non-200, response-schema, and app-key metadata failures;
 - production D1 remains at zero native subscriptions and zero XMTP routes even
   though the Farcaster host reports alerts enabled for the affected
   installation. Its open-app ticket request therefore ends at
@@ -122,7 +125,7 @@ Delivery sequence and gates:
 | 1. Freeze the live contracts and repair Converge safety issues | Deployed; acceptance pending | The current wrapped Farcaster outcomes parse correctly; only HMAC-backed `Allowed` topics are registered; a client-local disable cannot revoke another client's route; zero account-wide allowed topics revoke the shared route; valid ownership is required for readiness; and an exact rollout flag keeps credentials separate from public enablement. The 595-test full gate, sequential preview-config dry run, immutable production deployment, and automated rollout-boundary checks pass. Real delivery remains in gate 5. |
 | 2. Verify the production vapid.party app and DNS binding | Deployed; acceptance pending | The retained app ID/key match the exact public `_vapid-party.miniapp.converge.cv` TXT record, and all three Worker app-secret names remain configured. The first production enrollment must make vapid.party report fresh verification without replacing its retained secret. |
 | 3. Prove the two Workers together in production | Deployed; acceptance pending | Preview migration `0003` is applied, no migrations are pending, and the empty table baseline is verified. A real Browser SDK installation must still enroll; a listener event must yield one verified opaque callback; callback replay and wrong-key cases must fail; no alert prompt may appear outside the supported canonical Farcaster host. |
-| 4. Configure and promote production token lifecycle | Blocked: real lifecycle processing | Migrations, rollout, manifest, and exact webhook are deployed, and the unauthorized-key canary now returns `400`. Real disable/enable POSTs both return `503` before a D1 row appears. Use the fixed `configuration`, `verification`, and `lifecycle_apply` log categories to isolate the remaining stage, then require a real add/enable event to create one encrypted `(fid, appFid)` row. |
+| 4. Configure and promote production token lifecycle | Blocked: authorized-key verification | Migrations, rollout, manifest, and exact webhook are deployed, and the unauthorized-key canary returns `400`. Real disable/enable POSTs both return `503` in current-network verification before a D1 row appears. Distinguish provider non-200, response-schema, and app-key metadata decoding with one fresh event, repair that path, then require a real add/enable event to create one encrypted `(fid, appFid)` row. |
 | 5. Prove a closed-app alert in Farcaster | Planned | With Converge closed, a second XMTP client sends a message; exactly one generic native alert arrives, opens the canonical app, and contains no sender, message, or conversation data. |
 | 6. Prove cleanup, recovery, and operations | Planned | Disable, re-enable, remove, invalid-token, throttling, retry, route-revocation, and sampled-log checks pass; the runbook records rollback and health checks. |
 

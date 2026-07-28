@@ -261,6 +261,49 @@ describe('Farcaster notification webhook', () => {
     )
   })
 
+  it.each([
+    [
+      'a provider rejection',
+      Object.assign(new Error('Non-200 response received: sensitive body'), {
+        name: 'BaseError',
+      }),
+      'current_network_non_200',
+    ],
+    [
+      'a provider schema mismatch',
+      Object.assign(new Error('Error parsing Hub response'), {
+        name: 'BaseError',
+      }),
+      'current_network_response',
+    ],
+    [
+      'an authorized app-key metadata decoding failure',
+      Object.assign(new Error('sensitive ABI detail'), {
+        name: 'AbiParameters.DataSizeTooSmallError',
+      }),
+      'app_key_metadata',
+    ],
+  ] as const)('safely classifies %s', async (_label, error, expectedKind) => {
+    const storage = fakeNotificationDatabase()
+    const dependencies = webhookDependencies()
+    dependencies.verifyAppKey.mockRejectedValue(error)
+
+    const response = await handleFarcasterWebhook(
+      webhookRequest({ event: 'miniapp_removed' }),
+      webhookEnvironment(storage.database),
+      dependencies.value,
+    )
+
+    expect(response.status).toBe(503)
+    expect(dependencies.logFailure).toHaveBeenCalledWith({
+      kind: expectedKind,
+      stage: 'verification',
+    })
+    expect(JSON.stringify(dependencies.logFailure.mock.calls)).not.toContain(
+      'sensitive',
+    )
+  })
+
   it('rejects a signing app key that is no longer active', async () => {
     const storage = fakeNotificationDatabase()
     const dependencies = webhookDependencies()

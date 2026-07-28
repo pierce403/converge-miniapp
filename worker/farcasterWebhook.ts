@@ -48,8 +48,11 @@ export type FarcasterWebhookDependencies = {
 type FarcasterWebhookFailureDiagnostic = {
   kind:
     | 'configuration'
+    | 'current_network_non_200'
+    | 'current_network_response'
     | 'current_network_timeout'
     | 'current_network_verifier'
+    | 'app_key_metadata'
     | 'lifecycle_apply'
     | 'unexpected_verification'
   stage: 'configuration' | 'lifecycle_apply' | 'verification'
@@ -400,6 +403,16 @@ function verificationFailureKind(
   error: unknown,
 ): FarcasterWebhookFailureDiagnostic['kind'] {
   if (errorCauseHasName(error, 'AbortError')) return 'current_network_timeout'
+  if (errorCauseHasMessagePrefix(error, 'Non-200 response received:')) {
+    return 'current_network_non_200'
+  }
+  if (errorCauseHasMessage(error, 'Error parsing Hub response')) {
+    return 'current_network_response'
+  }
+  if (
+    errorCauseHasMessage(error, 'Error decoding metadata') ||
+    errorCauseHasNamePrefix(error, 'AbiParameters.')
+  ) return 'app_key_metadata'
   if (errorCauseHasName(
     error,
     'VerifyJsonFarcasterSignature.VerifyAppKeyError',
@@ -408,11 +421,47 @@ function verificationFailureKind(
 }
 
 function errorCauseHasName(error: unknown, expectedName: string): boolean {
+  return errorCauseMatches(
+    error,
+    (current) => 'name' in current && current.name === expectedName,
+  )
+}
+
+function errorCauseHasNamePrefix(error: unknown, prefix: string): boolean {
+  return errorCauseMatches(
+    error,
+    (current) => 'name' in current &&
+      typeof current.name === 'string' &&
+      current.name.startsWith(prefix),
+  )
+}
+
+function errorCauseHasMessage(error: unknown, expectedMessage: string): boolean {
+  return errorCauseMatches(
+    error,
+    (current) => 'message' in current &&
+      current.message === expectedMessage,
+  )
+}
+
+function errorCauseHasMessagePrefix(error: unknown, prefix: string): boolean {
+  return errorCauseMatches(
+    error,
+    (current) => 'message' in current &&
+      typeof current.message === 'string' &&
+      current.message.startsWith(prefix),
+  )
+}
+
+function errorCauseMatches(
+  error: unknown,
+  matches: (error: object) => boolean,
+): boolean {
   let current = error
   const visited = new Set<object>()
   while (current && typeof current === 'object' && !visited.has(current)) {
     visited.add(current)
-    if ('name' in current && current.name === expectedName) return true
+    if (matches(current)) return true
     current = 'cause' in current ? current.cause : undefined
   }
   return false
