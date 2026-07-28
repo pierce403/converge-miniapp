@@ -75,6 +75,10 @@ import {
   convosInviteJoinErrorCodec,
   convosInviteJoinHandledCodec,
 } from '../convos/controlCodec'
+import {
+  convosProfileSnapshotCodec,
+  convosProfileUpdateCodec,
+} from '../convos/profileCodec'
 import { parseConvosInvite, type ParsedConvosInvite } from '../convos/invite'
 
 const address = '0x52908400098527886E0F7030069857D2E4169EE7'
@@ -516,6 +520,8 @@ describe('XmtpMessagingSession behavior', () => {
           convosJoinRequestCodec,
           convosInviteJoinHandledCodec,
           convosInviteJoinErrorCodec,
+          convosProfileUpdateCodec,
+          convosProfileSnapshotCodec,
         ],
         disableAutoRegister: true,
         env: 'production',
@@ -1043,6 +1049,31 @@ describe('XmtpMessagingSession behavior', () => {
     )
     expect(conversation.publishMessages).not.toHaveBeenCalled()
     expect(fakeClient.conversations.getMessageById).not.toHaveBeenCalled()
+  })
+
+  it('publishes the bounded interoperable profile once without push', async () => {
+    const conversation = dm({
+      send: vi.fn().mockResolvedValue('profile-message'),
+    })
+    const fakeClient = client(conversation)
+    sdkMocks.create.mockResolvedValue(fakeClient)
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    await session.publishProfile('conversation-1', '  Alice in Convos  ')
+    await session.publishProfile('conversation-1', 'Alice in Convos')
+
+    expect(conversation.send).toHaveBeenCalledOnce()
+    expect(conversation.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: expect.objectContaining({
+          authorityId: 'convos.org',
+          typeId: 'profile_update',
+          versionMajor: 1,
+          versionMinor: 0,
+        }),
+      }),
+      { shouldPush: false },
+    )
   })
 
   it('promotes only a verified requested Unknown group and records a joined snapshot', async () => {
@@ -2934,6 +2965,46 @@ describe('XmtpMessagingSession behavior', () => {
       limit: 200n,
     }))
     expect(recentMessages).toHaveBeenCalledWith(expect.objectContaining({ limit: 1n }))
+  })
+
+  it('uses only the peer self-authored Convos profile as the DM display name', async () => {
+    const visible = message({
+      id: 'visible',
+      sentAt: '2026-07-14T12:00:00Z',
+      status: DeliveryStatus.Published,
+    })
+    const peerProfile = typedMessage({
+      authorityId: 'convos.org',
+      content: { name: 'Alice in Convos' },
+      id: 'peer-profile',
+      senderInboxId: 'peer-inbox',
+      sentAt: '2026-07-14T13:00:00Z',
+      typeId: 'profile_update',
+    })
+    const spoofedProfile = typedMessage({
+      authorityId: 'convos.org',
+      content: { name: 'Spoofed name' },
+      id: 'spoofed-profile',
+      senderInboxId: 'someone-else',
+      sentAt: '2026-07-14T14:00:00Z',
+      typeId: 'profile_update',
+    })
+    const conversation = dm({
+      messages: vi.fn().mockImplementation(async ({ limit }) => (
+        limit === 1n ? [spoofedProfile] : [spoofedProfile, peerProfile, visible]
+      )),
+    })
+    const fakeClient = client(conversation)
+    fakeClient.conversations.listDms.mockResolvedValue([conversation])
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const [summary] = await session.readInbox()
+
+    expect(summary).toMatchObject({
+      peerDisplayName: 'Alice in Convos',
+      preview: 'visible',
+    })
   })
 
   it('hides a transport DM only when a complete local scan contains Convos controls', async () => {

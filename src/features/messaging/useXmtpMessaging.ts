@@ -24,6 +24,12 @@ import type {
 import type { ParsedConvosInvite } from '../../lib/convos/invite'
 import { ConvosInviteError } from '../../lib/convos/error'
 import { syncXmtpAlertRegistration } from '../../lib/xmtp/alertRegistration'
+import {
+  mergeContacts,
+  readContacts,
+} from '../contacts/contactStore'
+import { fetchFarcasterFollowing } from '../contacts/farcasterImport'
+import type { Contact } from './types'
 
 export type ConnectionPhase =
   | 'idle'
@@ -46,7 +52,12 @@ export type ConnectionPhase =
   | 'target-unavailable'
   | 'error'
 
-export type MessagingView = 'inbox' | 'new-dm' | 'join-convos' | 'conversation'
+export type MessagingView =
+  | 'inbox'
+  | 'contacts'
+  | 'new-dm'
+  | 'join-convos'
+  | 'conversation'
 
 type ConnectionState = {
   error: string | null
@@ -74,6 +85,7 @@ type UseXmtpMessagingOptions = {
   autoConnect?: boolean
   inboxTarget?: InboxTarget | null
   notificationFid?: number
+  profileDisplayName?: string | null
 }
 
 export type InboxBindingResult = {
@@ -93,6 +105,7 @@ export function useXmtpMessaging({
   autoConnect = false,
   inboxTarget = null,
   notificationFid,
+  profileDisplayName = null,
 }: UseXmtpMessagingOptions = {}) {
   const mountedRef = useRef(true)
   const connectionAttemptRef = useRef(0)
@@ -139,6 +152,7 @@ export function useXmtpMessaging({
   >(async () => false)
   const alertsEnabledRef = useRef(false)
   const notificationFidRef = useRef(notificationFid)
+  const profileDisplayNameRef = useRef(profileDisplayName)
 
   const [connection, setConnection] = useState<ConnectionState>(initialConnection)
   const [address, setAddress] = useState<`0x${string}` | null>(null)
@@ -147,6 +161,9 @@ export function useXmtpMessaging({
   const [environment, setEnvironment] = useState('')
   const [storageDurability, setStorageDurability] = useState<StorageDurability | null>(null)
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
+  const [contacts, setContacts] = useState<Contact[]>([])
+  const [contactImportCursor, setContactImportCursor] = useState<string | null>(null)
+  const [importingContacts, setImportingContacts] = useState(false)
   const [activeConversation, setActiveConversation] = useState<ActiveConversation | null>(null)
   const [messages, setMessages] = useState<MessageItem[]>([])
   const [view, setView] = useState<MessagingView>('inbox')
@@ -248,6 +265,10 @@ export function useXmtpMessaging({
       void alertSyncCallbackRef.current().catch(() => undefined)
     }
   }, [notificationFid])
+
+  useEffect(() => {
+    profileDisplayNameRef.current = profileDisplayName
+  }, [profileDisplayName])
 
   const disableAlerts = useCallback(() => {
     alertsEnabledRef.current = false
@@ -391,7 +412,21 @@ export function useXmtpMessaging({
           inboxRequestRef.current === request &&
           sessionRef.current === session
         ) {
-          setConversations(next)
+          const groupContacts = await session.readGroupContacts?.().catch(
+            () => [] as Contact[],
+          ) ?? []
+          if (
+            !mountedRef.current ||
+            operationGenerationRef.current !== generation ||
+            inboxRequestRef.current !== request ||
+            sessionRef.current !== session
+          ) return
+          const mergedContacts = mergeContacts(
+            session.inboxId,
+            [...contactsFromConversations(next), ...groupContacts],
+          )
+          setContacts(mergedContacts)
+          setConversations(applyContactNames(next, mergedContacts))
           applyConvosAccessSnapshot(session.convosAccessSnapshot)
           if (offline) setStreamHealth('offline')
           updateNotice(null)
@@ -475,6 +510,9 @@ export function useXmtpMessaging({
     setEnvironment('')
     setStorageDurability(null)
     setConversations([])
+    setContacts([])
+    setContactImportCursor(null)
+    setImportingContacts(false)
     setActiveConversation(null)
     setMessages([])
     setView('inbox')
@@ -780,6 +818,7 @@ export function useXmtpMessaging({
       }
       sessionRef.current = session
       setInboxId(session.inboxId)
+      setContacts(readContacts(session.inboxId))
       if (
         !inboxTarget &&
         transientInboxTargetRef.current === session.inboxId
@@ -1203,6 +1242,9 @@ export function useXmtpMessaging({
     setEnvironment('')
     setStorageDurability(null)
     setConversations([])
+    setContacts([])
+    setContactImportCursor(null)
+    setImportingContacts(false)
     setActiveConversation(null)
     setMessages([])
     setView('inbox')
@@ -1442,6 +1484,13 @@ export function useXmtpMessaging({
         scannedWindowSize(loaded),
       )
       setHasOlderMessages(loaded.hasOlder)
+      if (!offline) {
+        const publishing = session.publishProfile?.(
+          conversationId,
+          profileDisplayNameRef.current,
+        )
+        void publishing?.catch(() => undefined)
+      }
     } catch (error) {
       if (mountedRef.current && request === openRequestRef.current) {
         if (cachedConversationRead) {
@@ -1572,6 +1621,37 @@ export function useXmtpMessaging({
       }
     }
   }, [loadInbox, openConversation, requireCurrentInboxAssignment])
+
+  const importFarcasterContacts = useCallback(async () => {
+    const session = sessionRef.current
+    if (!session) throw new Error('Connect the XMTP inbox first.')
+    if (browserIsKnownOffline()) {
+      throw new Error('Reconnect before importing Farcaster contacts.')
+    }
+    if (importingContacts) return null
+    setImportingContacts(true)
+    try {
+      await requireCurrentInboxAssignment(session)
+      const page = await fetchFarcasterFollowing(contactImportCursor)
+      const resolved = await session.resolveFarcasterContacts(page.users)
+      if (sessionRef.current !== session) return null
+      const mergedContacts = mergeContacts(session.inboxId, resolved.contacts)
+      setContacts(mergedContacts)
+      setConversations((current) => applyContactNames(current, mergedContacts))
+      setContactImportCursor(page.nextCursor)
+      return {
+        imported: resolved.contacts.length,
+        nextCursor: page.nextCursor,
+        skipped: resolved.skipped,
+      }
+    } finally {
+      if (sessionRef.current === session) setImportingContacts(false)
+    }
+  }, [
+    contactImportCursor,
+    importingContacts,
+    requireCurrentInboxAssignment,
+  ])
 
   const requestConvosAccess = useCallback(async (invite: ParsedConvosInvite) => {
     const session = sessionRef.current
@@ -2154,6 +2234,7 @@ export function useXmtpMessaging({
     connection,
     convosAccessRequest,
     conversations,
+    contacts,
     createDm,
     disableAlerts,
     disconnect,
@@ -2163,6 +2244,8 @@ export function useXmtpMessaging({
     hasOlderMessages,
     inspectIdentityRelationship,
     inboxId,
+    importFarcasterContacts,
+    importingContacts,
     bindEnsInbox,
     loadOlderMessages,
     messages,
@@ -2389,8 +2472,16 @@ function preservePeerAddress(
 ): ActiveConversation {
   if (next.kind !== 'dm') return next
   if (current?.kind !== 'dm') return next
-  if (next.peerAddress || current?.id !== next.id || !current.peerAddress) return next
-  return { ...next, peerAddress: current.peerAddress }
+  if (current.id !== next.id) return next
+  return {
+    ...next,
+    peerAddress: next.peerAddress ?? current.peerAddress,
+    ...(
+      next.peerDisplayName ?? current.peerDisplayName
+        ? { peerDisplayName: next.peerDisplayName ?? current.peerDisplayName }
+        : {}
+    ),
+  }
 }
 
 function activeFromSummary(summary: ConversationSummary): ActiveConversation {
@@ -2420,5 +2511,46 @@ function activeFromSummary(summary: ConversationSummary): ActiveConversation {
     kind: 'dm',
     peerAddress: summary.peerAddress,
     peerInboxId: summary.peerInboxId,
+    ...(summary.peerDisplayName
+      ? { peerDisplayName: summary.peerDisplayName }
+      : {}),
   }
+}
+
+function contactsFromConversations(conversations: ConversationSummary[]): Contact[] {
+  return conversations.flatMap((conversation) => {
+    if (conversation.kind !== 'dm' || !conversation.peerAddress) return []
+    return [{
+      address: conversation.peerAddress as `0x${string}`,
+      avatarUrl: null,
+      conversationId: conversation.id,
+      displayName: conversation.peerDisplayName ?? null,
+      fid: null,
+      inboxId: conversation.peerInboxId,
+      source: conversation.peerDisplayName
+        ? 'convos-profile' as const
+        : 'conversation' as const,
+      updatedAt: conversation.updatedAt?.getTime() ?? Date.now(),
+      username: null,
+    }]
+  })
+}
+
+function applyContactNames(
+  conversations: ConversationSummary[],
+  contacts: Contact[],
+): ConversationSummary[] {
+  const contactsByInbox = new Map(
+    contacts.map((contact) => [contact.inboxId.toLowerCase(), contact]),
+  )
+  return conversations.map((conversation) => {
+    if (conversation.kind !== 'dm' || conversation.peerDisplayName) {
+      return conversation
+    }
+    const contact = contactsByInbox.get(conversation.peerInboxId.toLowerCase())
+    const displayName = contact?.displayName ?? (
+      contact?.username ? `@${contact.username}` : null
+    )
+    return displayName ? { ...conversation, peerDisplayName: displayName } : conversation
+  })
 }

@@ -17,6 +17,10 @@ import {
   revokeNotificationRoute,
 } from './notificationBridge.js'
 import { verifyQuickAuthToken } from './quickAuth.js'
+import {
+  fetchFarcasterFollowing,
+  type FarcasterFollowingPage,
+} from './farcasterFollowing.js'
 import { getAddress, isAddress } from 'viem'
 
 const securityHeaders = {
@@ -85,6 +89,11 @@ export type WorkerDependencies = {
     options?: { baseRpcUrl?: string; signal?: AbortSignal },
   ) => Promise<ParticipantIdentityBatch>
   revokeNotificationRoute: typeof revokeNotificationRoute
+  fetchFarcasterFollowing?: (
+    fid: number,
+    apiKey: string,
+    cursor: string | null,
+  ) => Promise<FarcasterFollowingPage>
   verifyQuickAuthToken: (token: string, domain: string) => Promise<number>
 }
 
@@ -93,6 +102,7 @@ const defaultDependencies: WorkerDependencies = {
   resolveEnsName,
   resolveParticipantIdentities,
   revokeNotificationRoute,
+  fetchFarcasterFollowing,
   verifyQuickAuthToken,
 }
 
@@ -171,6 +181,10 @@ export async function handleRequest(
     return participantIdentityApi(request, env, dependencies)
   }
 
+  if (url.pathname === '/api/me/farcaster-following') {
+    return farcasterFollowingApi(request, env, dependencies)
+  }
+
   if (url.pathname === '/api/resolve') {
     return recipientResolutionApi(request, env, dependencies)
   }
@@ -185,6 +199,52 @@ export async function handleRequest(
   }
 
   return new Response(null, { status: 404, headers: securityHeaders })
+}
+
+async function farcasterFollowingApi(
+  request: Request,
+  env: AppEnv,
+  dependencies: WorkerDependencies,
+): Promise<Response> {
+  const url = new URL(request.url)
+  const canonicalDomain = new URL(env.CANONICAL_ORIGIN).host
+  if (env.APP_ENV === 'production' && url.host !== canonicalDomain) {
+    return jsonError('not_found', 404)
+  }
+  if (request.method !== 'GET') return methodNotAllowed('GET')
+  const token = bearerToken(request)
+  if (!token) return jsonError('unauthorized', 401)
+  let fid: number
+  try {
+    fid = await dependencies.verifyQuickAuthToken(
+      token,
+      env.APP_ENV === 'production' ? canonicalDomain : url.host,
+    )
+  } catch {
+    return jsonError('unauthorized', 401)
+  }
+  const apiKey = env.FARCASTER_HUB_API_KEY?.trim()
+  if (!apiKey || !env.IDENTITY_RATE_LIMITER) {
+    return jsonError('contacts_unavailable', 503)
+  }
+  try {
+    const allowed = await env.IDENTITY_RATE_LIMITER.limit({
+      key: `${env.APP_ENV}:farcaster-contacts:fid:${fid}`,
+    })
+    if (!allowed.success) return rateLimited()
+  } catch {
+    return jsonError('contacts_unavailable', 503)
+  }
+  const cursor = url.searchParams.get('cursor')
+  if (cursor && cursor.length > 1_024) return jsonError('invalid_request', 400)
+  try {
+    const page = await (
+      dependencies.fetchFarcasterFollowing ?? fetchFarcasterFollowing
+    )(fid, apiKey, cursor)
+    return Response.json(page, { headers: noStoreJsonHeaders })
+  } catch {
+    return jsonError('contacts_unavailable', 503)
+  }
 }
 
 async function notificationUserApi(

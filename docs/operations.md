@@ -127,6 +127,18 @@ Quick Auth verification checks Farcaster's issuer, signature, expiry, exact audi
 
 The participant route stream-limits its JSON body to 16 KiB, checksum-normalizes and deduplicates addresses, bounds each request at 12, and rate-limits the verified FID. Ethereum mainnet's Universal Resolver supplies default ENS and ENSIP-19 Basename primary names. When configured, `FARCASTER_BASE_RPC_URL` supplies a batched read of the experimental Verifications contract; positive FIDs become explicitly secondary registered-fname hints through the official FName Registry. The browser sends larger inboxes as separate bounded batches, keeps positive metadata for at most ten minutes and complete negative results for two minutes, and retries partial outages after one minute. Partial resolver success remains usable; a total outage or ten-second route deadline returns `503` so absence is not cached as fact. Neither the Worker nor D1 persists this metadata.
 
+`GET /api/me/farcaster-following` is an exact-host, Quick Auth-protected,
+no-store proxy for one Neynar follow page. It derives the FID from the verified
+token, never accepts a caller-supplied FID, fixes `viewer_fid` to that same
+value, caps the page at 100, and returns only minimized public profile fields
+plus verified EVM addresses. It uses the existing `FARCASTER_HUB_API_KEY`
+Neynar secret; the browser then resolves XMTP reachability locally, so the
+Worker never receives or stores the resulting contact inbox IDs. Operator
+acceptance should use an authenticated canonical Mini session, confirm the
+imported/skipped counts, import a second page when offered, and inspect sampled
+logs only for fixed failure categories—not FIDs, cursors, addresses, names, or
+contact data.
+
 The recipient route accepts only a 2 KiB JSON `POST` body containing one `query` string, trims and ENSIP-15-normalizes a dot-separated name, and rejects names longer than 255 UTF-8 bytes. It forward-resolves the default Ethereum address on mainnet through up to three configured HTTPS RPC fallbacks and the ENS CCIP gateway, checksums a positive address, and has a ten-second endpoint deadline. A valid name with no address is a successful `none` result; provider and timeout failures are `503`, never negative evidence. The verified-FID rate-limit namespace is separate from participant-label batches. The raw query stays out of URLs, D1, application logs, and analytics.
 
 Use a reviewed, quota-enforced production Base endpoint; do not commit its keyed URL or use Base's rate-limited public endpoint for production. Configure it independently for preview and production:

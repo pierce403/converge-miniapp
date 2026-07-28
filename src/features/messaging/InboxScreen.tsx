@@ -5,6 +5,7 @@ import {
   MessageCircleMore,
   Plus,
   RefreshCw,
+  Users,
   WifiOff,
 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
@@ -34,6 +35,7 @@ type InboxScreenProps = {
   environment: string
   inboxId: string
   onJoinConvos: () => void
+  onContacts: () => void
   onNewDm: () => void
   onOpen: (conversationId: string) => void
   onClearEnsPreference: () => void
@@ -64,6 +66,7 @@ export function InboxScreen({
   environment,
   inboxId,
   onJoinConvos,
+  onContacts,
   onNewDm,
   onOpen,
   onClearEnsPreference,
@@ -192,6 +195,10 @@ export function InboxScreen({
           >
             <RefreshCw className={refreshing ? 'is-spinning' : ''} aria-hidden="true" />
           </button>
+          <Button onClick={onContacts} variant="secondary">
+            <Users aria-hidden="true" />
+            Contacts
+          </Button>
           <Button data-join-convos="true" onClick={onJoinConvos} variant="secondary">
             <Link2 aria-hidden="true" />
             Join Convo
@@ -212,13 +219,16 @@ export function InboxScreen({
               : 'XMTP group'
             const presentation = isGroup
               ? {
+                  addressLabel: groupLabel,
                   fnameHint: null,
                   label: conversation.title,
+                  secondary: groupLabel,
                   title: `${conversation.title} · ${groupLabel}`,
                 }
               : participantPresentation(
                 conversation.peerAddress ?? conversation.peerInboxId,
                 participantIdentityFor(conversation.peerAddress),
+                conversation.peerDisplayName,
               )
             const label = presentation.label
             return (
@@ -244,9 +254,9 @@ export function InboxScreen({
                       <span className="conversation-row__identity-hint">
                         {groupLabel}
                       </span>
-                    ) : presentation.fnameHint ? (
+                    ) : presentation.secondary !== presentation.addressLabel ? (
                       <span className="conversation-row__identity-hint">
-                        {presentation.fnameHint}
+                        {presentation.secondary}
                       </span>
                     ) : null}
                     <span className="conversation-row__preview">

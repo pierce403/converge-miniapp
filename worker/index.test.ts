@@ -221,6 +221,53 @@ describe('worker API', () => {
     })
   })
 
+  it('proxies one authenticated Farcaster-follow page without exposing the key', async () => {
+    const fetchFollowing = vi.fn().mockResolvedValue({
+      nextCursor: 'next-page',
+      users: [{
+        addresses: ['0x2222222222222222222222222222222222222222'],
+        avatarUrl: null,
+        displayName: 'Alice',
+        fid: 10,
+        username: 'alice',
+      }],
+    })
+    const dependencies = {
+      ...identityDependencies(),
+      fetchFarcasterFollowing: fetchFollowing,
+    }
+    const limiter = fakeRateLimiter()
+    const response = await handleRequest(
+      authorizedRequest('/api/me/farcaster-following?cursor=current-page'),
+      environment({
+        FARCASTER_HUB_API_KEY: 'neynar-secret',
+        IDENTITY_RATE_LIMITER: limiter,
+      }),
+      dependencies,
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    await expect(response.json()).resolves.toEqual({
+      nextCursor: 'next-page',
+      users: [{
+        addresses: ['0x2222222222222222222222222222222222222222'],
+        avatarUrl: null,
+        displayName: 'Alice',
+        fid: 10,
+        username: 'alice',
+      }],
+    })
+    expect(fetchFollowing).toHaveBeenCalledWith(
+      8531,
+      'neynar-secret',
+      'current-page',
+    )
+    expect(limiter.limit).toHaveBeenCalledWith({
+      key: 'production:farcaster-contacts:fid:8531',
+    })
+  })
+
   it('allows ENS-only results when the optional Base secret is absent', async () => {
     const dependencies = identityDependencies()
     dependencies.resolveParticipantIdentities.mockResolvedValue({

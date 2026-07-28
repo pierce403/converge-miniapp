@@ -160,10 +160,13 @@ export function useParticipantIdentities({
 export function participantPresentation(
   fallbackIdentifier: string,
   identity: ParticipantIdentity | null,
+  profileDisplayName?: string | null,
 ): ParticipantPresentation {
   const identifier = identity?.address ?? fallbackIdentifier
   const addressLabel = shortIdentifier(identifier)
+  const profileName = profileDisplayName?.trim() || null
   const names = [
+    profileName,
     identity?.ensName ?? null,
     identity?.basename ?? null,
   ].filter((value): value is string => Boolean(value))

@@ -205,7 +205,7 @@ export function NewDmScreen({
       ) : null}
 
       <aside className="privacy-callout">
-        ENS names are resolved transiently by Converge, then the exact address is checked with XMTP. No contacts database is created.
+        ENS names are resolved transiently, then the exact address is checked with XMTP. After a conversation starts, the reachable peer is saved only in this inbox's on-device contacts.
       </aside>
     </section>
   )

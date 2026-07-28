@@ -78,6 +78,7 @@ describe('MessagingApp storage and installation states', () => {
       autoConnect: true,
       inboxTarget: null,
       notificationFid: user.fid,
+      profileDisplayName: user.username,
     })
     expect(screen.getByRole('heading', { name: 'Opening your inbox' })).toBeVisible()
     expect(screen.queryByRole('button', { name: /open private inbox/i })).not.toBeInTheDocument()
@@ -96,6 +97,7 @@ describe('MessagingApp storage and installation states', () => {
       autoConnect: false,
       inboxTarget: null,
       notificationFid: user.fid,
+      profileDisplayName: user.username,
     })
     expect(screen.getByRole('heading', {
       name: 'This Farcaster client cannot open XMTP',
@@ -874,6 +876,7 @@ describe('MessagingApp storage and installation states', () => {
       autoConnect: false,
       inboxTarget: null,
       notificationFid: user.fid,
+      profileDisplayName: user.username,
     })
     expect(screen.getByRole('heading', {
       name: 'Choose how to recover safely',
@@ -909,6 +912,7 @@ describe('MessagingApp storage and installation states', () => {
         sourceAddress: '0x1111111111111111111111111111111111111111',
       }),
       notificationFid: user.fid,
+      profileDisplayName: user.username,
     })
     fireEvent.click(screen.getByLabelText('Identity and privacy'))
     expect(screen.getByRole('heading', { name: 'Farcaster wallet' })).toBeVisible()
@@ -1003,6 +1007,7 @@ describe('MessagingApp storage and installation states', () => {
       autoConnect: true,
       inboxTarget: null,
       notificationFid: user.fid,
+      profileDisplayName: user.username,
     })
     expect(reloadDocument).not.toHaveBeenCalled()
     removeItem.mockRestore()
@@ -1126,6 +1131,7 @@ describe('MessagingApp storage and installation states', () => {
       autoConnect: true,
       inboxTarget: null,
       notificationFid: user.fid,
+      profileDisplayName: user.username,
     })
     expect(screen.getByRole('heading', { name: 'pierce' })).toBeVisible()
     expect(reloadDocument).not.toHaveBeenCalled()
@@ -1160,6 +1166,7 @@ describe('MessagingApp storage and installation states', () => {
       autoConnect: false,
       inboxTarget: null,
       notificationFid: user.fid,
+      profileDisplayName: user.username,
     })
     expect(screen.getByRole('heading', {
       name: 'Choose how to recover safely',
@@ -1190,6 +1197,7 @@ describe('MessagingApp storage and installation states', () => {
       autoConnect: false,
       inboxTarget: null,
       notificationFid: user.fid,
+      profileDisplayName: user.username,
     })
     fireEvent.click(screen.getByRole('button', { name: 'Use Farcaster inbox' }))
 
@@ -1197,6 +1205,7 @@ describe('MessagingApp storage and installation states', () => {
       autoConnect: true,
       inboxTarget: null,
       notificationFid: user.fid,
+      profileDisplayName: user.username,
     })
     expect(screen.getByRole('heading', { name: 'pierce' })).toBeVisible()
     expect(reloadDocument).not.toHaveBeenCalled()

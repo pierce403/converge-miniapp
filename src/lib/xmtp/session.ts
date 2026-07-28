@@ -54,11 +54,20 @@ import {
   type ConvosInviteJoinError,
   type ConvosInviteJoinHandled,
 } from '../convos/controlCodec'
+import {
+  convosProfileSnapshotCodec,
+  convosProfileUpdateCodec,
+  sanitizeConvosDisplayName,
+  type ConvosProfileSnapshot,
+  type ConvosProfileUpdate,
+} from '../convos/profileCodec'
 
 import {
   MAX_MESSAGE_REACTIONS,
   type ActiveConversation,
+  type Contact,
   type ConversationSummary,
+  type FarcasterContactCandidate,
   type MessageItem,
   type StreamHealth,
 } from '../../features/messaging/types'
@@ -114,6 +123,8 @@ type AppContentTypes =
   | ConvosInviteJoinError
   | ConvosInviteJoinHandled
   | ConvosJoinRequest
+  | ConvosProfileSnapshot
+  | ConvosProfileUpdate
   | BuiltInContentTypes
   | EnrichedReply<
     ConvosJoinRequest | BuiltInContentTypes,
@@ -129,6 +140,8 @@ const APP_CODECS = [
   convosJoinRequestCodec as unknown as ContentCodec,
   convosInviteJoinHandledCodec as unknown as ContentCodec,
   convosInviteJoinErrorCodec as unknown as ContentCodec,
+  convosProfileUpdateCodec as unknown as ContentCodec,
+  convosProfileSnapshotCodec as unknown as ContentCodec,
 ]
 type AppClient = Client<AppContentTypes>
 type AppDm = Dm<AppContentTypes>
@@ -264,6 +277,7 @@ export class XmtpMessagingSession {
   #visibleGroups = new Map<string, AppGroup>()
   #trustedConvosGroups = new Map<string, TrustedConvosGroup>()
   #recoveredConvosRequests: RecoveredConvosRequest[] | null = null
+  #publishedProfiles = new Map<string, string>()
   #convosAccessSnapshot: ConvosAccessSnapshot | null = null
   #convosAccessSnapshotSentAtNs: bigint | null = null
   #convosReconcile: Promise<void> | null = null
@@ -807,6 +821,10 @@ export class XmtpMessagingSession {
         const latest = await this.latestDisplayableMessage(conversation)
         if (latest.hideConversation) return null
         const lastMessage = latest.message
+        const peerDisplayName = await this.latestSelfAuthoredProfileName(
+          conversation,
+          peerInboxId,
+        )
 
         return {
           id: conversation.id,
@@ -814,6 +832,7 @@ export class XmtpMessagingSession {
           kind: 'dm' as const,
           lastSenderInboxId: lastMessage?.senderInboxId ?? null,
           peerAddress: addresses.get(peerInboxId) ?? null,
+          peerDisplayName,
           peerInboxId,
           preview: previewFor(lastMessage) ?? (
             latest.hiddenActivityAt ? 'Recent non-message activity' : 'No messages yet'
@@ -960,6 +979,82 @@ export class XmtpMessagingSession {
     }
   }
 
+  async resolveFarcasterContacts(
+    candidates: FarcasterContactCandidate[],
+  ): Promise<{ contacts: Contact[]; skipped: number }> {
+    const contacts: Contact[] = []
+    let skipped = 0
+    for (let start = 0; start < candidates.length; start += 10) {
+      const batch = candidates.slice(start, start + 10)
+      const resolved = await Promise.all(batch.map(async (candidate) => {
+        for (const address of candidate.addresses.slice(0, 3)) {
+          const inboxId = await this.client.fetchInboxIdByIdentifier(
+            ethereumIdentifier(address),
+          )
+          if (inboxId && inboxId.toLowerCase() !== this.inboxId.toLowerCase()) {
+            return {
+              address,
+              avatarUrl: candidate.avatarUrl,
+              conversationId: (
+                await this.client.conversations.getDmByInboxId(inboxId)
+              )?.id ?? null,
+              displayName: candidate.displayName,
+              fid: candidate.fid,
+              inboxId,
+              source: 'farcaster' as const,
+              updatedAt: Date.now(),
+              username: candidate.username,
+            }
+          }
+        }
+        return null
+      }))
+      for (const contact of resolved) {
+        if (contact) contacts.push(contact)
+        else skipped += 1
+      }
+    }
+    const unique = new Map(
+      contacts.map((contact) => [contact.inboxId.toLowerCase(), contact]),
+    )
+    return { contacts: [...unique.values()], skipped }
+  }
+
+  async readGroupContacts(): Promise<Contact[]> {
+    const contacts: Contact[] = []
+    for (const group of this.#visibleGroups.values()) {
+      let memberInboxIds: string[]
+      try {
+        memberInboxIds = (await group.members())
+          .map((member) => member.inboxId)
+          .filter((inboxId) => inboxId.toLowerCase() !== this.inboxId.toLowerCase())
+      } catch {
+        continue
+      }
+      const states = memberInboxIds.length
+        ? await this.client.preferences.getInboxStates(memberInboxIds)
+        : []
+      const profileNames = await this.latestSelfAuthoredProfileNames(group)
+      for (const state of states) {
+        const memberAddress = displayAddress(state)
+        if (!memberAddress) continue
+        const displayName = profileNames.get(state.inboxId.toLowerCase()) ?? null
+        contacts.push({
+          address: memberAddress as `0x${string}`,
+          avatarUrl: null,
+          conversationId: null,
+          displayName,
+          fid: null,
+          inboxId: state.inboxId,
+          source: displayName ? 'convos-profile' : 'conversation',
+          updatedAt: Date.now(),
+          username: null,
+        })
+      }
+    }
+    return contacts
+  }
+
   async canMessageAddress(address: `0x${string}`): Promise<boolean> {
     const reachability = await this.client.canMessage([
       ethereumIdentifier(address),
@@ -1038,6 +1133,25 @@ export class XmtpMessagingSession {
           delivery: 'failed',
         },
       }
+    }
+  }
+
+  async publishProfile(
+    conversationId: string,
+    displayName: string | null | undefined,
+  ): Promise<void> {
+    const name = sanitizeConvosDisplayName(displayName)
+    if (!name || this.#publishedProfiles.get(conversationId) === name) return
+    this.#publishedProfiles.set(conversationId, name)
+    try {
+      const conversation = await this.getConversation(conversationId)
+      await conversation.send(
+        convosProfileUpdateCodec.encode({ name }),
+        { shouldPush: false },
+      )
+    } catch (error) {
+      this.#publishedProfiles.delete(conversationId)
+      throw error
     }
   }
 
@@ -1611,6 +1725,48 @@ export class XmtpMessagingSession {
     }
   }
 
+  private async latestSelfAuthoredProfileName(
+    conversation: AppConversation,
+    inboxId: string,
+  ): Promise<string | null> {
+    const messages = await conversation.messages({
+      direction: SortDirection.Descending,
+      excludeContentTypes: NON_TIMELINE_CONTENT_TYPES,
+      kind: GroupMessageKind.Application,
+      limit: INBOX_PREVIEW_SCAN_SIZE,
+    })
+    for (const message of messages) {
+      if (
+        message.senderInboxId.toLowerCase() === inboxId.toLowerCase() &&
+        isConvosContentType(message, 'profile_update') &&
+        isConvosProfileUpdateContent(message.content)
+      ) return message.content.name ?? null
+    }
+    return null
+  }
+
+  private async latestSelfAuthoredProfileNames(
+    conversation: AppConversation,
+  ): Promise<Map<string, string>> {
+    const names = new Map<string, string>()
+    const messages = await conversation.messages({
+      direction: SortDirection.Descending,
+      excludeContentTypes: NON_TIMELINE_CONTENT_TYPES,
+      kind: GroupMessageKind.Application,
+      limit: INBOX_PREVIEW_SCAN_SIZE,
+    })
+    for (const message of messages) {
+      const sender = message.senderInboxId.toLowerCase()
+      if (
+        !names.has(sender) &&
+        isConvosContentType(message, 'profile_update') &&
+        isConvosProfileUpdateContent(message.content) &&
+        message.content.name
+      ) names.set(sender, message.content.name)
+    }
+    return names
+  }
+
   private async messageWindow(
     conversation: AppConversation,
     requestedLimit: number,
@@ -2091,8 +2247,17 @@ function isConvosStatusControl(message: DecodedMessage) {
 
 function isConvosControlMessage(message: DecodedMessage) {
   return isConvosJoinRequest(message) ||
+    isConvosContentType(message, 'profile_update') ||
+    isConvosContentType(message, 'profile_snapshot') ||
     isConvosContentType(message, 'invite_join_error') ||
     isConvosContentType(message, 'invite_join_handled')
+}
+
+function isConvosProfileUpdateContent(
+  value: unknown,
+): value is ConvosProfileUpdate {
+  return typeof value === 'object' && value !== null &&
+    (!('name' in value) || typeof value.name === 'string')
 }
 
 function isConvosContentType(message: DecodedMessage, typeId: string) {

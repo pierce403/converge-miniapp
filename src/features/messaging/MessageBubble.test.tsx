@@ -55,4 +55,20 @@ describe('MessageBubble', () => {
     expect(screen.queryByText('peer-i…7890')).not.toBeInTheDocument()
     expect(screen.getByLabelText(/Recipient/)).toBeVisible()
   })
+
+  it('uses a known contact name for a group sender', () => {
+    render(
+      <MessageBubble
+        message={message}
+        onRetry={vi.fn()}
+        senderName="Alice in Convos"
+        showSender
+      />,
+    )
+
+    expect(screen.getByText('Alice in Convos')).toBeVisible()
+    expect(screen.getByRole('article')).toHaveAccessibleName(
+      /Alice in Convos/u,
+    )
+  })
 })

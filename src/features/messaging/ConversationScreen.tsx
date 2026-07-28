@@ -24,6 +24,7 @@ type ConversationScreenProps = {
   onRetryLiveUpdates: () => void
   onSend: (text: string) => Promise<void>
   participantIdentity?: ParticipantIdentity | null
+  contactNameFor?: (inboxId: string) => string | null
   sending: boolean
   streamHealth: StreamHealth
 }
@@ -40,6 +41,7 @@ export function ConversationScreen({
   onRetryLiveUpdates,
   onSend,
   participantIdentity = null,
+  contactNameFor = () => null,
   sending,
   streamHealth,
 }: ConversationScreenProps) {
@@ -62,6 +64,7 @@ export function ConversationScreen({
     : participantPresentation(
       conversation.peerAddress ?? conversation.peerInboxId,
       participantIdentity,
+      conversation.peerDisplayName,
     )
   const title = presentation.label
   const offline = streamHealth === 'offline'
@@ -212,6 +215,7 @@ export function ConversationScreen({
             message={message}
             onRetry={onRetry}
             retryDisabled={offline}
+            senderName={contactNameFor(message.senderInboxId)}
             showSender={isGroup}
           />
         ))}

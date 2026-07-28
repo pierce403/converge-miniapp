@@ -3,13 +3,16 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { InboxScreen } from './InboxScreen'
 import type { ConversationSummary } from './types'
+import type { ParticipantIdentity } from '../identity/useParticipantIdentities'
 
 const address = '0x1111111111111111111111111111111111111111' as const
 const inboxId = 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899'
 
 function renderInbox(
   conversations: ConversationSummary[],
-  participantIdentityFor = vi.fn(() => null),
+  participantIdentityFor: (
+    address: string | null | undefined,
+  ) => ParticipantIdentity | null = vi.fn(() => null),
 ) {
   return render(
     <InboxScreen
@@ -24,6 +27,7 @@ function renderInbox(
       environment="dev · EOA"
       inboxId={inboxId}
       onClearEnsPreference={vi.fn()}
+      onContacts={vi.fn()}
       onJoinConvos={vi.fn()}
       onNewDm={vi.fn()}
       onOpen={vi.fn()}
@@ -131,5 +135,26 @@ describe('InboxScreen', () => {
     }])
 
     expect(screen.getByText('abcdef…7890: Welcome')).toBeVisible()
+  })
+
+  it('shows a Convos profile name before ENS while retaining ENS as context', () => {
+    renderInbox([{
+      id: 'conversation-1',
+      isOwnLastMessage: false,
+      kind: 'dm',
+      peerAddress: '0x2222222222222222222222222222222222222222',
+      peerDisplayName: 'Alice in Convos',
+      peerInboxId: 'peer-inbox',
+      preview: 'Hello',
+      updatedAt: new Date('2026-07-14T12:00:00Z'),
+    }], vi.fn(() => ({
+      address: '0x2222222222222222222222222222222222222222' as const,
+      basename: null,
+      ensName: 'alice.eth',
+      registeredFname: 'alice',
+    })))
+
+    expect(screen.getByText('Alice in Convos')).toBeVisible()
+    expect(screen.getByText(/Registered fname @alice · alice\.eth/u)).toBeVisible()
   })
 })

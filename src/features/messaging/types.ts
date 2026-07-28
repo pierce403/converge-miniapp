@@ -36,6 +36,7 @@ export type ConversationSummary = ConversationSummaryBase & (
   | {
     kind: 'dm'
     peerAddress: string | null
+    peerDisplayName?: string | null
     peerInboxId: string
   }
   | {
@@ -59,6 +60,7 @@ export type ActiveConversation = (
   | {
     kind: 'dm'
     peerAddress: string | null
+    peerDisplayName?: string | null
     peerInboxId: string
   }
   | {
@@ -81,6 +83,34 @@ export type ActiveConversation = (
 }
 
 export type StreamHealth = 'live' | 'retrying' | 'failed' | 'offline'
+
+export type ContactSource = 'conversation' | 'convos-profile' | 'farcaster'
+
+export type Contact = {
+  address: `0x${string}`
+  avatarUrl: string | null
+  conversationId: string | null
+  displayName: string | null
+  fid: number | null
+  inboxId: string
+  source: ContactSource
+  updatedAt: number
+  username: string | null
+}
+
+export type FarcasterContactCandidate = {
+  addresses: `0x${string}`[]
+  avatarUrl: string | null
+  displayName: string | null
+  fid: number
+  username: string | null
+}
+
+export type ContactImportResult = {
+  imported: number
+  nextCursor: string | null
+  skipped: number
+}
 
 export type ConvosAccessRequest = {
   conversationId: string | null

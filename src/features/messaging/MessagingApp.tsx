@@ -6,6 +6,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '../../components/Button'
+import { ContactsScreen } from '../contacts/ContactsScreen'
 import { StatePanel } from '../../components/StatePanel'
 import { useMiniAppBack } from '../../app/useMiniAppBack'
 import { formatXmtpAlertRegistrationError } from '../../lib/xmtp/alertRegistrationError'
@@ -162,6 +163,7 @@ export function MessagingApp({
     autoConnect: canUseWallet && !selectionBlocked,
     inboxTarget,
     notificationFid: user.fid,
+    profileDisplayName: user.displayName ?? user.username ?? null,
   })
   const alerts = useFarcasterAlerts({
     canAddMiniApp,
@@ -668,6 +670,10 @@ export function MessagingApp({
           environment={`${messaging.environment} · ${messaging.walletKind ?? 'wallet'}`}
           inboxId={messaging.inboxId}
           onClearEnsPreference={() => void clearEnsPreference()}
+          onContacts={() => {
+            setConversationReturnFocusId(null)
+            messaging.setView('contacts')
+          }}
           onJoinConvos={() => {
             setConversationReturnFocusId(null)
             messaging.setView('join-convos')
@@ -689,6 +695,23 @@ export function MessagingApp({
           refreshing={messaging.refreshing}
           returnFocusConversationId={conversationReturnFocusId}
           streamHealth={messaging.streamHealth}
+        />
+      ) : null}
+
+      {messaging.view === 'contacts' ? (
+        <ContactsScreen
+          contacts={messaging.contacts}
+          importing={messaging.importingContacts}
+          offline={offline}
+          onBack={backToInbox}
+          onImportFollows={messaging.importFarcasterContacts}
+          onMessage={async (contact) => {
+            if (contact.conversationId) {
+              await messaging.openConversation(contact.conversationId)
+            } else {
+              await messaging.createDm(contact.address)
+            }
+          }}
         />
       ) : null}
 
@@ -733,6 +756,15 @@ export function MessagingApp({
           participantIdentity={participantIdentities.identityFor(
             messaging.activeConversation.peerAddress,
           )}
+          contactNameFor={(senderInboxId) => {
+            const contact = messaging.contacts.find(
+              (candidate) =>
+                candidate.inboxId.toLowerCase() === senderInboxId.toLowerCase(),
+            )
+            return contact?.displayName ?? (
+              contact?.username ? `@${contact.username}` : null
+            )
+          }}
           sending={messaging.sending}
           streamHealth={messaging.streamHealth}
         />

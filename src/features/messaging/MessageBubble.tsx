@@ -7,6 +7,7 @@ type MessageBubbleProps = {
   message: MessageItem
   onRetry: (messageId: string) => void
   retryDisabled?: boolean
+  senderName?: string | null
   showSender?: boolean
 }
 
@@ -14,12 +15,13 @@ export function MessageBubble({
   message,
   onRetry,
   retryDisabled = false,
+  senderName = null,
   showSender = false,
 }: MessageBubbleProps) {
   const sender = message.isOwn
     ? 'You'
     : showSender
-      ? shortIdentity(message.senderInboxId)
+      ? senderName?.trim() || shortIdentity(message.senderInboxId)
       : 'Recipient'
   const reactions = message.reactions?.slice(0, MAX_MESSAGE_REACTIONS)
 
