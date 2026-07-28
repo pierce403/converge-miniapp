@@ -903,7 +903,7 @@ describe('XMTP to Farcaster notification bridge', () => {
       body: 'Open Converge Mini to read it.',
       notificationId: `xmtp.${deliveryId}`,
       targetUrl: 'https://miniapp.converge.cv/',
-      title: 'New Converge message',
+      title: 'New XMTP message',
       tokens: ['farcaster-token'],
     })
     expect(JSON.stringify(providerBody)).not.toMatch(/sender|plaintext|conversationId/u)

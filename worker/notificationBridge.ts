@@ -1340,7 +1340,7 @@ async function sendFarcasterNotificationBatch(
           body: 'Open Converge Mini to read it.',
           notificationId: `xmtp.${deliveryId}`,
           targetUrl: `${configuration.canonicalOrigin}/`,
-          title: 'New Converge message',
+          title: 'New XMTP message',
           tokens,
         }),
         headers: { 'content-type': 'application/json' },

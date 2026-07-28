@@ -94,8 +94,12 @@ installation tickets with public-context Ed25519ph, while vapid.party verified
 plain Ed25519. vapid.party commit `6fa0c6e` fixes that contract with an
 independent official-libxmtp vector; its production Worker accepted the real
 Mini proof, created one active HTTPS callback subscription, and returned the
-listener bridge to synced. That proves enrollment, not native display: one
-signed callback and one closed-app Farcaster alert remain required.
+listener bridge to synced. A subsequent fresh-sender test produced a native
+Farcaster alert carrying the Mini's exact prior fixed copy, proving the global
+listener, signed callback, Mini delivery, and Farcaster notification boundary
+worked together at least once. The Farcaster client/platform, exact alert
+count, tap target, and resulting conversation display were not recorded, so
+full gate 5 acceptance remains open.
 
 ### Active milestone: closed-app Farcaster alerts
 
@@ -304,6 +308,13 @@ Chronological production evidence recorded on 2026-07-27 and 2026-07-28 UTC:
   deployments inherit that code and receive their own immutable version IDs.
   Reopening the Mini must now replace the older active vapid.party route before
   the fresh-burner acceptance test;
+- after that route refresh, a collaborator-observed fresh-sender test produced
+  a native Farcaster alert carrying the Mini's exact prior fixed copy,
+  **New Converge message** and **Open Converge Mini to read it.** That
+  end-to-end result necessarily traversed the enrolled vapid.party match,
+  signed Mini callback, and Farcaster delivery endpoint. The client/platform,
+  exact alert count, tap target, and resulting `Unknown` conversation display
+  were not recorded and remain gate 5 acceptance details;
 - authoritative and recursive DNS return the exact required
   `_vapid-party.miniapp.converge.cv` TXT binding;
 - Farcaster's public debugger reports the manifest, schema, account
@@ -319,9 +330,9 @@ Delivery sequence and gates:
 | --- | --- | --- |
 | 1. Freeze the live contracts and repair Converge safety issues | Task 10a deployed; live acceptance pending | The wrapped Farcaster outcomes parse correctly; the browser registers exactly one installation-matched welcome topic plus HMAC-backed `Allowed` and `Unknown` topics while excluding `Denied`; a client-local disable cannot revoke another client's route; valid ownership remains required for readiness; and the exact rollout flag keeps credentials separate from public enablement. The 667-test full gate, GitHub CI, Cloudflare Build, immutable Worker version, and canonical root/health checks pass. |
 | 2. Verify the production vapid.party app and DNS binding | Verified production | The retained app ID/key match the exact public `_vapid-party.miniapp.converge.cv` TXT record; Mini repaired and freshly verified the private exact-domain state without replacing the retained secret; the subsequent production ticket and proof succeeded. |
-| 3. Prove the two Workers together in production | Task 10a deployed; route refresh and callback pending | Preview migration `0003` is applied and no migrations are pending. A real signed lifecycle token, opaque Mini route, Browser SDK public-context Ed25519ph proof, active vapid.party HTTPS callback subscription, and synced listener route already exist. Reopen the deployed Mini to replace that older route with its welcome plus `Allowed`/`Unknown` snapshot, then require one genuine fresh-sender envelope to produce one verified opaque callback. |
+| 3. Prove the two Workers together in production | Verified production | Preview migration `0003` is applied and no migrations are pending. A real signed lifecycle token, opaque Mini route, Browser SDK public-context Ed25519ph proof, active vapid.party HTTPS callback subscription, and synced listener route exist. After the deployed Mini refreshed its welcome plus `Allowed`/`Unknown` snapshot, a fresh-sender envelope produced the exact Mini-owned native copy; that result necessarily traversed vapid.party's match and signed opaque callback before Farcaster delivery. |
 | 4. Configure and promote production token lifecycle | Verified production | Bounded manual Neynar redirects are live on Worker `a639f300-5b00-44fd-b675-b9897e4fcfb2`; the synthetic unauthorized-key canary returns `400`; a real enable event creates exactly one encrypted `(fid, appFid)` row; and no sanitized webhook failure occurs. |
-| 5. Prove a closed-app alert in Farcaster | In progress: fresh burner message pending | The 11:33 message exposed the old unenrolled-topic boundary. After Task 10a promotion and one open-Mini route refresh, close Converge and have a new burner identity send its first DM to the current inbox; exactly one generic native alert arrives, opens the canonical app, and the `Unknown` DM appears without acceptance. |
+| 5. Prove a closed-app alert in Farcaster | Partially verified: native alert observed | A fresh-sender test after Task 10a produced a native Farcaster alert with the exact fixed Mini copy. Record the Farcaster client/platform, confirm exactly one alert, tap it to the canonical Mini, and verify the resulting `Unknown` DM appears without acceptance before closing this gate. |
 | 6. Prove cleanup, recovery, and operations | Planned | Disable, re-enable, remove, invalid-token, throttling, retry, route-revocation, and sampled-log checks pass; the runbook records rollback and health checks. |
 
 Promotion rules:
@@ -661,7 +672,7 @@ Success condition: the optional label flow never moves identity state; the expli
 | Backend | Notification token data model | P1 | Verified production | Signed lifecycle tokens stay encrypted in Mini D1; production secrets, migrations, current-app-key verification, one real signed enable event, and canonical-host storage are proven. Disable/remove and invalid-token cleanup remain in gate 6. |
 | Operations | Redacted logs, health, and error visibility | P0 | Deployed; acceptance pending | Health/version and redaction-safe failures are implemented. Subscription and revocation stages now emit only fixed stage, numeric upstream status, and an allowlisted provider code; sampled production-log review remains. |
 | Notifications | Add Mini App and store notification permission | P1 | Verified production | The exact manifest webhook is live; a real signed enable event passed current app-key verification and created one encrypted native token plus one active opaque Mini route. Disable/remove cleanup acceptance remains in gate 6. |
-| Notifications | Notify on incoming XMTP message | P1 | Task 10a deployed; acceptance pending | The browser supplies one exact installation welcome topic plus `Allowed`/`Unknown` topic/HMAC state while excluding `Denied`; Mini validates the welcome topic against the installation proof, and vapid.party's existing global listener matches only enrolled routes and signs opaque callbacks. Mini still sends fixed-copy Farcaster alerts without message plaintext or sender metadata. The full gate and deployment checks pass; route refresh, one genuine callback, and the fresh-burner closed-app alert remain in gates 3 and 5. |
+| Notifications | Notify on incoming XMTP message | P1 | Deployed; acceptance pending | The browser supplies one exact installation welcome topic plus `Allowed`/`Unknown` topic/HMAC state while excluding `Denied`; Mini validates the welcome topic against the installation proof, and vapid.party's existing global listener matches only enrolled routes and signs opaque callbacks. A fresh-sender test produced the exact fixed-copy native Farcaster alert without message plaintext or sender metadata, proving gate 3. Gate 5 still needs the client/platform, exact-count, tap-target, and resulting-DM details. |
 | Convos | Import a signed Convos invite | P1 | Deployed; acceptance pending | Exact production invite URLs and raw slugs are validated locally, a typed XMTP join request is sent only after an explicit tap, and only an active exact-tag group added by the declared creator to the current inbox completes the import. |
 | Convos | Read and send in an imported group | P1 | Deployed; acceptance pending | Verified allowed groups share the cached-first timeline, pagination, send/retry path, and live-stream reliability of DMs without weakening consent or exposing invite/control traffic as ordinary chat. |
 | Convos | Re-share and open an imported invite | P1 | Later | URL builders exist, but QR/share/handoff UI is not implemented. Task 11d remains a separate post-import slice. |
@@ -984,7 +995,7 @@ Production-promotion gate:
 - Keep notification migrations applied before dependent Worker code, retain the encryption key as a Worker secret, and keep the exact canonical webhook URL in the production manifest. Preview remains fail-closed for the production-only structural bridge.
 - Only after the signed webhook is receiving and storing lifecycle events may the ready inbox show a dismissible **Enable alerts** prompt. Calling `sdk.actions.addMiniApp()` always requires a user tap. Farcaster enables notifications by default when the user adds the Mini App, where the host supports it.
 - Treat `sdk.context.client.notificationDetails` and SDK events as display-only open-app hints. Pass only status booleans/client identity through React; never persist or log the context token or URL. The existing identity/privacy menu must always expose the current alert status and host-settings guidance after a banner dismissal.
-- Permission copy may say that adding Converge Mini enables Farcaster alerts, but must not call incoming-message display release-proven until gates 3 and 5 record a genuine callback and closed-app alert.
+- Permission copy may say that adding Converge Mini enables Farcaster alerts and that one production incoming-message alert has been observed, but must not imply broad client coverage or complete release acceptance until gate 5 records the client/platform, exact count, tap target, and resulting conversation.
 
 - Ask the user to add/enable the Mini App only after explaining the benefit.
 - Receive `miniapp_added`, `miniapp_removed`, `notifications_enabled`, and `notifications_disabled` webhooks.
@@ -1006,7 +1017,7 @@ The implemented architecture must continue to prove that it:
 - obtains the current installation welcome topic and topic/HMAC filtering material through a Browser SDK path proven on the target hosts;
 - stores bounded topic/HMAC routing rows directly in vapid.party D1 and listener memory, never in Mini D1; replaces that snapshot when the open Mini sees HMAC or consent changes; and never logs or exposes the rows;
 - maps an event to the correct trusted FID/notification subscription;
-- sends the fixed title **New Converge message** and body **Open Converge Mini to read it.** rather than message text;
+- sends the fixed title **New XMTP message** and body **Open Converge Mini to read it.** rather than message text;
 - deduplicates across retries and multiple installations;
 - excludes explicit `Denied` routes, respects disable/removal and rate limits,
   and keeps the native callback generic; and
