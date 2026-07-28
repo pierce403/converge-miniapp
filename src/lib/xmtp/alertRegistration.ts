@@ -8,6 +8,7 @@ import {
 
 type TicketResponse = {
   registration: unknown
+  signatureText: string
   ticket: string
 }
 
@@ -78,7 +79,9 @@ export async function syncXmtpAlertRegistration(
   const enrollment = await readTicketResponse(ticketResponse)
   let signature: string
   try {
-    signature = await session.signPushEnrollmentTicket(enrollment.ticket)
+    signature = await session.signPushEnrollmentTicket(
+      enrollment.signatureText,
+    )
   } catch {
     throw new XmtpAlertRegistrationError(
       'ticket_signature',
@@ -112,6 +115,7 @@ export async function syncXmtpAlertRegistration(
       registrationResponse,
     )
   }
+  await readSubscriptionResponse(registrationResponse)
 }
 
 async function fetchTicket(init: RequestInit): Promise<Response> {
@@ -173,6 +177,10 @@ async function readTicketResponse(response: Response): Promise<TicketResponse> {
     typeof value.ticket !== 'string' ||
     !/^vpxet1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value.ticket) ||
     value.ticket.length > 4096 ||
+    !('signatureText' in value) ||
+    typeof value.signatureText !== 'string' ||
+    value.signatureText.length === 0 ||
+    value.signatureText.length > 4096 ||
     !('registration' in value) ||
     !value.registration ||
     typeof value.registration !== 'object'
@@ -182,5 +190,34 @@ async function readTicketResponse(response: Response): Promise<TicketResponse> {
       'invalid_ticket_response',
     )
   }
-  return { registration: value.registration, ticket: value.ticket }
+  return {
+    registration: value.registration,
+    signatureText: value.signatureText,
+    ticket: value.ticket,
+  }
+}
+
+async function readSubscriptionResponse(response: Response): Promise<void> {
+  let value: unknown
+  try {
+    value = await response.json()
+  } catch {
+    throw new XmtpAlertRegistrationError(
+      'subscription_response',
+      'invalid_subscription_response',
+    )
+  }
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== 1 ||
+    !('registered' in value) ||
+    value.registered !== true
+  ) {
+    throw new XmtpAlertRegistrationError(
+      'subscription_response',
+      'invalid_subscription_response',
+    )
+  }
 }

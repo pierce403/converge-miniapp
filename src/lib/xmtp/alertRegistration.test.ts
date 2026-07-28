@@ -40,6 +40,8 @@ describe('XMTP alert registration', () => {
   })
 
   it('gets an app-approved ticket, signs it locally, and submits the proof', async () => {
+    const ticket = `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`
+    const signatureText = 'sign this exact XMTP enrollment challenge'
     const registration = {
       delivery: {
         kind: 'https_callback',
@@ -56,7 +58,8 @@ describe('XMTP alert registration', () => {
     mocks.fetch
       .mockResolvedValueOnce(Response.json({
         registration,
-        ticket: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
+        signatureText,
+        ticket,
       }))
       .mockResolvedValueOnce(Response.json({ registered: true }, { status: 201 }))
     const activeSession = session()
@@ -69,7 +72,7 @@ describe('XMTP alert registration', () => {
       expect.objectContaining({ method: 'POST' }),
     )
     expect(activeSession.signPushEnrollmentTicket).toHaveBeenCalledWith(
-      `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
+      signatureText,
     )
     const finalBody = JSON.parse(mocks.fetch.mock.calls[1]?.[1]?.body as string)
     expect(finalBody).toEqual({
@@ -78,7 +81,7 @@ describe('XMTP alert registration', () => {
         signature: 'installation-signature',
       },
       registration,
-      ticket: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
+      ticket,
     })
     expect(JSON.stringify(finalBody)).not.toMatch(/message|sender|conversationId/)
   })
@@ -116,6 +119,7 @@ describe('XMTP alert registration', () => {
       }))
       .mockResolvedValueOnce(Response.json({
         registration: { version: 1 },
+        signatureText: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
         ticket: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
       }))
       .mockResolvedValueOnce(Response.json({ registered: true }))
@@ -158,11 +162,13 @@ describe('XMTP alert registration', () => {
     mocks.fetch
       .mockResolvedValueOnce(Response.json({
         registration: { version: 1 },
+        signatureText: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
         ticket: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
       }))
       .mockResolvedValueOnce(Response.json({ registered: true }, { status: 201 }))
       .mockResolvedValueOnce(Response.json({
         registration: { version: 1 },
+        signatureText: `vpxet1.${'c'.repeat(20)}.${'d'.repeat(43)}`,
         ticket: `vpxet1.${'c'.repeat(20)}.${'d'.repeat(43)}`,
       }))
       .mockResolvedValueOnce(Response.json({ registered: true }, { status: 201 }))
@@ -179,11 +185,13 @@ describe('XMTP alert registration', () => {
     mocks.fetch
       .mockResolvedValueOnce(Response.json({
         registration: { version: 1 },
+        signatureText: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
         ticket: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
       }))
       .mockResolvedValueOnce(Response.json({ registered: true }, { status: 201 }))
       .mockResolvedValueOnce(Response.json({
         registration: { version: 1 },
+        signatureText: `vpxet1.${'c'.repeat(20)}.${'d'.repeat(43)}`,
         ticket: `vpxet1.${'c'.repeat(20)}.${'d'.repeat(43)}`,
       }))
       .mockResolvedValueOnce(Response.json({ registered: true }, { status: 201 }))
@@ -211,6 +219,7 @@ describe('XMTP alert registration', () => {
   it('reports the local ticket-signing stage without reflecting SDK details', async () => {
     mocks.fetch.mockResolvedValueOnce(Response.json({
       registration: { version: 1 },
+      signatureText: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
       ticket: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
     }))
     const activeSession = session()
@@ -232,6 +241,35 @@ describe('XMTP alert registration', () => {
     )
     expect(formatXmtpAlertRegistrationError(error)).not.toContain(
       'private installation detail',
+    )
+  })
+
+  it.each([
+    { registered: false },
+    { extra: 'private subscription detail', registered: true },
+    { success: true },
+  ])('rejects a non-exact subscription confirmation %#', async (body) => {
+    const ticket = `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`
+    mocks.fetch
+      .mockResolvedValueOnce(Response.json({
+        registration: { version: 1 },
+        signatureText: ticket,
+        ticket,
+      }))
+      .mockResolvedValueOnce(Response.json(body))
+    const activeSession = session()
+
+    const error = await syncXmtpAlertRegistration(
+      activeSession as never,
+      403,
+    ).catch((failure: unknown) => failure)
+
+    expect(error).toMatchObject({
+      code: 'invalid_subscription_response',
+      stage: 'subscription_response',
+    })
+    expect(formatXmtpAlertRegistrationError(error)).not.toContain(
+      'private subscription detail',
     )
   })
 

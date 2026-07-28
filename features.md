@@ -27,12 +27,14 @@ Status vocabulary:
 
 ## Current delivery checkpoint
 
-As of 2026-07-27, the deployed product implementation includes commits through
-`cd64cac`. Cloudflare Worker version
-`d33d418b-4d98-409d-953f-7db97c38d146` is the corresponding healthy
-code-bearing production deployment, Farcaster account association remains
-present on the exact domain, and the 630-test local gate passed for that source
-checkpoint.
+As of 2026-07-27, the canonical Mini deployment includes commits through
+`6c55a07`. Cloudflare Worker version
+`d1b3ee8f-c6f3-4610-a1b9-f6b2b556d3dd` is the corresponding healthy
+code-bearing production deployment, and Farcaster account association remains
+present on the exact domain. The current diagnostics candidate signs the exact
+vapid.party `signatureText`, validates both provider and first-party success
+envelopes, and adds identifier-free subscription/revocation stages; its
+654-test full local gate and production build pass before promotion.
 
 The application implementation is deployed through Task 7, including the compact Mini App shell, Farcaster-wallet XMTP identity, cached/live messaging, address-or-ENS compose, explicit ENS-backed identity binding, verified Convos group import, and the fail-closed Farcaster/XMTP alert bridge. “Deployed” does not mean “launch-ready”: real Farcaster desktop/iOS/Android acceptance, canonical-origin OPFS re-entry, independent two-client message exchange, embedded keyboard review, and the authenticated payer/Gateway production-send proof remain open release gates.
 
@@ -52,12 +54,15 @@ bundle-content check pass.
 
 The notification bridge is the active P1 milestone. Its production status and
 manifest webhook are enabled, and the encryption, D1, DNS, and vapid.party
-dependencies are configured. After the current-Hub secret was corrected, an
-unauthorized-key canary reached the provider and returned the required `400`.
-Real disable/enable lifecycle events still return `503` before creating a D1
-row, so the authorized-key verification and lifecycle-application paths remain
-under investigation. Public availability is structural configuration, not
-evidence of live closed-app delivery.
+dependencies are configured. Signed Farcaster lifecycle events now create the
+encrypted native token and opaque Mini route. The remaining registration
+failure was an exact cross-service crypto mismatch: XMTP Browser SDK 7 signs
+installation tickets with public-context Ed25519ph, while vapid.party verified
+plain Ed25519. vapid.party commit `6fa0c6e` fixes that contract with an
+independent official-libxmtp vector; its production Worker accepted the real
+Mini proof, created one active HTTPS callback subscription, and returned the
+listener bridge to synced. That proves enrollment, not native display: one
+signed callback and one closed-app Farcaster alert remain required.
 
 ### Active milestone: closed-app Farcaster alerts
 
@@ -66,6 +71,79 @@ produce a generic native alert in the Farcaster app while Converge Mini is
 closed. The relay may learn that an authorized encrypted XMTP topic received an
 event, but it must not receive message plaintext, sender identity, conversation
 identity, or decryption keys.
+
+#### How a closed-app alert travels
+
+This is the implemented production contract. “Global XMTP network” means the
+legacy XMTP `production` Message API used by the pinned Browser SDK and
+vapid.party listener; moving the app to decentralized `mainnet` is a separate
+payer-Gateway project.
+
+Enrollment prepares both halves of the route:
+
+1. The Farcaster client sends a signed add/enable lifecycle event to
+   `miniapp.converge.cv/api/farcaster/webhook`. The Mini Worker verifies the
+   JSON Farcaster Signature against current network app-key state and stores the
+   client-issued notification URL/token encrypted at rest, keyed by the
+   verified user and client-app FIDs.
+2. While the Mini is open, the browser rechecks the Farcaster wallet's current
+   XMTP network assignment, then exports only group topics and HMAC epochs/keys
+   for conversations whose XMTP consent is `Allowed`. It deliberately omits
+   welcome topics, message content, decryption keys, titles, participants, and
+   sender metadata.
+3. The browser requests a registration ticket through the Quick Auth-protected
+   Mini API and signs the returned exact `signatureText` with
+   `Client.signWithInstallationKey`. vapid.party verifies the installation ID
+   and XMTP public-context Ed25519ph proof, then stores the topic/HMAC routing
+   snapshot and the exact Mini callback URL. Mini stores only a random opaque
+   handle mapped to the Quick Auth-verified FID; neither Worker persists the
+   other service's user identifier or secret.
+
+Delivery then follows this exact path:
+
+1. vapid.party's singleton Go listener consumes the XMTP `production`
+   `SubscribeAll` stream. It ignores noncanonical and unregistered topics,
+   `shouldPush: false` envelopes, and envelopes whose sender HMAC identifies the
+   registered installation itself. Matching uses only the enrolled topic/HMAC
+   routing index; the listener does not decrypt or forward the MLS envelope.
+2. vapid.party authenticates the minimal match to its Worker, deduplicates it,
+   and enqueues an at-least-once delivery job. The queue consumer sends a signed
+   HTTPS callback to
+   `miniapp.converge.cv/api/internal/xmtp-notification`; its JSON contains only
+   `xmtp.message_available`, a stable delivery ID, and the opaque Mini handle.
+3. The Mini Worker pins the vapid.party app ID and P-256 public key, verifies
+   the exact raw callback body plus timestamp and delivery ID, rejects stale or
+   replayed callbacks, and maps the opaque handle to the verified FID.
+4. Mini decrypts the current Farcaster notification URL/token only for
+   delivery, groups tokens by an exact allowlisted URL, and posts the fixed
+   generic notification title/body, stable notification ID, and exact
+   `https://miniapp.converge.cv/` target. Sender, message, conversation, and
+   participant data never enter that request.
+5. The Farcaster client's notification server accepts, rejects, or rate-limits
+   each token. Mini deletes permanently invalid tokens, retries operational
+   failures through vapid.party's queue contract, and treats success as the
+   boundary at which the Farcaster client can show the native alert. Tapping it
+   opens the canonical Mini; the browser then synchronizes the actual encrypted
+   conversation from XMTP.
+
+The alert is only a wake-up hint. XMTP synchronization remains authoritative,
+the listener has no durable replay cursor, and a restart/disconnect can create
+an alert gap without losing the underlying XMTP message. Because welcome topics
+are intentionally excluded, a brand-new or request conversation cannot alert
+until the user opens the Mini, accepts/allows it, and the browser refreshes the
+registered topic snapshot.
+
+Code ownership is deliberately split:
+
+| Boundary | Implemented by |
+| --- | --- |
+| Signed Farcaster lifecycle token custody | `worker/farcasterWebhook.ts` and encrypted D1 rows in Mini |
+| Current-inbox check, `Allowed` topic/HMAC snapshot, ticket signing | `src/lib/xmtp/session.ts`, `src/lib/xmtp/pushRegistration.ts`, and `src/lib/xmtp/alertRegistration.ts` in Mini |
+| Installation-proof verification and route/control-plane persistence | `src/worker/enrollment-ticket.ts`, `api.ts`, `db.ts`, and `listener-registry.ts` in vapid.party |
+| Global XMTP observation, route matching, and self/`shouldPush` filtering | `infra/xmtp-listener/listener.go` in vapid.party |
+| Minimal queue job and signed callback | `src/worker/core.ts`, `queue.ts`, and `callback.ts` in vapid.party |
+| Callback verification, replay claim, opaque-handle lookup, native send | `worker/notificationBridge.ts` in Mini |
+| Native alert display and notification-tap launch | The Farcaster client; this final device boundary requires gate 5 live acceptance |
 
 Live baseline recorded on 2026-07-27:
 
@@ -124,11 +202,25 @@ Live baseline recorded on 2026-07-27:
   failure it displays `ticket request`, `notification_token_pending`, and
   `HTTP 425`; raw responses, SDK errors, identifiers, tickets, signatures, and
   tokens are never reflected;
-- vapid.party production health reports delivery ready, listener ready, and
-  bridge synced; its live OpenAPI exposes the version-5
-  installation-owned XMTP enrollment and signed HTTPS callback contract, while
-  the sibling local checkout exposes an older contract and must not be treated
-  as the deployed source of truth;
+- the callback-domain repair exposed the next exact failure at subscription
+  proof verification. Official libxmtp source and an independent fixed vector
+  proved that `Client.signWithInstallationKey` uses RFC 8032 Ed25519ph with
+  SHA-512 prehash and fixed `PUBLIC SIGNATURE CONTEXT`, while vapid.party used
+  WebCrypto plain Ed25519. vapid.party commit `6fa0c6e` pins
+  `@noble/curves` 2.2.0, verifies the real XMTP form strictly, rejects plain
+  Ed25519, and publishes the corrected version-5 contract. Its 119-test gate,
+  typecheck, production dry-run, and zero-finding npm audit pass;
+- the corrected vapid.party production Worker accepted the next real Mini
+  enrollment. Production D1 now has one active HTTPS callback subscription,
+  and health returned delivery ready, listener ready, bridge synced, zero
+  pending, and zero failed registrations after the listener consumed the new
+  route;
+- vapid.party's listener dependency was separately advanced from vulnerable
+  gRPC 1.79.3 to patched 1.82.1 in commit `bf023a6`; race tests, vet, module
+  verification, and the rebuilt Container image pass. Production Worker
+  `12865331-37be-455a-b8c0-8938ca501fa3` now uses the new active Container
+  image; the listener reconnected at `2026-07-28T05:15:16Z`, and two later
+  control polls remained delivery ready, listener ready, and bridge synced;
 - authoritative and recursive DNS return the exact required
   `_vapid-party.miniapp.converge.cv` TXT binding;
 - Farcaster's public debugger reports the manifest, schema, account
@@ -142,9 +234,9 @@ Delivery sequence and gates:
 
 | Gate | Status | Required evidence before advancing |
 | --- | --- | --- |
-| 1. Freeze the live contracts and repair Converge safety issues | Deployed; acceptance pending | The current wrapped Farcaster outcomes parse correctly; only HMAC-backed `Allowed` topics are registered; a client-local disable cannot revoke another client's route; zero account-wide allowed topics revoke the shared route; valid ownership is required for readiness; and an exact rollout flag keeps credentials separate from public enablement. The 595-test full gate, sequential preview-config dry run, immutable production deployment, and automated rollout-boundary checks pass. Real delivery remains in gate 5. |
-| 2. Verify the production vapid.party app and DNS binding | Deployed; acceptance pending | The retained app ID/key match the exact public `_vapid-party.miniapp.converge.cv` TXT record, and all three Worker app-secret names remain configured. The first production enrollment must make vapid.party report fresh verification without replacing its retained secret. |
-| 3. Prove the two Workers together in production | In progress: callback-domain repair | Preview migration `0003` is applied and no migrations are pending. The first native token and opaque route exist. vapid.party returns exact upstream `409` because its private app record does not consider the callback domain verified, despite matching public DNS/key evidence. Deploy the server-controlled exact-domain set/verify/retry flow, then require Browser SDK enrollment and one verified opaque callback. |
+| 1. Freeze the live contracts and repair Converge safety issues | Deployed; acceptance pending | The current wrapped Farcaster outcomes parse correctly; only HMAC-backed `Allowed` topics are registered; a client-local disable cannot revoke another client's route; zero account-wide allowed topics revoke the shared route; valid ownership is required for readiness; and an exact rollout flag keeps credentials separate from public enablement. The current 654-test full gate, production build, and automated rollout-boundary checks pass. Real delivery remains in gate 5. |
+| 2. Verify the production vapid.party app and DNS binding | Verified production | The retained app ID/key match the exact public `_vapid-party.miniapp.converge.cv` TXT record; Mini repaired and freshly verified the private exact-domain state without replacing the retained secret; the subsequent production ticket and proof succeeded. |
+| 3. Prove the two Workers together in production | In progress: enrollment proven; callback pending | Preview migration `0003` is applied and no migrations are pending. A real signed lifecycle token, opaque Mini route, Browser SDK public-context Ed25519ph proof, active vapid.party HTTPS callback subscription, and synced listener route now exist. Require one genuine XMTP envelope to produce one verified opaque callback before advancing. |
 | 4. Configure and promote production token lifecycle | Verified production | Bounded manual Neynar redirects are live on Worker `a639f300-5b00-44fd-b675-b9897e4fcfb2`; the synthetic unauthorized-key canary returns `400`; a real enable event creates exactly one encrypted `(fid, appFid)` row; and no sanitized webhook failure occurs. |
 | 5. Prove a closed-app alert in Farcaster | Planned | With Converge closed, a second XMTP client sends a message; exactly one generic native alert arrives, opens the canonical app, and contains no sender, message, or conversation data. |
 | 6. Prove cleanup, recovery, and operations | Planned | Disable, re-enable, remove, invalid-token, throttling, retry, route-revocation, and sampled-log checks pass; the runbook records rollback and health checks. |
@@ -476,10 +568,10 @@ Success condition: the optional label flow never moves identity state; the expli
 | Backend | Cloudflare Worker Static Assets | P0 | Deployed | The Worker, `miniapp.converge.cv` Custom Domain, and Farcaster ownership are live; Cloudflare Workers Builds deploys verified `main` commits. Production XMTP remains a separate release gate. |
 | Backend | Authenticated XMTP payer Gateway | P0 | Blocked | A decentralized-mainnet move must prove Gateway selection/auth, per-user quotas, viable container hosting, and one funded send. Legacy `production` inbox testing can proceed independently. |
 | Backend | Protected API and minimal identity data | P1 | Deployed; acceptance pending | Exact-host Quick Auth routes and isolated production/preview D1 bindings store only ENS `accepted`/`dismissed` choice by FID; canonical-host interactive route proof remains. |
-| Backend | Notification token data model | P1 | Deployed disabled | Signed lifecycle tokens stay encrypted in Mini D1; the deployed routes remain fail-closed until production secrets, migration, verifier, and canonical-host proof are complete. |
-| Operations | Redacted logs, health, and error visibility | P0 | Deployed; acceptance pending | Health/version and redaction-safe failures are implemented; sampled production-log review remains. |
-| Notifications | Add Mini App and store notification permission | P1 | Deployed disabled | The manifest and one-time prompt remain fail-closed until the Hub credential, encrypted-token key, and vapid.party app configuration are all present. Real-host approval and lifecycle proof remain. |
-| Notifications | Notify on incoming XMTP message | P1 | Deployed disabled | Browser supplies only signed installation-owned topic/HMAC state; vapid.party observes minimal delivery hints and signs opaque callbacks; Mini sends fixed-copy Farcaster alerts without message plaintext or sender metadata. Live closed-app proof remains. |
+| Backend | Notification token data model | P1 | Verified production | Signed lifecycle tokens stay encrypted in Mini D1; production secrets, migrations, current-app-key verification, one real signed enable event, and canonical-host storage are proven. Disable/remove and invalid-token cleanup remain in gate 6. |
+| Operations | Redacted logs, health, and error visibility | P0 | Deployed; acceptance pending | Health/version and redaction-safe failures are implemented. Subscription and revocation stages now emit only fixed stage, numeric upstream status, and an allowlisted provider code; sampled production-log review remains. |
+| Notifications | Add Mini App and store notification permission | P1 | Verified production | The exact manifest webhook is live; a real signed enable event passed current app-key verification and created one encrypted native token plus one active opaque Mini route. Disable/remove cleanup acceptance remains in gate 6. |
+| Notifications | Notify on incoming XMTP message | P1 | Deployed; acceptance pending | A real Browser SDK installation proof now creates an active vapid.party HTTPS callback subscription and synced listener route. The browser supplies only `Allowed` topic/HMAC state; vapid.party observes minimal delivery hints and signs opaque callbacks; Mini sends fixed-copy Farcaster alerts without message plaintext or sender metadata. One genuine callback and live closed-app alert remain in gates 3 and 5. |
 | Convos | Import a signed Convos invite | P1 | Deployed; acceptance pending | Exact production invite URLs and raw slugs are validated locally, a typed XMTP join request is sent only after an explicit tap, and only an active exact-tag group added by the declared creator to the current inbox completes the import. |
 | Convos | Read and send in an imported group | P1 | Deployed; acceptance pending | Verified allowed groups share the cached-first timeline, pagination, send/retry path, and live-stream reliability of DMs without weakening consent or exposing invite/control traffic as ordinary chat. |
 | Convos | Re-share and open an imported invite | P1 | Later | URL builders exist, but QR/share/handoff UI is not implemented. Task 11d remains a separate post-import slice. |

@@ -21,6 +21,25 @@ const CALLBACK_IDENTIFIER = /^[A-Za-z0-9_-]{8,120}$/u
 const HEX_32 = /^[0-9a-f]{64}$/u
 const GROUP_TOPIC = /^\/xmtp\/mls\/1\/g-[0-9a-f]{32}\/proto$/u
 const VAPID_TICKET = /^vpxet1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u
+const VAPID_PARTY_ERROR_CODES = [
+  'APP_NOT_FOUND',
+  'CAPACITY_EXCEEDED',
+  'CONFLICT',
+  'DNS_LOOKUP_FAILED',
+  'FORBIDDEN',
+  'INTERNAL_ERROR',
+  'INVALID_API_KEY',
+  'NOT_CONFIGURED',
+  'NOT_FOUND',
+  'PAYLOAD_TOO_LARGE',
+  'PUSH_FAILED',
+  'RATE_LIMIT_EXCEEDED',
+  'UNAUTHORIZED',
+  'VALIDATION_ERROR',
+] as const
+type VapidPartyErrorCode = typeof VAPID_PARTY_ERROR_CODES[number]
+const VAPID_PARTY_ERROR_CODE_SET: ReadonlySet<string> =
+  new Set(VAPID_PARTY_ERROR_CODES)
 const FARCASTER_FAILED_TOKEN_REASONS = [
   'domain_mismatch',
   'target_url_mismatch',
@@ -137,7 +156,19 @@ export type NotificationBridgeDependencies = {
 }
 
 type NotificationBridgeFailureDiagnostic = {
+  providerCode?: VapidPartyErrorCode
   stage:
+    | 'route_revocation_configuration'
+    | 'route_revocation_response'
+    | 'route_revocation_route_check'
+    | 'route_revocation_storage'
+    | 'route_revocation_transport'
+    | 'route_revocation_upstream'
+    | 'subscription_response'
+    | 'subscription_route_check'
+    | 'subscription_route_race'
+    | 'subscription_transport'
+    | 'subscription_upstream'
     | 'ticket_domain_repair'
     | 'ticket_request'
     | 'ticket_response'
@@ -149,7 +180,10 @@ const defaultDependencies: NotificationBridgeDependencies = {
   decryptNotificationDetails,
   fetch: (input, init) => fetch(input, init),
   logFailure: (diagnostic) => {
-    console.error('notification_bridge_failure', diagnostic)
+    console.error(JSON.stringify({
+      event: 'notification_bridge_failure',
+      ...diagnostic,
+    }))
   },
   now: () => Date.now(),
   randomBytes: (length) => crypto.getRandomValues(new Uint8Array(length)),
@@ -263,9 +297,11 @@ export async function handleNotificationUserApi(
         )
       }
       if (!upstream.ok) {
+        const providerCode = acceptedVapidPartyErrorCode(upstream.body)
         dependencies.logFailure?.({
           stage: 'ticket_upstream',
           status: upstream.status,
+          ...(providerCode === undefined ? {} : { providerCode }),
         })
         return upstreamResponse(upstream)
       }
@@ -277,6 +313,7 @@ export async function handleNotificationUserApi(
       return Response.json({
         expiresAt: ticket.expiresAt,
         registration,
+        signatureText: ticket.signatureText,
         ticket: ticket.token,
       }, { headers: responseHeaders })
     } catch {
@@ -576,15 +613,26 @@ async function submitXmtpSubscription(
     signature.byteLength !== 64 ||
     bytesToHex(publicKey) !== registration.identity.installationId
   ) return jsonError('invalid_request', 400)
-  const routeOwned = await ownsInboxHandle(
-    database,
-    fid,
-    registration.notification.inboxHandle,
-  )
-  if (!routeOwned) return jsonError('notification_route_gone', 410)
 
+  let routeOwned: boolean
   try {
-    const upstream = await fetchJson(
+    routeOwned = await ownsInboxHandle(
+      database,
+      fid,
+      registration.notification.inboxHandle,
+    )
+  } catch {
+    dependencies.logFailure?.({ stage: 'subscription_route_check' })
+    return jsonError('notification_unavailable', 503)
+  }
+  if (!routeOwned) {
+    dependencies.logFailure?.({ stage: 'subscription_route_check' })
+    return jsonError('notification_route_gone', 410)
+  }
+
+  let upstream: UpstreamJsonResponse
+  try {
+    upstream = await fetchJson(
       `${configuration.vapidPartyOrigin}/api/apps/${encodeURIComponent(configuration.appId)}/xmtp/subscriptions`,
       {
         body: JSON.stringify({
@@ -602,27 +650,49 @@ async function submitXmtpSubscription(
       },
       dependencies,
     )
-    if (!upstream.ok) return upstreamResponse(upstream)
-    if (!acceptedSubscriptionResponse(upstream.body)) {
-      return jsonError('notification_unavailable', 503)
-    }
-    const stillOwned = await ownsInboxHandle(
+  } catch {
+    dependencies.logFailure?.({ stage: 'subscription_transport' })
+    return jsonError('notification_unavailable', 503)
+  }
+  if (!upstream.ok) {
+    const providerCode = acceptedVapidPartyErrorCode(upstream.body)
+    dependencies.logFailure?.({
+      stage: 'subscription_upstream',
+      status: upstream.status,
+      ...(providerCode === undefined ? {} : { providerCode }),
+    })
+    return upstreamResponse(upstream)
+  }
+  if (!acceptedSubscriptionResponse(upstream.body)) {
+    dependencies.logFailure?.({ stage: 'subscription_response' })
+    return jsonError('notification_unavailable', 503)
+  }
+
+  let stillOwned: boolean
+  try {
+    stillOwned = await ownsInboxHandle(
       database,
       fid,
       registration.notification.inboxHandle,
     )
-    if (!stillOwned) {
+  } catch {
+    dependencies.logFailure?.({ stage: 'subscription_route_race' })
+    return jsonError('notification_unavailable', 503)
+  }
+  if (!stillOwned) {
+    dependencies.logFailure?.({ stage: 'subscription_route_race' })
+    try {
       await revokeVapidPartyHandle(
         configuration,
         registration.notification.inboxHandle,
         dependencies,
       )
-      return jsonError('notification_route_gone', 410)
+    } catch {
+      return jsonError('notification_unavailable', 503)
     }
-    return Response.json({ registered: true }, { headers: responseHeaders })
-  } catch {
-    return jsonError('notification_unavailable', 503)
+    return jsonError('notification_route_gone', 410)
   }
+  return Response.json({ registered: true }, { headers: responseHeaders })
 }
 
 export async function revokeNotificationRoute(
@@ -630,25 +700,47 @@ export async function revokeNotificationRoute(
   fid: number,
   dependencies: NotificationBridgeDependencies = defaultDependencies,
 ): Promise<boolean> {
-  if (!env.PREFERENCES) throw new Error('Notification storage is unavailable.')
-  const route = await env.PREFERENCES.prepare(`
-    SELECT inbox_handle, state
-    FROM xmtp_notification_routes
-    WHERE fid = ?1
-  `).bind(fid).first<{ inbox_handle: string; state: string }>()
+  if (!env.PREFERENCES) {
+    dependencies.logFailure?.({ stage: 'route_revocation_configuration' })
+    throw new Error('Notification storage is unavailable.')
+  }
+  let route: { inbox_handle: string; state: string } | null
+  try {
+    route = await env.PREFERENCES.prepare(`
+      SELECT inbox_handle, state
+      FROM xmtp_notification_routes
+      WHERE fid = ?1
+    `).bind(fid).first<{ inbox_handle: string; state: string }>()
+  } catch {
+    dependencies.logFailure?.({ stage: 'route_revocation_route_check' })
+    throw new Error('Notification route lookup failed.')
+  }
   if (!route) return false
   const configuration = notificationBridgeConfiguration(env)
-  if (!configuration) throw new Error('Notification bridge is not configured.')
-  await env.PREFERENCES.prepare(`
-    UPDATE xmtp_notification_routes
-    SET state = 'revoking', updated_at = unixepoch()
-    WHERE fid = ?1 AND inbox_handle = ?2
-  `).bind(fid, route.inbox_handle).run()
+  if (!configuration) {
+    dependencies.logFailure?.({ stage: 'route_revocation_configuration' })
+    throw new Error('Notification bridge is not configured.')
+  }
+  try {
+    await env.PREFERENCES.prepare(`
+      UPDATE xmtp_notification_routes
+      SET state = 'revoking', updated_at = unixepoch()
+      WHERE fid = ?1 AND inbox_handle = ?2
+    `).bind(fid, route.inbox_handle).run()
+  } catch {
+    dependencies.logFailure?.({ stage: 'route_revocation_storage' })
+    throw new Error('Notification route could not enter revoking state.')
+  }
   await revokeVapidPartyHandle(configuration, route.inbox_handle, dependencies)
-  await env.PREFERENCES.prepare(`
-    DELETE FROM xmtp_notification_routes
-    WHERE fid = ?1 AND inbox_handle = ?2 AND state = 'revoking'
-  `).bind(fid, route.inbox_handle).run()
+  try {
+    await env.PREFERENCES.prepare(`
+      DELETE FROM xmtp_notification_routes
+      WHERE fid = ?1 AND inbox_handle = ?2 AND state = 'revoking'
+    `).bind(fid, route.inbox_handle).run()
+  } catch {
+    dependencies.logFailure?.({ stage: 'route_revocation_storage' })
+    throw new Error('Revoked notification route could not be removed.')
+  }
   return true
 }
 
@@ -657,19 +749,35 @@ async function revokeVapidPartyHandle(
   inboxHandle: string,
   dependencies: NotificationBridgeDependencies,
 ): Promise<void> {
-  const upstream = await fetchJson(
-    `${configuration.vapidPartyOrigin}/api/apps/${encodeURIComponent(configuration.appId)}/xmtp/callback-routes`,
-    {
-      body: JSON.stringify({ inboxHandle }),
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': configuration.appSecret,
+  let upstream: UpstreamJsonResponse
+  try {
+    upstream = await fetchJson(
+      `${configuration.vapidPartyOrigin}/api/apps/${encodeURIComponent(configuration.appId)}/xmtp/callback-routes`,
+      {
+        body: JSON.stringify({ inboxHandle }),
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': configuration.appSecret,
+        },
+        method: 'DELETE',
       },
-      method: 'DELETE',
-    },
-    dependencies,
-  )
-  if (!upstream.ok || !acceptedCallbackRouteRevocation(upstream.body)) {
+      dependencies,
+    )
+  } catch {
+    dependencies.logFailure?.({ stage: 'route_revocation_transport' })
+    throw new Error('vapid.party route revocation transport failed.')
+  }
+  if (!upstream.ok) {
+    const providerCode = acceptedVapidPartyErrorCode(upstream.body)
+    dependencies.logFailure?.({
+      stage: 'route_revocation_upstream',
+      status: upstream.status,
+      ...(providerCode === undefined ? {} : { providerCode }),
+    })
+    throw new Error('vapid.party rejected callback route revocation.')
+  }
+  if (!acceptedCallbackRouteRevocation(upstream.body)) {
+    dependencies.logFailure?.({ stage: 'route_revocation_response' })
     throw new Error('vapid.party did not revoke the callback route.')
   }
 }
@@ -1315,6 +1423,7 @@ async function sendFarcasterNotificationBatch(
 
 function acceptedTicketResponse(value: unknown): {
   expiresAt: string
+  signatureText: string
   token: string
 } | null {
   if (
@@ -1324,15 +1433,47 @@ function acceptedTicketResponse(value: unknown): {
     typeof value.data.token !== 'string' ||
     value.data.token.length > 4_096 ||
     !VAPID_TICKET.test(value.data.token) ||
+    typeof value.data.signatureText !== 'string' ||
+    value.data.signatureText.length === 0 ||
+    value.data.signatureText.length > 4_096 ||
     value.data.signatureText !== value.data.token ||
     typeof value.data.expiresAt !== 'string' ||
     !parseIsoDate(value.data.expiresAt)
   ) return null
-  return { expiresAt: value.data.expiresAt, token: value.data.token }
+  return {
+    expiresAt: value.data.expiresAt,
+    signatureText: value.data.signatureText,
+    token: value.data.token,
+  }
 }
 
 function acceptedSubscriptionResponse(value: unknown): boolean {
-  return isRecord(value) && value.success === true && isRecord(value.data)
+  if (!isExactRecord(value, ['data', 'success']) || value.success !== true) {
+    return false
+  }
+  const dataKeys = [
+    'created',
+    'hmacKeysRegistered',
+    'identityId',
+    'subscriptionId',
+    'topicsRegistered',
+    ...(isRecord(value.data) && value.data.diagnostics !== undefined
+      ? ['diagnostics']
+      : []),
+  ]
+  return isExactRecord(value.data, dataKeys) &&
+    typeof value.data.subscriptionId === 'string' &&
+    value.data.subscriptionId.length > 0 &&
+    typeof value.data.identityId === 'string' &&
+    value.data.identityId.length > 0 &&
+    typeof value.data.topicsRegistered === 'number' &&
+    Number.isSafeInteger(value.data.topicsRegistered) &&
+    value.data.topicsRegistered >= 0 &&
+    typeof value.data.hmacKeysRegistered === 'number' &&
+    Number.isSafeInteger(value.data.hmacKeysRegistered) &&
+    value.data.hmacKeysRegistered >= 0 &&
+    typeof value.data.created === 'boolean' &&
+    (value.data.diagnostics === undefined || isRecord(value.data.diagnostics))
 }
 
 function acceptedCallbackRouteRevocation(value: unknown): boolean {
@@ -1349,6 +1490,18 @@ type UpstreamJsonResponse = {
   headers: Headers
   ok: boolean
   status: number
+}
+
+function acceptedVapidPartyErrorCode(
+  value: unknown,
+): VapidPartyErrorCode | undefined {
+  if (
+    !isRecord(value) ||
+    value.success !== false ||
+    typeof value.code !== 'string' ||
+    !VAPID_PARTY_ERROR_CODE_SET.has(value.code)
+  ) return undefined
+  return value.code as VapidPartyErrorCode
 }
 
 async function fetchJson(

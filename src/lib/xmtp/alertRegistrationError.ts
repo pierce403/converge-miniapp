@@ -6,6 +6,7 @@ export type XmtpAlertRegistrationStage =
   | 'ticket_response'
   | 'ticket_signature'
   | 'subscription_request'
+  | 'subscription_response'
 
 export type XmtpAlertRegistrationCode =
   | 'invalid_alert_account'
@@ -20,6 +21,7 @@ export type XmtpAlertRegistrationCode =
   | 'rate_limited'
   | 'notification_unavailable'
   | 'invalid_ticket_response'
+  | 'invalid_subscription_response'
   | 'ticket_signature_failed'
   | 'request_failed'
 
@@ -42,6 +44,7 @@ const stageLabels: Record<XmtpAlertRegistrationStage, string> = {
   ticket_response: 'ticket response',
   ticket_signature: 'ticket signature',
   subscription_request: 'subscription request',
+  subscription_response: 'subscription response',
 }
 
 const explanations: Record<XmtpAlertRegistrationCode, string> = {
@@ -69,6 +72,8 @@ const explanations: Record<XmtpAlertRegistrationCode, string> = {
     'The alert service was unavailable while registration was in progress. Try again online shortly.',
   invalid_ticket_response:
     'Converge Mini received an invalid XMTP alert enrollment ticket.',
+  invalid_subscription_response:
+    'Converge Mini received an invalid XMTP alert subscription confirmation.',
   ticket_signature_failed:
     'This XMTP installation could not sign its alert enrollment ticket.',
   request_failed:

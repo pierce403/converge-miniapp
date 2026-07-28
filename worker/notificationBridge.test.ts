@@ -48,9 +48,11 @@ describe('XMTP to Farcaster notification bridge', () => {
     expect(response.status).toBe(200)
     const body = await response.json() as {
       registration: Record<string, unknown>
+      signatureText: string
       ticket: string
     }
     expect(body.ticket).toMatch(/^vpxet1\./u)
+    expect(body.signatureText).toBe(body.ticket)
     expect(body.registration).toMatchObject({
       delivery: {
         kind: 'https_callback',
@@ -353,6 +355,142 @@ describe('XMTP to Farcaster notification bridge', () => {
     })
   })
 
+  it.each([
+    {
+      code: 'UNAUTHORIZED',
+      expectedCode: 'UNAUTHORIZED',
+      name: 'retains an allowlisted provider code',
+    },
+    {
+      code: 'PRIVATE_PROVIDER_DIAGNOSTIC',
+      expectedCode: undefined,
+      name: 'drops an unknown provider code',
+    },
+  ])('$name without reflecting provider or enrollment secrets', async ({
+    code,
+    expectedCode,
+  }) => {
+    const storage = fakeBridgeDatabase()
+    const inboxHandle = base64url(new Uint8Array(32).fill(4))
+    const registration = completedRegistration(inboxHandle)
+    storage.seedRoute(8531, inboxHandle)
+    const upstreamFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      code,
+      details: {
+        body: 'private-provider-body',
+        url: 'https://private-provider.example/route',
+      },
+      error: 'private provider message',
+      success: false,
+    }, { status: 401 }))
+    const logFailure = vi.fn()
+
+    const response = await handleNotificationUserApi(
+      jsonRequest(
+        '/api/me/notifications/xmtp-subscription',
+        enrollmentSubmission(registration),
+      ),
+      environment(storage.database),
+      8531,
+      dependencies({ fetch: upstreamFetch, logFailure }),
+    )
+
+    expect(response.status).toBe(503)
+    expect(logFailure).toHaveBeenCalledWith({
+      stage: 'subscription_upstream',
+      status: 401,
+      ...(expectedCode === undefined
+        ? {}
+        : { providerCode: expectedCode }),
+    })
+    const logged = JSON.stringify(logFailure.mock.calls)
+    expect(logged).not.toMatch(
+      /private-provider|miniapp\.converge|vpxet1|inbox|installation|signature|publicKey|xmtp\/mls/u,
+    )
+  })
+
+  it('diagnoses an invalid provider success without logging its body', async () => {
+    const storage = fakeBridgeDatabase()
+    const inboxHandle = base64url(new Uint8Array(32).fill(4))
+    storage.seedRoute(8531, inboxHandle)
+    const upstreamFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      data: {
+        created: true,
+        message: 'private-success-body',
+      },
+      success: true,
+    }, { status: 201 }))
+    const logFailure = vi.fn()
+
+    const response = await handleNotificationUserApi(
+      jsonRequest(
+        '/api/me/notifications/xmtp-subscription',
+        enrollmentSubmission(completedRegistration(inboxHandle)),
+      ),
+      environment(storage.database),
+      8531,
+      dependencies({ fetch: upstreamFetch, logFailure }),
+    )
+
+    expect(response.status).toBe(503)
+    expect(logFailure).toHaveBeenCalledWith({
+      stage: 'subscription_response',
+    })
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain(
+      'private-success-body',
+    )
+  })
+
+  it('diagnoses subscription transport failure without logging the exception', async () => {
+    const storage = fakeBridgeDatabase()
+    const inboxHandle = base64url(new Uint8Array(32).fill(4))
+    storage.seedRoute(8531, inboxHandle)
+    const upstreamFetch = vi.fn<typeof fetch>().mockRejectedValue(
+      new Error('private transport URL, ticket, and identifier'),
+    )
+    const logFailure = vi.fn()
+
+    const response = await handleNotificationUserApi(
+      jsonRequest(
+        '/api/me/notifications/xmtp-subscription',
+        enrollmentSubmission(completedRegistration(inboxHandle)),
+      ),
+      environment(storage.database),
+      8531,
+      dependencies({ fetch: upstreamFetch, logFailure }),
+    )
+
+    expect(response.status).toBe(503)
+    expect(logFailure).toHaveBeenCalledWith({
+      stage: 'subscription_transport',
+    })
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain('private')
+  })
+
+  it('diagnoses the subscription route check without logging the route', async () => {
+    const storage = fakeBridgeDatabase()
+    const inboxHandle = base64url(new Uint8Array(32).fill(4))
+    const upstreamFetch = vi.fn<typeof fetch>()
+    const logFailure = vi.fn()
+
+    const response = await handleNotificationUserApi(
+      jsonRequest(
+        '/api/me/notifications/xmtp-subscription',
+        enrollmentSubmission(completedRegistration(inboxHandle)),
+      ),
+      environment(storage.database),
+      8531,
+      dependencies({ fetch: upstreamFetch, logFailure }),
+    )
+
+    expect(response.status).toBe(410)
+    expect(logFailure).toHaveBeenCalledWith({
+      stage: 'subscription_route_check',
+    })
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain(inboxHandle)
+    expect(upstreamFetch).not.toHaveBeenCalled()
+  })
+
   it('does not proxy arbitrary vapid.party error details to the browser', async () => {
     const storage = fakeBridgeDatabase()
     storage.seedSubscription(8531, 9152)
@@ -440,13 +578,23 @@ describe('XMTP to Farcaster notification bridge', () => {
       }))
       .mockImplementationOnce(async () => {
         storage.removeRoute(8531)
-        return Response.json({ data: { created: true }, success: true })
+        return Response.json({
+          data: {
+            created: true,
+            hmacKeysRegistered: 1,
+            identityId: 'identity',
+            subscriptionId: 'subscription',
+            topicsRegistered: 1,
+          },
+          success: true,
+        })
       })
       .mockResolvedValueOnce(Response.json({
         data: { disabled: 1 },
         success: true,
       }))
-    const deps = dependencies({ fetch: upstreamFetch })
+    const logFailure = vi.fn()
+    const deps = dependencies({ fetch: upstreamFetch, logFailure })
     const env = environment(storage.database)
     const prepared = await handleNotificationUserApi(
       jsonRequest('/api/me/notifications/xmtp-ticket', {
@@ -475,6 +623,9 @@ describe('XMTP to Farcaster notification bridge', () => {
     )
 
     expect(response.status).toBe(410)
+    expect(logFailure).toHaveBeenCalledWith({
+      stage: 'subscription_route_race',
+    })
     expect(upstreamFetch).toHaveBeenCalledTimes(3)
     expect(upstreamFetch.mock.calls[2]?.[0]).toBe(
       'https://vapid.party/api/apps/app_12345678/xmtp/callback-routes',
@@ -511,6 +662,78 @@ describe('XMTP to Farcaster notification bridge', () => {
         redirect: 'manual',
       }),
     )
+  })
+
+  it('diagnoses a revocation rejection with only allowlisted fields', async () => {
+    const storage = fakeBridgeDatabase()
+    const inboxHandle = base64url(new Uint8Array(32).fill(4))
+    storage.seedRoute(8531, inboxHandle)
+    const upstreamFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      code: 'UNAUTHORIZED',
+      details: { token: 'private-revocation-token' },
+      error: 'private revocation message',
+      success: false,
+    }, { status: 401 }))
+    const logFailure = vi.fn()
+
+    const response = await handleNotificationUserApi(
+      new Request(
+        'https://miniapp.converge.cv/api/me/notifications/xmtp-subscription',
+        { method: 'DELETE' },
+      ),
+      environment(storage.database),
+      8531,
+      dependencies({ fetch: upstreamFetch, logFailure }),
+    )
+
+    expect(response.status).toBe(503)
+    expect(logFailure).toHaveBeenCalledWith({
+      providerCode: 'UNAUTHORIZED',
+      stage: 'route_revocation_upstream',
+      status: 401,
+    })
+    const logged = JSON.stringify(logFailure.mock.calls)
+    expect(logged).not.toMatch(/private|inbox|token|message/u)
+    expect(logged).not.toContain(inboxHandle)
+  })
+
+  it('diagnoses invalid revocation success and transport without details', async () => {
+    for (const [upstreamFetch, expectedStage] of [
+      [
+        vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+          data: { disabled: 'private-invalid-success' },
+          success: true,
+        })),
+        'route_revocation_response',
+      ],
+      [
+        vi.fn<typeof fetch>().mockRejectedValue(
+          new Error('private revocation transport detail'),
+        ),
+        'route_revocation_transport',
+      ],
+    ] as const) {
+      const storage = fakeBridgeDatabase()
+      const inboxHandle = base64url(new Uint8Array(32).fill(4))
+      storage.seedRoute(8531, inboxHandle)
+      const logFailure = vi.fn()
+
+      const response = await handleNotificationUserApi(
+        new Request(
+          'https://miniapp.converge.cv/api/me/notifications/xmtp-subscription',
+          { method: 'DELETE' },
+        ),
+        environment(storage.database),
+        8531,
+        dependencies({ fetch: upstreamFetch, logFailure }),
+      )
+
+      expect(response.status).toBe(503)
+      expect(logFailure).toHaveBeenCalledWith({ stage: expectedStage })
+      expect(JSON.stringify(logFailure.mock.calls)).not.toMatch(
+        /private|inbox|token|message/u,
+      )
+    }
   })
 
   it('waits for the signed Farcaster webhook before creating an XMTP route', async () => {
@@ -1131,6 +1354,39 @@ function requestedRegistration() {
         },
       ],
     },
+  }
+}
+
+function completedRegistration(inboxHandle: string) {
+  const requested = requestedRegistration()
+  return {
+    ...requested,
+    delivery: {
+      kind: 'https_callback',
+      url: 'https://miniapp.converge.cv/api/internal/xmtp-notification',
+    },
+    notification: { inboxHandle },
+    preferences: {
+      minimalPayloadOnly: true,
+      plaintextPreview: false,
+    },
+    xmtp: {
+      ...requested.xmtp,
+      topicSource: 'conversations.hmacKeys',
+    },
+  }
+}
+
+function enrollmentSubmission(
+  registration: ReturnType<typeof completedRegistration>,
+) {
+  return {
+    proof: {
+      publicKey: base64url(new Uint8Array(32).fill(0xab)),
+      signature: base64url(new Uint8Array(64).fill(3)),
+    },
+    registration,
+    ticket: `vpxet1.${'private-ticket'.repeat(2)}.${'b'.repeat(43)}`,
   }
 }
 
