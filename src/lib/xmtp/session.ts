@@ -261,6 +261,7 @@ export class XmtpMessagingSession {
   #reactionRefreshVersions = new Map<string, number>()
   #dismissedConvosRequestIds = new Set<string>()
   #dismissedConvosRequestCutoffNs: bigint | null = null
+  #visibleGroups = new Map<string, AppGroup>()
   #trustedConvosGroups = new Map<string, TrustedConvosGroup>()
   #recoveredConvosRequests: RecoveredConvosRequest[] | null = null
   #convosAccessSnapshot: ConvosAccessSnapshot | null = null
@@ -824,30 +825,36 @@ export class XmtpMessagingSession {
     )
 
     const groupSummaries = await Promise.all(
-      [...this.#trustedConvosGroups.values()].map(async ({
-        creatorInboxId,
-        emoji,
-        group,
-        title,
-      }) => {
+      [...this.#visibleGroups.values()].map(async (group) => {
+        const trusted = this.#trustedConvosGroups.get(group.id)
         const latest = await this.latestDisplayableMessage(group)
         const lastMessage = latest.message
-        return {
-          creatorInboxId,
-          emoji,
+        const base = {
           id: group.id,
           isOwnLastMessage: lastMessage?.senderInboxId === this.inboxId,
-          kind: 'convos-group' as const,
           lastSenderInboxId: lastMessage?.senderInboxId ?? null,
           peerAddress: null,
           peerInboxId: null,
           preview: previewFor(lastMessage) ?? (
             latest.hiddenActivityAt ? 'Recent non-message activity' : 'No messages yet'
           ),
-          title,
           updatedAt: lastMessage?.sentAt ?? latest.hiddenActivityAt ??
             group.createdAt ?? null,
         }
+        return trusted
+          ? {
+              ...base,
+              creatorInboxId: trusted.creatorInboxId,
+              emoji: trusted.emoji,
+              kind: 'convos-group' as const,
+              title: trusted.title,
+            }
+          : {
+              ...base,
+              emoji: null,
+              kind: 'group' as const,
+              title: boundedXmtpGroupTitle(group.name),
+            }
       }),
     )
 
@@ -898,16 +905,24 @@ export class XmtpMessagingSession {
       }
     } else {
       const trusted = this.#trustedConvosGroups.get(conversation.id)
-      if (!trusted) throw new Error('This Convos group has not been verified for this inbox.')
-      activeConversation = {
-        creatorInboxId: trusted.creatorInboxId,
-        emoji: trusted.emoji,
-        id: conversation.id,
-        kind: 'convos-group',
-        peerAddress: null,
-        peerInboxId: null,
-        title: trusted.title,
-      }
+      activeConversation = trusted
+        ? {
+            creatorInboxId: trusted.creatorInboxId,
+            emoji: trusted.emoji,
+            id: conversation.id,
+            kind: 'convos-group',
+            peerAddress: null,
+            peerInboxId: null,
+            title: trusted.title,
+          }
+        : {
+            emoji: null,
+            id: conversation.id,
+            kind: 'group',
+            peerAddress: null,
+            peerInboxId: null,
+            title: boundedXmtpGroupTitle(conversation.name),
+          }
     }
     const cached = await this.messageWindow(conversation, messageLimit)
     return {
@@ -1249,15 +1264,12 @@ export class XmtpMessagingSession {
     )
     if (!conversation) return
     const consent = await conversation.consentState()
-    if (
-      consent !== ConsentState.Allowed &&
-      !(conversation instanceof Dm && consent === ConsentState.Unknown)
-    ) return
+    if (consent !== ConsentState.Allowed && consent !== ConsentState.Unknown) return
     if (conversation instanceof Group) {
-      if (!this.#trustedConvosGroups.has(conversation.id)) {
+      if (!this.#visibleGroups.has(conversation.id)) {
         await this.#reconcileConvosGroups(false, false)
       }
-      if (!this.#trustedConvosGroups.has(conversation.id)) return
+      if (!this.#visibleGroups.has(conversation.id)) return
     }
     if (generation !== this.#streamGeneration) return
 
@@ -1375,6 +1387,7 @@ export class XmtpMessagingSession {
       limit: CONVOS_TRANSPORT_DM_LIMIT,
       orderBy: ListConversationsOrderBy.LastActivity,
     }) as AppGroup[]
+    const visible = new Map<string, AppGroup>()
     const trusted = new Map<string, TrustedConvosGroup>()
 
     for (const group of groups) {
@@ -1394,18 +1407,25 @@ export class XmtpMessagingSession {
       }
       if (consent !== ConsentState.Allowed && consent !== ConsentState.Unknown) continue
 
+      let active: boolean
+      try {
+        active = await group.isActive()
+      } catch {
+        continue
+      }
+      if (!active) continue
+      visible.set(group.id, group)
+
       const appData = parseConvosGroupAppData(group.appData ?? '')
       if (!appData) continue
 
-      let active: boolean
       let memberInboxIds: string[]
       try {
-        active = await group.isActive()
         memberInboxIds = (await group.members()).map((member) => member.inboxId.toLowerCase())
       } catch {
         continue
       }
-      if (!active || !memberInboxIds.includes(this.inboxId.toLowerCase())) continue
+      if (!memberInboxIds.includes(this.inboxId.toLowerCase())) continue
 
       const addedByInboxId = group.addedByInboxId?.toLowerCase() ?? ''
       if (!addedByInboxId) continue
@@ -1430,10 +1450,11 @@ export class XmtpMessagingSession {
         emoji: boundedGroupEmoji(appData.emoji),
         group,
         invite: matchingRequest?.invite ?? null,
-        title: boundedGroupTitle(group.name),
+        title: boundedConvosGroupTitle(group.name),
       })
     }
 
+    this.#visibleGroups = visible
     this.#trustedConvosGroups = trusted
     const snapshotRequest = requests[0] ?? null
     this.#convosAccessSnapshot = recoveredConvosSnapshot(
@@ -1544,11 +1565,11 @@ export class XmtpMessagingSession {
       return conversation as AppDm
     }
     if (conversation instanceof Group) {
-      if (!this.#trustedConvosGroups.has(conversation.id)) {
+      if (!this.#visibleGroups.has(conversation.id)) {
         await this.#reconcileConvosGroups(false, false)
       }
-      if (!this.#trustedConvosGroups.has(conversation.id)) {
-        throw new Error('This Convos group has not been verified for this inbox.')
+      if (!this.#visibleGroups.has(conversation.id)) {
+        throw new Error('The selected XMTP group is unavailable.')
       }
       return conversation as AppGroup
     }
@@ -1868,10 +1889,16 @@ function recoveredConvosSnapshot(
   }
 }
 
-function boundedGroupTitle(value: string | undefined) {
+function boundedConvosGroupTitle(value: string | undefined) {
   return value
     ? sanitizeConvosPreviewText(value, 80) ?? 'Convos conversation'
     : 'Convos conversation'
+}
+
+function boundedXmtpGroupTitle(value: string | undefined) {
+  return value
+    ? sanitizeConvosPreviewText(value, 80) ?? 'XMTP group'
+    : 'XMTP group'
 }
 
 function boundedGroupEmoji(value: string | null) {

@@ -1482,6 +1482,93 @@ describe('XmtpMessagingSession behavior', () => {
     })
   })
 
+  it('lists, opens, and sends through an ordinary Unknown XMTP group', async () => {
+    const optimistic = typedMessage({
+      content: 'hello ordinary group',
+      conversationId: 'ordinary-group',
+      id: 'ordinary-group-message',
+      senderInboxId: 'own-inbox',
+      status: DeliveryStatus.Unpublished,
+      typeId: 'text',
+    })
+    const published = {
+      ...optimistic,
+      deliveryStatus: DeliveryStatus.Published,
+    }
+    const ordinary = group({
+      appData: '',
+      consent: ConsentState.Unknown,
+      id: 'ordinary-group',
+      methods: {
+        sendText: vi.fn().mockResolvedValue('ordinary-group-message'),
+      },
+      name: '\u202eNeighborhood\u202c chat',
+    })
+    const fakeClient = client(dm())
+    fakeClient.conversations.getConversationById.mockResolvedValue(ordinary)
+    fakeClient.conversations.getMessageById
+      .mockResolvedValueOnce(optimistic)
+      .mockResolvedValueOnce(published)
+    fakeClient.conversations.listDms.mockResolvedValue([])
+    fakeClient.conversations.listGroups.mockResolvedValue([ordinary])
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const inbox = await session.readInbox()
+    const loaded = await session.readConversation('ordinary-group')
+    const sent = await session.sendText('ordinary-group', 'hello ordinary group')
+
+    expect(inbox).toEqual([
+      expect.objectContaining({
+        emoji: null,
+        id: 'ordinary-group',
+        kind: 'group',
+        title: 'Neighborhood chat',
+      }),
+    ])
+    expect(loaded.conversation).toEqual({
+      emoji: null,
+      id: 'ordinary-group',
+      kind: 'group',
+      peerAddress: null,
+      peerInboxId: null,
+      title: 'Neighborhood chat',
+    })
+    expect(ordinary.updateConsentState).not.toHaveBeenCalled()
+    expect(ordinary.sendText).toHaveBeenCalledWith('hello ordinary group', true)
+    expect(ordinary.publishMessages).toHaveBeenCalledOnce()
+    expect(sent).toMatchObject({
+      error: null,
+      message: {
+        delivery: 'sent',
+        id: 'ordinary-group-message',
+      },
+    })
+  })
+
+  it('keeps Denied and inactive ordinary groups out of the inbox', async () => {
+    const denied = group({
+      appData: '',
+      consent: ConsentState.Denied,
+      id: 'denied-group',
+    })
+    const inactive = group({
+      active: false,
+      appData: '',
+      id: 'inactive-group',
+    })
+    const fakeClient = client(dm())
+    fakeClient.conversations.listDms.mockResolvedValue([])
+    fakeClient.conversations.listGroups.mockResolvedValue([denied, inactive])
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+
+    await expect(session.readInbox()).resolves.toEqual([])
+    expect(inactive.messages).not.toHaveBeenCalled()
+    expect(denied.isActive).not.toHaveBeenCalled()
+  })
+
   it('paginates and retries a verified group without creating a second send or draft', async () => {
     const invite = signedConvosInvite()
     const newestAt = Date.parse('2026-07-14T18:00:00Z')
@@ -1557,7 +1644,7 @@ describe('XmtpMessagingSession behavior', () => {
     })
   })
 
-  it('emits live Unknown DMs while filtering Unknown groups', async () => {
+  it('emits live Allowed and Unknown DM and group messages', async () => {
     const invite = signedConvosInvite()
     const allowed = group({
       appData: convosAppData(invite.tag),
@@ -1615,9 +1702,10 @@ describe('XmtpMessagingSession behavior', () => {
       typeId: 'text',
     }))
 
-    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(3))
     expect(onMessage.mock.calls.map(([item]) => item.id)).toEqual([
       'unknown-dm-message',
+      'unknown-group-message',
       'allowed-group-message',
     ])
     expect(fakeClient.conversations.streamAllMessages).toHaveBeenCalledWith(
@@ -1631,7 +1719,7 @@ describe('XmtpMessagingSession behavior', () => {
     )
   })
 
-  it('reconciles a matching Unknown streamGroups arrival without admitting an unrelated group', async () => {
+  it('shows an unrelated group generically and classifies only a matching arrival as Convos', async () => {
     const invite = signedConvosInvite()
     const request = convosJoinRequestMessage(invite)
     const transport = convosTransportDm(invite, [request])
@@ -1669,7 +1757,12 @@ describe('XmtpMessagingSession behavior', () => {
     await vi.waitFor(() => expect(onInboxChanged).toHaveBeenCalledOnce())
     const unrelatedInbox = await session.readInbox()
     expect(unrelated.updateConsentState).not.toHaveBeenCalled()
-    expect(unrelatedInbox.filter(({ kind }) => kind === 'convos-group')).toEqual([])
+    expect(unrelatedInbox).toEqual([
+      expect.objectContaining({
+        id: 'unrelated-stream-group',
+        kind: 'group',
+      }),
+    ])
 
     arrivals = [unrelated, matching]
     onGroup?.(matching)
@@ -1680,6 +1773,12 @@ describe('XmtpMessagingSession behavior', () => {
     const joinedInbox = await session.readInbox()
 
     expect(unrelated.updateConsentState).not.toHaveBeenCalled()
+    expect(joinedInbox).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'unrelated-stream-group',
+        kind: 'group',
+      }),
+    ]))
     expect(joinedInbox.filter(({ kind }) => kind === 'convos-group')).toEqual([
       expect.objectContaining({
         id: 'matching-stream-group',

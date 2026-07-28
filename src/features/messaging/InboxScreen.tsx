@@ -206,12 +206,15 @@ export function InboxScreen({
       {conversations.length ? (
         <ul className="conversation-list">
           {conversations.map((conversation) => {
-            const isGroup = conversation.kind === 'convos-group'
+            const isGroup = conversation.kind !== 'dm'
+            const groupLabel = conversation.kind === 'convos-group'
+              ? 'Convos group'
+              : 'XMTP group'
             const presentation = isGroup
               ? {
                   fnameHint: null,
                   label: conversation.title,
-                  title: `${conversation.title} · Convos group`,
+                  title: `${conversation.title} · ${groupLabel}`,
                 }
               : participantPresentation(
                 conversation.peerAddress ?? conversation.peerInboxId,
@@ -239,7 +242,7 @@ export function InboxScreen({
                     </span>
                     {isGroup ? (
                       <span className="conversation-row__identity-hint">
-                        Convos group
+                        {groupLabel}
                       </span>
                     ) : presentation.fnameHint ? (
                       <span className="conversation-row__identity-hint">

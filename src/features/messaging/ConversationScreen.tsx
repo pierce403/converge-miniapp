@@ -49,12 +49,15 @@ export function ConversationScreen({
   const previousMessageIdsRef = useRef<string[]>([])
   const loadingEarlierRef = useRef(false)
   const [hasNewMessages, setHasNewMessages] = useState(false)
-  const isGroup = conversation.kind === 'convos-group'
+  const isGroup = conversation.kind !== 'dm'
+  const groupLabel = conversation.kind === 'convos-group'
+    ? 'Convos group'
+    : 'XMTP group'
   const presentation = isGroup
     ? {
         label: conversation.title,
-        secondary: 'Convos group',
-        title: `${conversation.title} · Convos group`,
+        secondary: groupLabel,
+        title: `${conversation.title} · ${groupLabel}`,
       }
     : participantPresentation(
       conversation.peerAddress ?? conversation.peerInboxId,
@@ -138,7 +141,7 @@ export function ConversationScreen({
         <Avatar name={isGroup ? conversation.emoji ?? title : title.replace(/^@/u, '')} />
         <div title={isGroup ? title : presentation.title}>
           <h1 id="conversation-title" ref={titleRef} tabIndex={-1}>{title}</h1>
-          <span>{isGroup ? 'Convos group · XMTP' : `${presentation.secondary} · XMTP direct message`}</span>
+          <span>{isGroup ? `${groupLabel} · XMTP` : `${presentation.secondary} · XMTP direct message`}</span>
         </div>
       </header>
 

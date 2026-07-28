@@ -46,6 +46,13 @@ export type ConversationSummary = ConversationSummaryBase & (
     peerInboxId: null
     title: string
   }
+  | {
+    emoji: null
+    kind: 'group'
+    peerAddress: null
+    peerInboxId: null
+    title: string
+  }
 )
 
 export type ActiveConversation = (
@@ -58,6 +65,13 @@ export type ActiveConversation = (
     creatorInboxId: string
     emoji: string | null
     kind: 'convos-group'
+    peerAddress: null
+    peerInboxId: null
+    title: string
+  }
+  | {
+    emoji: null
+    kind: 'group'
     peerAddress: null
     peerInboxId: null
     title: string

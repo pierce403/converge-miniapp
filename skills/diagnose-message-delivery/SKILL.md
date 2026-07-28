@@ -40,10 +40,12 @@ Proceed in order and mark each boundary proven, failed, or unknown:
    discovery and visibility state, and the sequence
    `stream hint -> guarded refresh -> UI update`. Seeing the message in another
    XMTP client proves only that installation's retrieval. `Allowed` and
-   `Unknown` DMs are display/alert eligible in Mini; `Denied`, missing recovered
-   history, unverified Convos groups, and installation welcome delivery are
-   distinct branches. If an authorized manual sync alone reveals it,
-   investigate stream/drain handling.
+   `Unknown` DMs and active groups are display/alert eligible in Mini; `Denied`,
+   inactive groups, missing recovered history, Convos-specific classification,
+   and installation welcome delivery are distinct branches. An unverified
+   Convos candidate can still appear as an ordinary **XMTP group**, but it must
+   never satisfy the signed invite flow. If an authorized manual sync alone
+   reveals it, investigate stream/drain handling.
 4. For the alert branch, use `GET /api/notifications/status` only as a public
    structural-readiness boolean. Separately prove aggregate counts for an
    encrypted signed lifecycle token and active opaque route without returning

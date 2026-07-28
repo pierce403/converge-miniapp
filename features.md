@@ -38,7 +38,7 @@ gate and production build passed; the patched Cloudflare/npm dependency tree
 also passed a zero-finding npm audit. ENS-only deletion now uses its own route
 and cannot silently remove notification state.
 
-The application implementation includes the compact Mini App shell, Farcaster-wallet XMTP identity, cached/live messaging, address-or-ENS compose, explicit ENS-backed identity binding, verified Convos group import, and the fail-closed Farcaster/XMTP alert bridge. “Deployed” does not mean “launch-ready”: real Farcaster desktop/iOS/Android acceptance, canonical-origin OPFS re-entry, independent two-client message exchange, embedded keyboard review, the closed-app alert acceptance below, and the authenticated payer/Gateway production-send proof remain open release gates.
+The application implementation includes the compact Mini App shell, Farcaster-wallet XMTP identity, cached/live DM and group messaging, address-or-ENS compose, explicit ENS-backed identity binding, verified Convos group import, and the fail-closed Farcaster/XMTP alert bridge. “Deployed” does not mean “launch-ready”: real Farcaster desktop/iOS/Android acceptance, canonical-origin OPFS re-entry, independent two-client message exchange, embedded keyboard review, the closed-app alert acceptance below, and the authenticated payer/Gateway production-send proof remain open release gates.
 
 The 2026-07-27 inbox-routing correction is deployed in the Worker version above.
 It replaces local-first identity proof with stateless XMTP network resolution,
@@ -394,7 +394,7 @@ The smallest successful version lets a person:
 1. Launch from Farcaster without a confusing login screen.
 2. Understand which Farcaster profile and wallet-backed XMTP identity they are using.
 3. Complete any required XMTP signature with clear, non-transactional language.
-4. See their allowed direct-message conversations.
+4. See their active, non-denied direct-message and group conversations.
 5. Open a conversation, read text messages, and send or retry a text message.
 6. Start a DM with a reachable Ethereum/XMTP identity.
 7. Close and reopen the Mini App without silently creating a new XMTP installation.
@@ -406,7 +406,7 @@ When this document says **first release**, **MVP**, or **P0**, it means exactly 
 - Farcaster Mini App shell, lifecycle, manifest, root embed, and standalone unsupported/recovery state.
 - Host-provided EVM wallet connection and a proven XMTP EOA or supported smart-wallet signer; never silently substitute an app-owned key.
 - Stable local XMTP installation resume with single-connection protection.
-- Allowed direct-message conversation list with sync, cached/loading/empty/error states, and live updates.
+- Active `Allowed` and `Unknown` direct-message and group conversation list with sync, cached/loading/empty/error states, and live updates. Group creation and administration remain out of scope.
 - Address-or-ENS new DM flow with explicit resolution confirmation and XMTP reachability.
 - Text compose/send plus compatible history rendering for text, Markdown source as plain text, replies, attachment metadata, reaction summaries, deduplication, failure, and retry.
 - Compact Converge-derived blue/orange visual system with mobile, keyboard, safe-area, and accessibility basics.
@@ -664,12 +664,13 @@ Success condition: the optional label flow never moves identity state; the expli
 | Identity | Peer fname, ENS, and Basename labels | P1 | Deployed; acceptance pending | Bounded, rate-limited protected batches resolve public wallet metadata without persistence; ambiguous/broken sources fall back to the visible address. A registered fname is secondary registry metadata, not a canonical profile or authorization. |
 | Identity | Compact identity/privacy menu | P0 | Deployed; acceptance pending | Full active wallet and authoritative XMTP inbox ID, network, local-storage disclosure, ENS recheck, label selection/deletion, and an explicit signer-backed identity binding remain available after onboarding. Full-value wrapping is covered locally and the canonical bundle contains the disclosure; short-viewport host proof remains. |
 | Identity | ENS-backed Farcaster identity binding | P1 | Deployed; acceptance pending | A fresh different-inbox candidate requires exact external ENS-owner authorization plus explicit permanent/no-merge confirmation; the target is journaled before mutation, old-inbox recovery authority is preserved, and XMTP's stateless network assignment plus target state must both confirm the Farcaster identity on B. WalletConnect disconnects and later sessions use only Farcaster. Canonical-host repair of the existing `deanpierce.eth` migration plus two-client send/receive proof remains. |
-| Inbox | DM conversation list, including new senders | P0 | Deployed; acceptance pending | Cached-first sync/list/open/stream includes `Allowed` and `Unknown` DMs without acceptance, keeps `Denied` hidden, and preserves separate signed-invite verification for Convos groups. The full gate and deployment checks pass; fresh-burner and offline-host acceptance remain. |
+| Inbox | DM conversation list, including new senders | P0 | Deployed; acceptance pending | Cached-first sync/list/open/stream includes `Allowed` and `Unknown` DMs without acceptance and keeps `Denied` hidden. The full gate and deployment checks pass; fresh-burner and offline-host acceptance remain. |
+| Inbox | Existing XMTP group conversations | P1 | Implemented locally | Active `Allowed` and `Unknown` groups appear, open, send/retry, paginate, and stream through the shared conversation path; `Denied` and inactive groups remain excluded. Ordinary groups are labeled **XMTP group**. Only a group that passes the signed Convos-import proof receives the **Convos group** classification or satisfies an invite request. Full local and live two-client acceptance remain. |
 | Inbox | Separate message requests | — | Out | The first release deliberately puts `Unknown` DMs in the primary inbox. Future spam/reputation filtering requires a separate privacy and identity design rather than restoring an acceptance gate by default. |
 | Compose | Address-or-ENS recipient reachability | P0 | Deployed; acceptance pending | Addresses are checksummed directly; bounded ENS names are normalized and forward-resolved through the protected Worker before the full name/address pair is confirmed and checked with `canMessage()`. Canonical-host and two-client network proof remain. |
 | Compose | Farcaster handle/name recipient search | P1 | Later | Trusted directory lookup maps profile to verified candidate identity before `canMessage()`. |
-| Chat | Compatible message history | P0 | Deployed; acceptance pending | Cached-first text and plain-text Markdown source, replies, attachment metadata, reaction summaries, a growing contiguous newest-message window, exact-nanosecond ordering, ownership, fallback, and loading exist. Silent control messages remain off the timeline. |
-| Chat | Live incoming text messages | P0 | Deployed; acceptance pending | `Allowed` and `Unknown` DM streams, stable-ID upsert, one retained SDK-owned retry proxy, foreground visible-chat refresh, and health UI exist; real reconnect proof remains. |
+| Chat | Compatible message history | P0 | Deployed; acceptance pending | Cached-first DM and group text and plain-text Markdown source, replies, attachment metadata, reaction summaries, a growing contiguous newest-message window, exact-nanosecond ordering, ownership, fallback, and loading exist. Silent control messages remain off the timeline. |
+| Chat | Live incoming text messages | P0 | Deployed; acceptance pending | `Allowed` and `Unknown` DM and group streams, stable-ID upsert, one retained SDK-owned retry proxy, foreground visible-chat refresh, and health UI exist; real reconnect proof remains. |
 | Chat | Send, optimistic state, failure, retry | P0 | Deployed; acceptance pending | Duplicate guards and same-ID unpublished retry exist; two-client acknowledgement-loss and offline retry proof remain. |
 | Local data | Single-connection protection | P0 | Deployed; acceptance pending | A second tab/window cannot contend for OPFS and gets useful guidance; canonical-host multi-instance proof remains. |
 | Local data | Offline cached reading | P0 | Deployed; acceptance pending | The installed static shell can reopen without network, an already resumable XMTP client reads its OPFS inbox/messages without attempting sync while the browser reports offline, and network-only actions are clearly unavailable. Cold offline XMTP client construction remains an SDK boundary until the pinned Browser SDK exposes a supported offline-init path. |
@@ -1813,7 +1814,23 @@ Initial implementation on 2026-07-14:
 
 Task 10a extends this path locally on 2026-07-28: `Unknown` DMs now appear,
 open, and stream in the primary inbox without acceptance; `Denied` remains
-excluded; unverified Convos groups keep their separate signed-invite boundary.
+excluded.
+
+The ordinary-group interoperability follow-up extends the same shared path
+locally on 2026-07-28: every active `Allowed` or `Unknown` XMTP group is listed,
+can be opened and sent to, and emits live messages without an app-specific
+invite. Ordinary groups are labeled **XMTP group**. `Denied` or inactive groups
+remain excluded. Signed Convos invite verification is now a classification and
+request-completion boundary, not a visibility boundary: only a proven import is
+labeled **Convos group** or may satisfy the Convos access state.
+
+Local exit evidence: `npm run check` passes 47 test files and 671 tests,
+including 98 focused XMTP session behavior cases; all six production-shaped
+mobile Playwright checks pass; `git diff --check` passes; and the production
+preview serves both `/` and versioned `/api/health` with `200` while its bundle
+contains the distinct **XMTP group** and **Convos group** labels. Live
+two-client group discovery, send, receive, and re-entry remain the acceptance
+boundary.
 
 Extended locally on 2026-07-14:
 
@@ -2059,10 +2076,10 @@ Implemented and locally verified:
 
 - bounded current Convos app-data decoding accepts uncompressed, raw-DEFLATE, and zlib-wrapped protobuf metadata while rejecting malformed base64url, duplicate/missing tags, wrong wire types, invalid UTF-8, declared-size mismatches, and suspicious compression ratios;
 - restart recovery scans a bounded local XMTP window for an exact self-authored `convos.org/join_request:1.0`, revalidates the signed invite without resending it, and requires its DM peer to be the declared creator;
-- a candidate unknown group is promoted only when its exact app-data tag matches that recovered request, `addedByInboxId` is the declared creator, the group is active, and the current inbox is a member; denied, malformed, unrelated, inactive, wrong-creator, and missing-member groups remain hidden, while an already allowed valid Convos group remains usable after request-history or invite-expiry loss;
+- a candidate unknown group is promoted and classified as Convos only when its exact app-data tag matches that recovered request, `addedByInboxId` is the declared creator, the group is active, and the current inbox is a member; denied and inactive groups remain excluded, while malformed, unrelated, wrong-creator, and missing-member active non-denied groups may appear only as ordinary XMTP groups and never satisfy the import; an already allowed valid Convos group remains usable after request-history or invite-expiry loss;
 - exact handled/error controls affect pending state only when the declared creator sent them in the same transport DM no earlier than the request; a handled marker remains a waiting state, terminal expiry still wins, raw error reasons never enter user-facing copy, and dismissing a retry suppresses its older request lineage for the current session without blocking a later deliberate attempt;
 - imported groups have bounded Convos name/emoji presentation and share the existing cached/offline timeline, global inbox ordering and 50-row cap, pagination, stable message upsert, optimistic send, same-ID retry, and live message stream with DMs;
-- the group-arrival stream owns the same retry/close lifecycle as message streaming, reconciles before exposing a candidate, never emits unknown non-control traffic into the chat UI, and reports live health only while both the message and group streams are healthy;
+- the group-arrival stream owns the same retry/close lifecycle as message streaming, refreshes every active `Allowed` or `Unknown` group into the ordinary inbox, separately reconciles signed Convos candidates, and reports live health only while both the message and group streams are healthy;
 - imported group messages identify their sender, background request refreshes do not steal focus, and Back returns focus to the originating inbox row; and
 - the bearer slug stays inside local XMTP message storage and short-lived in-memory parsing only, never Web Storage, same-origin routes, backend requests, logs, analytics, URLs, or group presentation.
 

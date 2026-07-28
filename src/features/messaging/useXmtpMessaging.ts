@@ -2387,7 +2387,7 @@ function preservePeerAddress(
   next: ActiveConversation,
   current: ActiveConversation | null,
 ): ActiveConversation {
-  if (next.kind === 'convos-group') return next
+  if (next.kind !== 'dm') return next
   if (current?.kind !== 'dm') return next
   if (next.peerAddress || current?.id !== next.id || !current.peerAddress) return next
   return { ...next, peerAddress: current.peerAddress }
@@ -2400,6 +2400,16 @@ function activeFromSummary(summary: ConversationSummary): ActiveConversation {
       emoji: summary.emoji,
       id: summary.id,
       kind: 'convos-group',
+      peerAddress: null,
+      peerInboxId: null,
+      title: summary.title,
+    }
+  }
+  if (summary.kind === 'group') {
+    return {
+      emoji: null,
+      id: summary.id,
+      kind: 'group',
       peerAddress: null,
       peerInboxId: null,
       title: summary.title,

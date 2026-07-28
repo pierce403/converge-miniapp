@@ -93,6 +93,28 @@ describe('InboxScreen', () => {
     expect(participantIdentityFor).not.toHaveBeenCalled()
   })
 
+  it('labels an ordinary XMTP group without treating it as a Convos import', () => {
+    const participantIdentityFor = vi.fn(() => null)
+    renderInbox([{
+      emoji: null,
+      id: 'group-1',
+      isOwnLastMessage: false,
+      kind: 'group',
+      lastSenderInboxId: 'abcdef1234567890',
+      peerAddress: null,
+      peerInboxId: null,
+      preview: 'Hello neighbors',
+      title: 'Neighborhood chat',
+      updatedAt: new Date('2026-07-14T12:00:00Z'),
+    }], participantIdentityFor)
+
+    expect(screen.getByText('Neighborhood chat')).toBeVisible()
+    expect(screen.getByText('XMTP group')).toBeVisible()
+    expect(screen.queryByText('Convos group')).not.toBeInTheDocument()
+    expect(screen.getByText('abcdef…7890: Hello neighbors')).toBeVisible()
+    expect(participantIdentityFor).not.toHaveBeenCalled()
+  })
+
   it('attributes a group preview to a stable shortened sender inbox', () => {
     renderInbox([{
       creatorInboxId: 'creator-inbox',

@@ -167,4 +167,31 @@ describe('ConversationScreen', () => {
     )
     expect(screen.getByRole('heading', { name: 'Garden chat' })).toHaveFocus()
   })
+
+  it('presents an ordinary XMTP group with the shared group controls', () => {
+    renderConversation({
+      conversation: {
+        emoji: null,
+        id: 'group-1',
+        kind: 'group',
+        peerAddress: null,
+        peerInboxId: null,
+        title: 'Neighborhood chat',
+      },
+      messages: [{
+        ...message('Hello neighbors'),
+        conversationId: 'group-1',
+        senderInboxId: 'abcdef1234567890',
+      }],
+    })
+
+    expect(screen.getByRole('heading', { name: 'Neighborhood chat' })).toBeVisible()
+    expect(screen.getByText('XMTP group · XMTP')).toBeVisible()
+    expect(screen.queryByText('Convos group · XMTP')).not.toBeInTheDocument()
+    expect(screen.getByText('abcdef…7890')).toBeVisible()
+    expect(screen.getByLabelText('Message')).toHaveAttribute(
+      'placeholder',
+      'Message this group…',
+    )
+  })
 })
