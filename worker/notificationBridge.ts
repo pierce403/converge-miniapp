@@ -137,7 +137,11 @@ export type NotificationBridgeDependencies = {
 }
 
 type NotificationBridgeFailureDiagnostic = {
-  stage: 'ticket_request' | 'ticket_response' | 'ticket_upstream'
+  stage:
+    | 'ticket_domain_repair'
+    | 'ticket_request'
+    | 'ticket_response'
+    | 'ticket_upstream'
   status?: number
 }
 
@@ -223,10 +227,11 @@ export async function handleNotificationUserApi(
         configuration,
         dependencies.now(),
       )
-      const upstream = await fetchJson(
+      const ticketRequestBody = JSON.stringify({ registration })
+      let upstream = await fetchJson(
         `${configuration.vapidPartyOrigin}/api/apps/${encodeURIComponent(configuration.appId)}/xmtp/enrollment-ticket`,
         {
-          body: JSON.stringify({ registration }),
+          body: ticketRequestBody,
           headers: {
             'content-type': 'application/json',
             'x-api-key': configuration.appSecret,
@@ -235,6 +240,28 @@ export async function handleNotificationUserApi(
         },
         dependencies,
       )
+      if (upstream.status === 409) {
+        const repair = await repairCallbackDomain(configuration, dependencies)
+        if (!repair.ok) {
+          dependencies.logFailure?.({
+            stage: 'ticket_domain_repair',
+            ...(repair.status === undefined ? {} : { status: repair.status }),
+          })
+          return jsonError('notification_unavailable', 503)
+        }
+        upstream = await fetchJson(
+          `${configuration.vapidPartyOrigin}/api/apps/${encodeURIComponent(configuration.appId)}/xmtp/enrollment-ticket`,
+          {
+            body: ticketRequestBody,
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': configuration.appSecret,
+            },
+            method: 'POST',
+          },
+          dependencies,
+        )
+      }
       if (!upstream.ok) {
         dependencies.logFailure?.({
           stage: 'ticket_upstream',
@@ -280,6 +307,65 @@ export async function handleNotificationUserApi(
   }
 
   return jsonError('not_found', 404)
+}
+
+async function repairCallbackDomain(
+  configuration: BridgeConfiguration,
+  dependencies: NotificationBridgeDependencies,
+): Promise<{ ok: true } | { ok: false; status?: number }> {
+  const appPath =
+    `${configuration.vapidPartyOrigin}/api/apps/${encodeURIComponent(configuration.appId)}`
+  const headers = { 'x-api-key': configuration.appSecret }
+  const current = await fetchJson(
+    `${appPath}/domain`,
+    { headers, method: 'GET' },
+    dependencies,
+  )
+  if (!current.ok) return { ok: false, status: current.status }
+  const currentDomain = acceptedDomainState(current.body)
+  if (!currentDomain) return { ok: false }
+
+  if (currentDomain.domain !== configuration.canonicalDomain) {
+    const updated = await fetchJson(
+      `${appPath}/profile`,
+      {
+        body: JSON.stringify({ domain: configuration.canonicalDomain }),
+        headers: { ...headers, 'content-type': 'application/json' },
+        method: 'PATCH',
+      },
+      dependencies,
+    )
+    if (!updated.ok) return { ok: false, status: updated.status }
+  }
+
+  const verified = await fetchJson(
+    `${appPath}/domain/verify`,
+    { headers, method: 'POST' },
+    dependencies,
+  )
+  if (!verified.ok) return { ok: false, status: verified.status }
+  const verifiedDomain = acceptedDomainState(verified.body)
+  return verifiedDomain?.domain === configuration.canonicalDomain &&
+    verifiedDomain.status === 'verified'
+    ? { ok: true }
+    : { ok: false }
+}
+
+function acceptedDomainState(
+  value: unknown,
+): { domain?: string; status: string } | null {
+  if (
+    !isRecord(value) ||
+    value.success !== true ||
+    !isRecord(value.data) ||
+    (value.data.domain !== undefined &&
+      typeof value.data.domain !== 'string') ||
+    typeof value.data.status !== 'string'
+  ) return null
+  return {
+    ...(value.data.domain === undefined ? {} : { domain: value.data.domain }),
+    status: value.data.status,
+  }
 }
 
 export async function handleXmtpNotificationCallback(

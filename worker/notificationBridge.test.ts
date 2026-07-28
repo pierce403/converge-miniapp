@@ -78,6 +78,115 @@ describe('XMTP to Farcaster notification bridge', () => {
     )
   })
 
+  it('repairs the exact callback domain after vapid.party rejects ticket issuance', async () => {
+    const storage = fakeBridgeDatabase()
+    storage.seedSubscription(8531, 9152)
+    const ticket = `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`
+    const upstreamFetch = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(
+        { error: 'callback_domain_unverified' },
+        { status: 409 },
+      ))
+      .mockResolvedValueOnce(Response.json({
+        data: {
+          domain: 'converge.cv',
+          record: null,
+          status: 'verified',
+        },
+        success: true,
+      }))
+      .mockResolvedValueOnce(Response.json({
+        data: { profile: { domain: 'miniapp.converge.cv' } },
+        success: true,
+      }))
+      .mockResolvedValueOnce(Response.json({
+        data: {
+          domain: 'miniapp.converge.cv',
+          record: null,
+          status: 'verified',
+        },
+        success: true,
+      }))
+      .mockResolvedValueOnce(Response.json({
+        data: {
+          expiresAt: '2026-07-18T12:05:00.000Z',
+          signatureText: ticket,
+          token: ticket,
+        },
+        success: true,
+      }))
+    const response = await handleNotificationUserApi(
+      jsonRequest('/api/me/notifications/xmtp-ticket', {
+        registration: requestedRegistration(),
+      }),
+      environment(storage.database),
+      8531,
+      dependencies({ fetch: upstreamFetch }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(upstreamFetch).toHaveBeenCalledTimes(5)
+    expect(upstreamFetch).toHaveBeenNthCalledWith(
+      2,
+      'https://vapid.party/api/apps/app_12345678/domain',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(upstreamFetch).toHaveBeenNthCalledWith(
+      3,
+      'https://vapid.party/api/apps/app_12345678/profile',
+      expect.objectContaining({
+        body: JSON.stringify({ domain: 'miniapp.converge.cv' }),
+        method: 'PATCH',
+      }),
+    )
+    expect(upstreamFetch).toHaveBeenNthCalledWith(
+      4,
+      'https://vapid.party/api/apps/app_12345678/domain/verify',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(upstreamFetch.mock.calls[4]?.[0]).toBe(
+      'https://vapid.party/api/apps/app_12345678/xmtp/enrollment-ticket',
+    )
+  })
+
+  it('fails closed when vapid.party cannot verify the repaired callback domain', async () => {
+    const storage = fakeBridgeDatabase()
+    storage.seedSubscription(8531, 9152)
+    const logFailure = vi.fn()
+    const upstreamFetch = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(
+        { error: 'callback_domain_unverified' },
+        { status: 409 },
+      ))
+      .mockResolvedValueOnce(Response.json({
+        data: {
+          domain: 'miniapp.converge.cv',
+          record: null,
+          status: 'unverified',
+        },
+        success: true,
+      }))
+      .mockResolvedValueOnce(Response.json(
+        { error: 'dns_lookup_failed' },
+        { status: 502 },
+      ))
+    const response = await handleNotificationUserApi(
+      jsonRequest('/api/me/notifications/xmtp-ticket', {
+        registration: requestedRegistration(),
+      }),
+      environment(storage.database),
+      8531,
+      dependencies({ fetch: upstreamFetch, logFailure }),
+    )
+
+    expect(response.status).toBe(503)
+    expect(logFailure).toHaveBeenCalledWith({
+      stage: 'ticket_domain_repair',
+      status: 502,
+    })
+    expect(upstreamFetch).toHaveBeenCalledTimes(3)
+  })
+
   it.each([
     {
       mutate(registration: ReturnType<typeof requestedRegistration>) {
