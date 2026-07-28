@@ -48,7 +48,7 @@ describe('Farcaster notification webhook', () => {
       'https://hub.example',
       expect.objectContaining({
         headers: { 'x-api-key': 'hub-secret' },
-        redirect: 'error',
+        redirect: 'manual',
         signal: expect.any(AbortSignal),
       }),
     )

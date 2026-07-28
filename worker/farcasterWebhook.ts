@@ -116,7 +116,7 @@ export async function handleFarcasterWebhook(
       configuration.hubUrl,
       {
         headers: { 'x-api-key': configuration.hubApiKey },
-        redirect: 'error',
+        redirect: 'manual',
         signal: controller.signal,
       },
     )

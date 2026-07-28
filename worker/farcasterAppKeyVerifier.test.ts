@@ -53,7 +53,10 @@ describe('Worker Farcaster app-key verifier', () => {
     })
     expect(fetch).toHaveBeenCalledWith(
       new URL('https://hub.example/v1/onChainSignersByFid?fid=8531'),
-      { headers: { 'x-api-key': 'secret' } },
+      {
+        headers: { 'x-api-key': 'secret' },
+        redirect: 'manual',
+      },
     )
   })
 
@@ -64,6 +67,56 @@ describe('Worker Farcaster app-key verifier', () => {
     const verifier = createWorkerVerifyAppKeyWithHub('https://hub.example')
 
     await expect(verifier(8531, appKey)).resolves.toEqual({ valid: false })
+  })
+
+  it('follows a bounded HTTPS redirect within neynar.com without automatic credential forwarding', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(null, {
+        headers: {
+          location: 'https://regional.neynar.com/v1/onChainSignersByFid?fid=8531',
+        },
+        status: 307,
+      }))
+      .mockResolvedValueOnce(Response.json({ events: [] }))
+    vi.stubGlobal('fetch', fetch)
+    const verifier = createWorkerVerifyAppKeyWithHub(
+      'https://snapchain-api.neynar.com',
+      {
+        headers: { 'x-api-key': 'secret' },
+        redirect: 'error',
+      },
+    )
+
+    await expect(verifier(8531, appKey)).resolves.toEqual({ valid: false })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      new URL('https://regional.neynar.com/v1/onChainSignersByFid?fid=8531'),
+      {
+        headers: { 'x-api-key': 'secret' },
+        redirect: 'manual',
+      },
+    )
+  })
+
+  it.each([
+    'http://regional.neynar.com/v1/onChainSignersByFid',
+    'https://attacker.example/v1/onChainSignersByFid',
+  ])('rejects an unsafe credentialed redirect to %s', async (location) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, {
+      headers: { location },
+      status: 307,
+    })))
+    const verifier = createWorkerVerifyAppKeyWithHub(
+      'https://snapchain-api.neynar.com',
+      { headers: { 'x-api-key': 'secret' } },
+    )
+
+    const error = await verifier(8531, appKey).catch((caught) => caught)
+
+    expect(error).toMatchObject({
+      failure: 'current_network_verifier',
+    })
   })
 
   it.each([

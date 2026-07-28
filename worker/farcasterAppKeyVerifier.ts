@@ -35,6 +35,7 @@ const hubResponseSchema = z.object({
     }),
   ),
 })
+const MAX_REDIRECTS = 2
 
 /**
  * Worker-native equivalent of the verifier shipped in miniapp-node 0.2.0.
@@ -57,7 +58,7 @@ export function createWorkerVerifyAppKeyWithHub(
 
     let response: Response
     try {
-      response = await fetch(url, requestOptions)
+      response = await fetchWithSafeNeynarRedirects(url, requestOptions)
     } catch (error) {
       throw verifierError('current_network_verifier', error)
     }
@@ -98,6 +99,42 @@ export function createWorkerVerifyAppKeyWithHub(
       throw verifierError('app_key_metadata', error)
     }
   }
+}
+
+async function fetchWithSafeNeynarRedirects(
+  initialUrl: URL,
+  requestOptions?: RequestInit,
+): Promise<Response> {
+  let url = initialUrl
+  for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
+    const response = await fetch(url, {
+      ...requestOptions,
+      redirect: 'manual',
+    })
+    if (response.status < 300 || response.status >= 400) return response
+
+    const location = response.headers.get('location')
+    await response.body?.cancel()
+    if (!location || redirectCount === MAX_REDIRECTS) {
+      throw new Error('Unsafe current-network redirect.')
+    }
+    const nextUrl = new URL(location, url)
+    if (
+      nextUrl.protocol !== 'https:' ||
+      nextUrl.port !== '' ||
+      nextUrl.username !== '' ||
+      nextUrl.password !== '' ||
+      nextUrl.hash !== '' ||
+      !isNeynarHostname(nextUrl.hostname)
+    ) throw new Error('Unsafe current-network redirect.')
+    url = nextUrl
+  }
+  throw new Error('Too many current-network redirects.')
+}
+
+function isNeynarHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase()
+  return normalized === 'neynar.com' || normalized.endsWith('.neynar.com')
 }
 
 function decodeBase64(value: string): Uint8Array {

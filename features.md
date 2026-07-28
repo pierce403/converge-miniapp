@@ -102,7 +102,11 @@ Live baseline recorded on 2026-07-27:
   outbound request itself, before any HTTP response or metadata decode.
   Synthetic events reproduce it for both the affected FID and FID 1, so the
   committed current-network origin moves from Neynar's legacy `hub-api`
-  hostname to its Snapchain API hostname before another real toggle;
+  hostname to its Snapchain API hostname. That hostname produces the same
+  exception, isolating the remaining incompatibility to authenticated redirect
+  handling. The verifier now follows only bounded HTTPS redirects within
+  `neynar.com` and never forwards its API key through an automatic or
+  cross-domain redirect;
 - production D1 remains at zero native subscriptions and zero XMTP routes even
   though the Farcaster host reports alerts enabled for the affected
   installation. Its open-app ticket request therefore ends at
@@ -133,7 +137,7 @@ Delivery sequence and gates:
 | 1. Freeze the live contracts and repair Converge safety issues | Deployed; acceptance pending | The current wrapped Farcaster outcomes parse correctly; only HMAC-backed `Allowed` topics are registered; a client-local disable cannot revoke another client's route; zero account-wide allowed topics revoke the shared route; valid ownership is required for readiness; and an exact rollout flag keeps credentials separate from public enablement. The 595-test full gate, sequential preview-config dry run, immutable production deployment, and automated rollout-boundary checks pass. Real delivery remains in gate 5. |
 | 2. Verify the production vapid.party app and DNS binding | Deployed; acceptance pending | The retained app ID/key match the exact public `_vapid-party.miniapp.converge.cv` TXT record, and all three Worker app-secret names remain configured. The first production enrollment must make vapid.party report fresh verification without replacing its retained secret. |
 | 3. Prove the two Workers together in production | Deployed; acceptance pending | Preview migration `0003` is applied, no migrations are pending, and the empty table baseline is verified. A real Browser SDK installation must still enroll; a listener event must yield one verified opaque callback; callback replay and wrong-key cases must fail; no alert prompt may appear outside the supported canonical Farcaster host. |
-| 4. Configure and promote production token lifecycle | In progress: current-network origin repair | Migrations, rollout, manifest, and exact webhook are deployed. The Worker-native verifier proved the current `hub-api` outbound request throws before receiving an HTTP response for both the affected FID and a synthetic FID 1 canary. Deploy the explicit Neynar Snapchain API origin, require the synthetic unauthorized-key canary to return `400`, then require a real add/enable event to create one encrypted `(fid, appFid)` row. |
+| 4. Configure and promote production token lifecycle | In progress: authenticated redirect repair | Migrations, rollout, manifest, and exact webhook are deployed. The Worker-native verifier proved both Neynar hostnames throw before an HTTP response when automatic redirects are forbidden. Deploy bounded manual HTTPS redirects within `neynar.com`, require the synthetic unauthorized-key canary to return `400`, then require a real add/enable event to create one encrypted `(fid, appFid)` row. |
 | 5. Prove a closed-app alert in Farcaster | Planned | With Converge closed, a second XMTP client sends a message; exactly one generic native alert arrives, opens the canonical app, and contains no sender, message, or conversation data. |
 | 6. Prove cleanup, recovery, and operations | Planned | Disable, re-enable, remove, invalid-token, throttling, retry, route-revocation, and sampled-log checks pass; the runbook records rollback and health checks. |
 
