@@ -77,6 +77,14 @@ Cloudflare Workers Builds check succeeded; Wrangler lists the resulting Worker
 as version 70, and the canonical root plus `/api/health` serve that immutable
 version.
 
+The 2026-07-28 invite-label checkpoint is deployed from main commit `8bb8077`
+as immutable Worker `ecc3a4bf-f2d8-4709-a1bf-9a3261e88499`. The inbox action is
+now **Join Convo**, which describes opening the in-app invite surface without
+implying a handoff to the Convos app; **Open in Convos** remains the name of the
+external app handoff. The focused 41-test regression, full 667-test local gate,
+six production-shaped Playwright checks, exact-SHA GitHub and Cloudflare
+checks, live `/api/health`, and canonical production bundle inspection pass.
+
 The notification bridge is the active P1 milestone. Its production status and
 manifest webhook are enabled, and the encryption, D1, DNS, and vapid.party
 dependencies are configured. Signed Farcaster lifecycle events now create the
