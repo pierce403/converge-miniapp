@@ -84,7 +84,10 @@ type LatestDisplayableMessage = {
   message: DecodedMessage | undefined
 }
 
-const VISIBLE_CONSENT_STATES = [ConsentState.Allowed]
+const VISIBLE_CONSENT_STATES = [
+  ConsentState.Allowed,
+  ConsentState.Unknown,
+]
 const INBOX_LIMIT = 50n
 const MESSAGE_PAGE_SIZE = 50n
 const CLIENT_INITIALIZATION_TIMEOUT_MS = 30_000
@@ -435,7 +438,7 @@ export class XmtpMessagingSession {
       await this.client.preferences.sync()
       this.#throwIfTerminal()
       const conversations = await this.client.conversations.list({
-        consentStates: [ConsentState.Allowed],
+        consentStates: VISIBLE_CONSENT_STATES,
         includeDuplicateDms: true,
       })
       this.#throwIfTerminal()
@@ -461,6 +464,7 @@ export class XmtpMessagingSession {
       return await buildXmtpPushSnapshot({
         conversations: {
           hmacKeys: async () => merged,
+          topic: this.client.conversations.topic,
         },
         inboxId: this.client.inboxId,
         installationId: this.client.installationId,
@@ -1166,7 +1170,7 @@ export class XmtpMessagingSession {
           return
         }
 
-        void this.#emitAllowedStreamMessage(
+        void this.#emitVisibleStreamMessage(
           message,
           generation,
           onMessage,
@@ -1235,7 +1239,7 @@ export class XmtpMessagingSession {
     }
   }
 
-  async #emitAllowedStreamMessage(
+  async #emitVisibleStreamMessage(
     message: IncomingMessage,
     generation: number,
     onMessage: (message: MessageItem) => void,
@@ -1243,7 +1247,12 @@ export class XmtpMessagingSession {
     const conversation = await this.client.conversations.getConversationById(
       message.conversationId,
     )
-    if (!conversation || await conversation.consentState() !== ConsentState.Allowed) return
+    if (!conversation) return
+    const consent = await conversation.consentState()
+    if (
+      consent !== ConsentState.Allowed &&
+      !(conversation instanceof Dm && consent === ConsentState.Unknown)
+    ) return
     if (conversation instanceof Group) {
       if (!this.#trustedConvosGroups.has(conversation.id)) {
         await this.#reconcileConvosGroups(false, false)
@@ -1528,8 +1537,9 @@ export class XmtpMessagingSession {
   private async getConversation(conversationId: string): Promise<AppConversation> {
     const conversation = await this.client.conversations.getConversationById(conversationId)
     if (conversation instanceof Dm) {
-      if (await conversation.consentState() !== ConsentState.Allowed) {
-        throw new Error('The selected XMTP direct message is not allowed.')
+      const consent = await conversation.consentState()
+      if (consent !== ConsentState.Allowed && consent !== ConsentState.Unknown) {
+        throw new Error('The selected XMTP direct message is unavailable.')
       }
       return conversation as AppDm
     }

@@ -262,7 +262,7 @@ export function InboxScreen({
       ) : (
         <div className="empty-inbox">
           <span className="empty-inbox__icon"><MessageCircleMore aria-hidden="true" /></span>
-          <h2>{offline ? 'No conversations saved on this device' : 'No allowed conversations yet'}</h2>
+          <h2>{offline ? 'No conversations saved on this device' : 'No conversations yet'}</h2>
           <p>{offline
             ? 'Reconnect to check this inbox for conversations.'
             : 'Start with an Ethereum address or ENS name that reaches an XMTP inbox.'}</p>

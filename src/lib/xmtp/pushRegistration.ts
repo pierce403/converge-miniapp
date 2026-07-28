@@ -4,7 +4,7 @@ export type XmtpPushHmacKey = {
 }
 
 export type XmtpPushTopic = {
-  hmacKeys: [XmtpPushHmacKey, ...XmtpPushHmacKey[]]
+  hmacKeys: XmtpPushHmacKey[]
   topic: string
 }
 
@@ -23,6 +23,7 @@ type HmacKey = {
 type PushSnapshotClient = {
   conversations: {
     hmacKeys(): Promise<Map<string, HmacKey[]>>
+    topic: string | undefined
   }
   inboxId: string | undefined
   installationId: string | undefined
@@ -51,6 +52,11 @@ export async function buildXmtpPushSnapshot(
     throw new Error('XMTP returned a mismatched installation public key.')
   }
 
+  const expectedWelcomeTopic = `/xmtp/mls/1/w-${installationId}/proto`
+  if (client.conversations.topic !== expectedWelcomeTopic) {
+    throw new Error('XMTP did not provide the installation welcome topic.')
+  }
+
   const keysByTopic = await client.conversations.hmacKeys()
   const topics: XmtpPushTopic[] = []
   for (const [groupIdOrTopic, keys] of keysByTopic) {
@@ -73,13 +79,10 @@ export async function buildXmtpPushSnapshot(
         key: bytesToBase64Url(key),
       }
     }).sort((left, right) => left.epoch - right.epoch)
-    const [firstKey, ...remainingKeys] = mappedKeys
-    if (!firstKey) {
-      throw new Error('XMTP returned an unsupported HMAC key set.')
-    }
-    topics.push({ hmacKeys: [firstKey, ...remainingKeys], topic })
+    topics.push({ hmacKeys: mappedKeys, topic })
   }
   topics.sort((left, right) => left.topic.localeCompare(right.topic))
+  topics.push({ hmacKeys: [], topic: expectedWelcomeTopic })
 
   if (topics.length > MAX_TOPICS) {
     throw new Error('This inbox has too many XMTP push topics to register safely.')

@@ -526,7 +526,7 @@ describe('XmtpMessagingSession behavior', () => {
     await session.close()
   })
 
-  it('builds push state only from Allowed conversations including stitched DMs', async () => {
+  it('builds push state from Allowed and Unknown conversations including stitched DMs', async () => {
     const installationId = 'ef'.repeat(32)
     const firstGroupId = '12'.repeat(16)
     const secondGroupId = '34'.repeat(16)
@@ -575,10 +575,10 @@ describe('XmtpMessagingSession behavior', () => {
     const snapshot = await session.pushSnapshot()
 
     expect(fakeClient.conversations.list).toHaveBeenCalledWith({
-      consentStates: [ConsentState.Allowed],
+      consentStates: [ConsentState.Allowed, ConsentState.Unknown],
       includeDuplicateDms: true,
     })
-    expect(unknownConversation.hmacKeys).not.toHaveBeenCalled()
+    expect(unknownConversation.hmacKeys).toHaveBeenCalledOnce()
     expect(fakeClient.preferences.sync).toHaveBeenCalledOnce()
     expect(snapshot.topics).toEqual([
       {
@@ -589,8 +589,15 @@ describe('XmtpMessagingSession behavior', () => {
         hmacKeys: [{ epoch: 2, key: 'AwQ' }],
         topic: `/xmtp/mls/1/g-${secondGroupId}/proto`,
       },
+      {
+        hmacKeys: [{ epoch: 3, key: 'BQY' }],
+        topic: `/xmtp/mls/1/g-${unknownGroupId}/proto`,
+      },
+      {
+        hmacKeys: [],
+        topic: `/xmtp/mls/1/w-${installationId}/proto`,
+      },
     ])
-    expect(JSON.stringify(snapshot.topics)).not.toContain('/w-')
   })
 
   it('serializes inbox and conversation syncs while exposing cached messages', async () => {
@@ -1550,7 +1557,7 @@ describe('XmtpMessagingSession behavior', () => {
     })
   })
 
-  it('filters live Unknown group messages while emitting trusted Allowed group messages', async () => {
+  it('emits live Unknown DMs while filtering Unknown groups', async () => {
     const invite = signedConvosInvite()
     const allowed = group({
       appData: convosAppData(invite.tag),
@@ -1561,10 +1568,20 @@ describe('XmtpMessagingSession behavior', () => {
       consent: ConsentState.Unknown,
       id: 'unknown-convos-group',
     })
-    const fakeClient = client(dm())
+    const unknownDm = dm({
+      consentState: vi.fn().mockResolvedValue(ConsentState.Unknown),
+      id: 'unknown-dm',
+    })
+    const fakeClient = client(unknownDm)
     let onValue: ((message: DecodedMessage) => void) | undefined
     fakeClient.conversations.getConversationById.mockImplementation(async (id) => (
-      id === allowed.id ? allowed : id === unknown.id ? unknown : undefined
+      id === allowed.id
+        ? allowed
+        : id === unknown.id
+          ? unknown
+          : id === unknownDm.id
+            ? unknownDm
+            : undefined
     ))
     fakeClient.conversations.listDms.mockResolvedValue([])
     fakeClient.conversations.listGroups.mockResolvedValue([allowed, unknown])
@@ -1580,6 +1597,12 @@ describe('XmtpMessagingSession behavior', () => {
     await session.startMessageStream(onMessage, vi.fn())
 
     onValue?.(typedMessage({
+      content: 'Fresh burner message',
+      conversationId: unknownDm.id,
+      id: 'unknown-dm-message',
+      typeId: 'text',
+    }))
+    onValue?.(typedMessage({
       content: 'Untrusted message',
       conversationId: unknown.id,
       id: 'unknown-group-message',
@@ -1592,11 +1615,11 @@ describe('XmtpMessagingSession behavior', () => {
       typeId: 'text',
     }))
 
-    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce())
-    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'allowed-group-message',
-      text: 'Trusted message',
-    }))
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(2))
+    expect(onMessage.mock.calls.map(([item]) => item.id)).toEqual([
+      'unknown-dm-message',
+      'allowed-group-message',
+    ])
     expect(fakeClient.conversations.streamAllMessages).toHaveBeenCalledWith(
       expect.objectContaining({
         consentStates: [ConsentState.Allowed, ConsentState.Unknown],
@@ -1768,6 +1791,58 @@ describe('XmtpMessagingSession behavior', () => {
     ])
     expect(conversation.sync).not.toHaveBeenCalled()
     expect(fakeClient.conversations.syncAll).not.toHaveBeenCalled()
+  })
+
+  it('shows and opens Unknown DMs while keeping Denied DMs unavailable', async () => {
+    const unknownMessage = typedMessage({
+      content: 'Fresh burner message',
+      conversationId: 'unknown-dm',
+      id: 'unknown-dm-message',
+      typeId: 'text',
+    })
+    const unknown = dm({
+      consentState: vi.fn().mockResolvedValue(ConsentState.Unknown),
+      id: 'unknown-dm',
+      messages: vi.fn().mockResolvedValue([unknownMessage]),
+    })
+    const denied = dm({
+      consentState: vi.fn().mockResolvedValue(ConsentState.Denied),
+      id: 'denied-dm',
+    })
+    const fakeClient = client(unknown)
+    fakeClient.conversations.getConversationById.mockImplementation(async (id) => (
+      id === unknown.id ? unknown : id === denied.id ? denied : undefined
+    ))
+    fakeClient.conversations.listDms.mockImplementation(async (options) => {
+      const consentStates = options?.consentStates ?? []
+      return [
+        ...(consentStates.includes(ConsentState.Unknown) ? [unknown] : []),
+        ...(consentStates.includes(ConsentState.Denied) ? [denied] : []),
+      ]
+    })
+    sdkMocks.create.mockResolvedValue(fakeClient)
+
+    const session = await XmtpMessagingSession.create(signer, address)
+    const inbox = await session.readInbox()
+    const loaded = await session.readConversation(unknown.id)
+
+    expect(inbox).toEqual([
+      expect.objectContaining({
+        id: unknown.id,
+        preview: 'Fresh burner message',
+      }),
+    ])
+    expect(loaded.messages).toEqual([
+      expect.objectContaining({ id: unknownMessage.id }),
+    ])
+    await expect(session.readConversation(denied.id)).rejects.toThrow(
+      'direct message is unavailable',
+    )
+    expect(fakeClient.conversations.listDms).toHaveBeenCalledWith(
+      expect.objectContaining({
+        consentStates: [ConsentState.Allowed, ConsentState.Unknown],
+      }),
+    )
   })
 
   it('uses the stable recovery Ethereum identity as the peer display address', async () => {

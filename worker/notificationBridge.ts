@@ -857,7 +857,7 @@ function parseTicketRegistration(
     return null
   }
   const identity = parseIdentity(registration.identity)
-  const xmtp = parseRequestedXmtp(registration.xmtp)
+  const xmtp = parseRequestedXmtp(registration.xmtp, identity?.installationId)
   if (
     registration.version !== 1 ||
     !identity ||
@@ -933,6 +933,7 @@ function parseCompleteRegistration(
   ) return null
   const xmtp = parseRequestedXmtp(
     { env: value.xmtp.env, topics: value.xmtp.topics },
+    identity.installationId,
   )
   if (!xmtp) return null
   return {
@@ -966,8 +967,10 @@ function parseIdentity(value: unknown): RegistrationIdentity | null {
 
 function parseRequestedXmtp(
   value: unknown,
+  installationId: string | undefined,
 ): Pick<XmtpCallbackRegistration['xmtp'], 'env' | 'topics'> | null {
   if (
+    !installationId ||
     !isExactRecord(value, ['env', 'topics']) ||
     value.env !== 'production' ||
     !Array.isArray(value.topics) ||
@@ -977,7 +980,9 @@ function parseRequestedXmtp(
 
   const topics: XmtpTopic[] = []
   const seenTopics = new Set<string>()
+  let welcomeTopics = 0
   let persistedRows = 0
+  const expectedWelcomeTopic = `/xmtp/mls/1/w-${installationId}/proto`
 
   for (const candidate of value.topics) {
     if (
@@ -989,9 +994,12 @@ function parseRequestedXmtp(
     ) return null
     seenTopics.add(candidate.topic)
 
+    const isWelcome = candidate.topic === expectedWelcomeTopic
+    if (isWelcome) welcomeTopics += 1
     if (
-      !GROUP_TOPIC.test(candidate.topic) ||
-      candidate.hmacKeys.length === 0
+      (!isWelcome && !GROUP_TOPIC.test(candidate.topic)) ||
+      (isWelcome && candidate.hmacKeys.length !== 0) ||
+      (!isWelcome && candidate.hmacKeys.length === 0)
     ) return null
 
     const epochs = new Set<number>()
@@ -1021,6 +1029,12 @@ function parseRequestedXmtp(
     persistedRows += 1 + hmacKeys.length
     if (persistedRows > MAX_PERSISTED_TOPIC_ROWS) return null
   }
+  if (welcomeTopics !== 1) return null
+  topics.sort((left, right) => {
+    if (left.topic === expectedWelcomeTopic) return 1
+    if (right.topic === expectedWelcomeTopic) return -1
+    return left.topic.localeCompare(right.topic)
+  })
   return { env: 'production', topics }
 }
 

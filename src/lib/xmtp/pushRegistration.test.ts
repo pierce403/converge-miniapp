@@ -8,6 +8,7 @@ import {
 const installationId = 'ab'.repeat(32)
 const inboxId = 'cd'.repeat(32)
 const groupTopic = `/xmtp/mls/1/g-${'12'.repeat(16)}/proto`
+const welcomeTopic = `/xmtp/mls/1/w-${installationId}/proto`
 
 describe('XMTP push registration snapshots', () => {
   it('builds a stable canonical topic snapshot without message metadata', async () => {
@@ -19,6 +20,7 @@ describe('XMTP push registration snapshots', () => {
             { epoch: 3n, key: new Uint8Array([1, 2, 3]) },
           ]],
         ]),
+        topic: welcomeTopic,
       },
       inboxId,
       installationId,
@@ -37,6 +39,10 @@ describe('XMTP push registration snapshots', () => {
           ],
           topic: groupTopic,
         },
+        {
+          hmacKeys: [],
+          topic: welcomeTopic,
+        },
       ],
     })
     expect(JSON.stringify(snapshot)).not.toMatch(/sender|message|conversationId/)
@@ -46,6 +52,7 @@ describe('XMTP push registration snapshots', () => {
     await expect(buildXmtpPushSnapshot({
       conversations: {
         hmacKeys: async () => new Map(),
+        topic: welcomeTopic,
       },
       inboxId,
       installationId,
@@ -61,6 +68,7 @@ describe('XMTP push registration snapshots', () => {
             { epoch: 1n, key: new Uint8Array([1]) },
           ]],
         ]),
+        topic: welcomeTopic,
       },
       inboxId,
       installationId,
@@ -80,6 +88,7 @@ describe('XMTP push registration snapshots', () => {
             { epoch: 1n, key: new Uint8Array([1]) },
           ]],
         ]),
+        topic: welcomeTopic,
       },
       inboxId,
       installationId,
@@ -87,17 +96,36 @@ describe('XMTP push registration snapshots', () => {
     })).rejects.toThrow('non-canonical conversation push topic')
   })
 
-  it('returns no public registration topics when no conversations are Allowed', async () => {
+  it('keeps the installation welcome topic when there are no existing conversations', async () => {
     const snapshot = await buildXmtpPushSnapshot({
       conversations: {
         hmacKeys: async () => new Map(),
+        topic: welcomeTopic,
       },
       inboxId,
       installationId,
       installationIdBytes: new Uint8Array(32).fill(0xab),
     })
 
-    expect(snapshot.topics).toEqual([])
-    expect(JSON.stringify(snapshot)).not.toContain('/w-')
+    expect(snapshot.topics).toEqual([{
+      hmacKeys: [],
+      topic: welcomeTopic,
+    }])
+  })
+
+  it.each([
+    undefined,
+    `/xmtp/mls/1/w-${'ef'.repeat(32)}/proto`,
+    `/xmtp/mls/1/w-${installationId.toUpperCase()}/proto`,
+  ])('rejects a missing or mismatched installation welcome topic %#', async (topic) => {
+    await expect(buildXmtpPushSnapshot({
+      conversations: {
+        hmacKeys: async () => new Map(),
+        topic,
+      },
+      inboxId,
+      installationId,
+      installationIdBytes: new Uint8Array(32).fill(0xab),
+    })).rejects.toThrow('installation welcome topic')
   })
 })

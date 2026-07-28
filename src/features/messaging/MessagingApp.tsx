@@ -127,7 +127,7 @@ const connectionCopy: Partial<Record<ConnectionPhase, {
   syncing: {
     description: 'Conversations and message content are decrypted locally in this browser.',
     eyebrow: 'Private inbox',
-    title: 'Syncing your allowed messages',
+    title: 'Syncing your messages',
   },
 }
 

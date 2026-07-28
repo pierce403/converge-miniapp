@@ -69,7 +69,7 @@ describe('InboxScreen', () => {
       name: 'No conversations saved on this device',
     })).toBeVisible()
     expect(screen.getByText('Reconnect to check this inbox for conversations.')).toBeVisible()
-    expect(screen.queryByText('No allowed conversations yet')).not.toBeInTheDocument()
+    expect(screen.queryByText('No conversations yet')).not.toBeInTheDocument()
   })
 
   it('labels a verified Convos group without treating its creator as a DM peer', () => {

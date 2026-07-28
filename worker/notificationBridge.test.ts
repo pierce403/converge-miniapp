@@ -66,7 +66,9 @@ describe('XMTP to Farcaster notification bridge', () => {
       (body.registration.xmtp as { topics: unknown[] }).topics,
     ).toEqual(requestedRegistration().xmtp.topics)
     expect(JSON.stringify(body)).not.toMatch(/sender|message|conversationId/u)
-    expect(JSON.stringify(body)).not.toContain('/xmtp/mls/1/w-')
+    expect(JSON.stringify(body)).toContain(
+      `/xmtp/mls/1/w-${'ab'.repeat(32)}/proto`,
+    )
     expect(upstreamFetch).toHaveBeenCalledWith(
       'https://vapid.party/api/apps/app_12345678/xmtp/enrollment-ticket',
       expect.objectContaining({
@@ -78,6 +80,39 @@ describe('XMTP to Farcaster notification bridge', () => {
     expect(storage.routeForFid(8531)).toBe(
       base64url(new Uint8Array(32).fill(5)),
     )
+  })
+
+  it('accepts a welcome-only snapshot for a fresh installation', async () => {
+    const storage = fakeBridgeDatabase()
+    storage.seedSubscription(8531, 9152)
+    const registration = requestedRegistration()
+    registration.xmtp.topics = registration.xmtp.topics.slice(1)
+    const upstreamFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      data: {
+        expiresAt: '2026-07-18T12:05:00.000Z',
+        signatureText: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
+        token: `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`,
+      },
+      success: true,
+    }))
+
+    const response = await handleNotificationUserApi(
+      jsonRequest('/api/me/notifications/xmtp-ticket', { registration }),
+      environment(storage.database),
+      8531,
+      dependencies({ fetch: upstreamFetch }),
+    )
+
+    expect(response.status).toBe(200)
+    const upstreamBody = JSON.parse(
+      upstreamFetch.mock.calls[0]?.[1]?.body as string,
+    )
+    expect(upstreamBody.registration.xmtp.topics).toEqual([
+      {
+        hmacKeys: [],
+        topic: `/xmtp/mls/1/w-${registration.identity.installationId}/proto`,
+      },
+    ])
   })
 
   it('repairs the exact callback domain after vapid.party rejects ticket issuance', async () => {
@@ -192,9 +227,9 @@ describe('XMTP to Farcaster notification bridge', () => {
   it.each([
     {
       mutate(registration: ReturnType<typeof requestedRegistration>) {
-        registration.xmtp.topics = []
+        registration.xmtp.topics = registration.xmtp.topics.slice(0, 1)
       },
-      name: 'an empty topic snapshot',
+      name: 'a missing installation welcome topic',
     },
     {
       mutate(registration: ReturnType<typeof requestedRegistration>) {
@@ -203,7 +238,30 @@ describe('XMTP to Farcaster notification bridge', () => {
           topic: `/xmtp/mls/1/w-${registration.identity.installationId}/proto`,
         })
       },
-      name: 'a legacy installation welcome topic',
+      name: 'a duplicate installation welcome topic',
+    },
+    {
+      mutate(registration: ReturnType<typeof requestedRegistration>) {
+        registration.xmtp.topics[1]!.topic =
+          `/xmtp/mls/1/w-${'ef'.repeat(32)}/proto`
+      },
+      name: 'a welcome topic for another installation',
+    },
+    {
+      mutate(registration: ReturnType<typeof requestedRegistration>) {
+        registration.xmtp.topics[1]!.topic =
+          `/xmtp/mls/1/w-${registration.identity.installationId}/proto/extra`
+      },
+      name: 'a malformed installation welcome topic',
+    },
+    {
+      mutate(registration: ReturnType<typeof requestedRegistration>) {
+        registration.xmtp.topics[1]!.hmacKeys = [{
+          epoch: 8,
+          key: base64url(new Uint8Array([4, 5, 6])),
+        }]
+      },
+      name: 'an installation welcome topic with HMAC keys',
     },
     {
       mutate(registration: ReturnType<typeof requestedRegistration>) {
@@ -275,6 +333,10 @@ describe('XMTP to Farcaster notification bridge', () => {
 
     const changed = requestedRegistration()
     changed.identity.installationId = 'ef'.repeat(32)
+    changed.xmtp.topics[1] = {
+      hmacKeys: [],
+      topic: `/xmtp/mls/1/w-${changed.identity.installationId}/proto`,
+    }
     const changedResponse = await handleNotificationUserApi(
       jsonRequest('/api/me/notifications/xmtp-ticket', { registration: changed }),
       env,
@@ -308,7 +370,7 @@ describe('XMTP to Farcaster notification bridge', () => {
           hmacKeysRegistered: 1,
           identityId: 'identity',
           subscriptionId: 'subscription',
-          topicsRegistered: 1,
+          topicsRegistered: 2,
         },
         success: true,
       }, { status: 201 }))
@@ -353,6 +415,29 @@ describe('XMTP to Farcaster notification bridge', () => {
     expect(upstreamFetch.mock.calls[1]?.[1]?.headers).toMatchObject({
       authorization: `Bearer ${ticket}`,
     })
+  })
+
+  it('rejects a completed registration with a wrong-installation welcome topic', async () => {
+    const storage = fakeBridgeDatabase()
+    const inboxHandle = base64url(new Uint8Array(32).fill(4))
+    storage.seedRoute(8531, inboxHandle)
+    const registration = completedRegistration(inboxHandle)
+    registration.xmtp.topics[1]!.topic =
+      `/xmtp/mls/1/w-${'ef'.repeat(32)}/proto`
+    const upstreamFetch = vi.fn<typeof fetch>()
+
+    const response = await handleNotificationUserApi(
+      jsonRequest(
+        '/api/me/notifications/xmtp-subscription',
+        enrollmentSubmission(registration),
+      ),
+      environment(storage.database),
+      8531,
+      dependencies({ fetch: upstreamFetch }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(upstreamFetch).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -584,7 +669,7 @@ describe('XMTP to Farcaster notification bridge', () => {
             hmacKeysRegistered: 1,
             identityId: 'identity',
             subscriptionId: 'subscription',
-            topicsRegistered: 1,
+            topicsRegistered: 2,
           },
           success: true,
         })
@@ -1351,6 +1436,10 @@ function requestedRegistration() {
         {
           hmacKeys: [{ epoch: 7, key: base64url(new Uint8Array([1, 2, 3])) }],
           topic: `/xmtp/mls/1/g-${'12'.repeat(16)}/proto`,
+        },
+        {
+          hmacKeys: [],
+          topic: `/xmtp/mls/1/w-${installationId}/proto`,
         },
       ],
     },

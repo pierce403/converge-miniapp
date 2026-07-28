@@ -1,6 +1,6 @@
 ---
 name: diagnose-message-delivery
-description: Trace Converge Mini open-app XMTP receive failures and closed-app Farcaster alert failures across the browser, current inbox assignment, consent/routes, vapid.party listener and queue, Mini callback, and Farcaster provider. Use when messages or alerts are missing, delayed, stale after inbox migration, or returning notification 425/503-style errors.
+description: Trace Converge Mini open-app XMTP receive failures and closed-app Farcaster alert failures across the browser, current inbox assignment, welcome/topic routes, vapid.party listener and queue, Mini callback, and Farcaster provider. Use when messages or alerts are missing, delayed, stale after inbox migration, or returning notification 425/503-style errors.
 ---
 
 # Diagnose Message Delivery
@@ -37,20 +37,24 @@ Proceed in order and mark each boundary proven, failed, or unknown:
    `current assignment matches mounted client: yes/no`; replacing a stale client
    is a later authorized repair.
 3. Prove local client readiness, explicit sync/history outcome, conversation
-   discovery and consent, and the sequence
+   discovery and visibility state, and the sequence
    `stream hint -> guarded refresh -> UI update`. Seeing the message in another
-   XMTP client proves only that installation's retrieval. `Allowed` is
-   display/alert eligible in Mini; `Unknown`/requests, missing recovered history,
-   and welcome topics are distinct branches. If an authorized manual sync alone
-   reveals it, investigate stream/drain handling.
+   XMTP client proves only that installation's retrieval. `Allowed` and
+   `Unknown` DMs are display/alert eligible in Mini; `Denied`, missing recovered
+   history, unverified Convos groups, and installation welcome delivery are
+   distinct branches. If an authorized manual sync alone reveals it,
+   investigate stream/drain handling.
 4. For the alert branch, use `GET /api/notifications/status` only as a public
    structural-readiness boolean. Separately prove aggregate counts for an
    encrypted signed lifecycle token and active opaque route without returning
    their identifiers.
-5. Check the browser's current installation proof and bounded topic/HMAC
-   snapshot enrollment. Require only booleans for current-installation and target
-   conversation membership. Registration is not retroactive; sending a fresh
-   post-refresh message is an authorized active test, not a read-only check.
+5. Check the browser's current installation proof and bounded
+   welcome/topic/HMAC snapshot enrollment. Require one installation-matched
+   welcome topic even when there are no known conversations, plus only booleans
+   for current-installation and target conversation membership. A new
+   conversation should match the welcome route; normal topic registration is
+   not retroactive. Sending a fresh post-refresh message is an authorized active
+   test, not a read-only check.
 6. Prove vapid.party's redacted `delivery ready`, `listener ready`, and
    `bridge synced` health states, registration freshness, and target-membership
    boolean without returning the underlying topic, HMAC, inbox, installation,

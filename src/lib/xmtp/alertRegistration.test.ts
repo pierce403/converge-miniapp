@@ -19,10 +19,16 @@ const snapshot = {
   inboxId: 'ab'.repeat(32),
   installationId: 'cd'.repeat(32),
   publicKey: 'public-key',
-  topics: [{
-    hmacKeys: [{ epoch: 7, key: 'hmac-key' }],
-    topic: `/xmtp/mls/1/g-${'12'.repeat(16)}/proto`,
-  }],
+  topics: [
+    {
+      hmacKeys: [{ epoch: 7, key: 'hmac-key' }],
+      topic: `/xmtp/mls/1/g-${'12'.repeat(16)}/proto`,
+    },
+    {
+      hmacKeys: [],
+      topic: `/xmtp/mls/1/w-${'cd'.repeat(32)}/proto`,
+    },
+  ],
 }
 
 function session(environment = 'production') {
@@ -93,22 +99,26 @@ describe('XMTP alert registration', () => {
     expect(mocks.fetch).not.toHaveBeenCalled()
   })
 
-  it('revokes stale inbox-wide state when the inbox has no Allowed topics', async () => {
-    mocks.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
+  it('registers the welcome topic even when there are no existing conversations', async () => {
+    const ticket = `vpxet1.${'a'.repeat(20)}.${'b'.repeat(43)}`
     const activeSession = session()
     activeSession.pushSnapshot.mockResolvedValue({
       ...snapshot,
-      topics: [],
+      topics: [snapshot.topics[1]],
     })
+    mocks.fetch
+      .mockResolvedValueOnce(Response.json({
+        registration: { version: 1 },
+        signatureText: ticket,
+        ticket,
+      }))
+      .mockResolvedValueOnce(Response.json({ registered: true }))
 
     await syncXmtpAlertRegistration(activeSession as never, 403)
 
-    expect(mocks.fetch).toHaveBeenCalledOnce()
-    expect(mocks.fetch).toHaveBeenCalledWith(
-      '/api/me/notifications/xmtp-subscription',
-      { cache: 'no-store', method: 'DELETE' },
-    )
-    expect(activeSession.signPushEnrollmentTicket).not.toHaveBeenCalled()
+    const ticketBody = JSON.parse(mocks.fetch.mock.calls[0]?.[1]?.body as string)
+    expect(ticketBody.registration.xmtp.topics).toEqual([snapshot.topics[1]])
+    expect(activeSession.signPushEnrollmentTicket).toHaveBeenCalledOnce()
   })
 
   it('briefly retries while the native token webhook is still arriving', async () => {

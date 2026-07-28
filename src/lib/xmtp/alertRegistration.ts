@@ -37,13 +37,6 @@ export async function syncXmtpAlertRegistration(
       'push_snapshot_failed',
     )
   }
-  // XMTP consent is inbox-wide, so retaining an old route here could alert on a
-  // now-denied topic. This account-wide cleanup is intentionally distinct from
-  // one Farcaster client disabling native notifications, which stays local.
-  if (snapshot.topics.length === 0) {
-    await revokeXmtpAlertRegistration()
-    return
-  }
   const ticketRequest: RequestInit = {
     body: JSON.stringify({
       registration: {
