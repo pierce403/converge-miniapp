@@ -180,21 +180,24 @@ subscription row. Never use a real notification token in the canary.
 
 Production now keeps `FARCASTER_NOTIFICATIONS_ENABLED` at the committed exact string `"true"` while preview remains exactly `"false"`. Values such as `"TRUE"`, `"1"`, or whitespace-padded `"true"` do not enable rollout. Preview remains unavailable even with the flag and credentials because the structural bridge is production-only. Revert production to exact `"false"` to suppress status, webhook discovery, and the browser prompt if live acceptance exposes an unsafe failure.
 
-Task 10a shipped through Cloudflare Workers Builds in commit `ae21679` and
-immutable Worker version `d825462f-a62f-4bd2-83bb-5d16bf646140`. The exact
-commit's local gate, GitHub CI, and Cloudflare Build pass; production returns
-`{"available":true}`, `/api/health` identifies that version, the manifest
-contains `https://miniapp.converge.cv/api/farcaster/webhook`, and live client
-chunks contain the new inbox copy and welcome-topic registration. Reopen the
-Mini once to replace any older active vapid.party snapshot before a
-fresh-burner test. Complete one genuine callback, one closed-app delivery,
-signed-token rotation, disable/removal, installation replacement, callback
-replay, invalid-token deletion, upstream throttling, and app-side route
-revocation acceptance. Review D1 only for ciphertext, opaque handles, and
-delivery IDs, and inspect sampled logs for token, URL, FID, signature, topic,
-HMAC, inbox, installation, sender, or message leakage. Reverting production to
-`"false"` withdraws public availability but does not erase existing encrypted
-tokens or replace route-level revocation.
+Task 10a code commit `ae21679` shipped through Cloudflare Workers Builds. Its
+local gate, GitHub CI, and exact-commit Cloudflare Build pass. At initial
+promotion verification, production served immutable Worker
+`d825462f-a62f-4bd2-83bb-5d16bf646140`, returned `{"available":true}`,
+identified that version through `/api/health`, retained
+`https://miniapp.converge.cv/api/farcaster/webhook`, and served client chunks
+with the new inbox copy and welcome-topic registration. Later
+documentation-only deployments inherit that code but receive new immutable
+version IDs; query `/api/health` or `wrangler versions list` for the current
+one. Reopen the Mini once to replace any older active vapid.party snapshot
+before a fresh-burner test. Complete one genuine callback, one closed-app
+delivery, signed-token rotation, disable/removal, installation replacement,
+callback replay, invalid-token deletion, upstream throttling, and app-side
+route revocation acceptance. Review D1 only for ciphertext, opaque handles,
+and delivery IDs, and inspect sampled logs for token, URL, FID, signature,
+topic, HMAC, inbox, installation, sender, or message leakage. Reverting
+production to `"false"` withdraws public availability but does not erase
+existing encrypted tokens or replace route-level revocation.
 
 ## Farcaster account association
 

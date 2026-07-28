@@ -285,16 +285,17 @@ Chronological production evidence recorded on 2026-07-27 and 2026-07-28 UTC:
 - Mini commit `0228ea5` is deployed as immutable Worker
   `0226899b-3b08-401e-a1a0-fd5dad9b0b59`; it separates ENS-choice deletion from
   full account-data deletion so an identity-label action cannot disable alerts;
-- Task 10a commit `ae21679` is deployed as immutable Worker
-  `d825462f-a62f-4bd2-83bb-5d16bf646140`. Its full local gate passes 47 test
-  files and 667 tests, the production build, and all six mobile Playwright
-  checks; GitHub CI and the exact-commit Cloudflare Workers Build both pass.
-  The canonical root and `/api/health` return `200`, health identifies that
-  exact Worker version, notification status remains available, the manifest
-  retains the canonical webhook, and the live chunks contain the new
-  no-accept inbox copy plus installation welcome-topic registration. Reopening
-  the Mini must now replace the older active vapid.party route before the
-  fresh-burner acceptance test;
+- Task 10a code commit `ae21679` passed its full local gate of 47 test files and
+  667 tests, the production build, all six mobile Playwright checks, GitHub CI,
+  and its exact-commit Cloudflare Workers Build. Initial promotion verification
+  served it as immutable Worker `d825462f-a62f-4bd2-83bb-5d16bf646140`: the
+  canonical root and `/api/health` returned `200`, health identified that
+  version, notification status remained available, the manifest retained the
+  canonical webhook, and the live chunks contained the new no-accept inbox
+  copy plus installation welcome-topic registration. Later documentation-only
+  deployments inherit that code and receive their own immutable version IDs.
+  Reopening the Mini must now replace the older active vapid.party route before
+  the fresh-burner acceptance test;
 - authoritative and recursive DNS return the exact required
   `_vapid-party.miniapp.converge.cv` TXT binding;
 - Farcaster's public debugger reports the manifest, schema, account
