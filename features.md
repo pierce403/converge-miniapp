@@ -2,7 +2,7 @@
 
 > Working title: **Converge Mini**
 > Status: deployed implementation; release acceptance in progress
-> Last reviewed: 2026-07-27
+> Last reviewed: 2026-07-28
 > Canonical scope: this file
 > Canonical production origin: `https://miniapp.converge.cv`
 
@@ -53,6 +53,14 @@ It displays the full inbox ID from the validated mounted XMTP session, never
 from the saved migration journal, and clears that value on disconnect or
 reassignment quarantine. The 623-test full local gate and canonical
 bundle-content check pass.
+
+The 2026-07-28 receive-path follow-up is implemented locally pending its
+Cloudflare build. A stream event remains only a hint until the current network
+inbox assignment is rechecked, but overlapping manual, foreground, and stream
+refreshes now use a single-flight drain instead of silently dropping the stream
+hint when another inbox refresh is active. Focused regression coverage proves
+both an ordinary `Allowed` stream refresh and the overlapping-refresh case while
+preserving the stale-inbox quarantine behavior.
 
 The notification bridge is the active P1 milestone. Its production status and
 manifest webhook are enabled, and the encryption, D1, DNS, and vapid.party
@@ -235,6 +243,20 @@ Chronological production evidence recorded on 2026-07-27 and 2026-07-28 UTC:
   `xmtp.new_message` delivery attempt in vapid.party and no callback delivery
   row in Mini. The closed-app path therefore had not yet been exercised by a
   fresh matching message; this is not evidence of a failed attempt;
+- a later external message at `2026-07-28T11:33:49Z` did reach vapid.party's
+  global XMTP listener and produced one successful `201` Web Push delivery to
+  the main Converge app. It did not match the Mini callback route, and Mini D1
+  therefore correctly retained zero callback-delivery rows. The main and Mini
+  registrations resolve to the same inbox but distinct installations. After
+  the Mini re-enrolled at `2026-07-28T11:41Z`, its `Allowed`-only snapshot
+  contained three group topics and nine HMAC epochs, while the exact 11:33
+  message topic remained absent. Main Converge deliberately registers
+  `Allowed` plus `Unknown` topics, while the Mini currently excludes ordinary
+  `Unknown` message requests from both its inbox and alerts. The evidence is
+  consistent with an `Unknown` request; incomplete history transfer to the
+  Mini installation is the remaining alternative because topic lists are
+  local-database reads. Either way, it proves an unenrolled topic/history
+  boundary rather than a Farcaster delivery failure or old-inbox regression;
 - Mini commit `0c02431` is deployed as immutable Worker
   `6ec45f88-4a2d-49f2-b95b-0fd797798cd4`. Exact `signatureText` signing,
   provider/first-party success-envelope validation, identifier-free
@@ -259,7 +281,7 @@ Delivery sequence and gates:
 | 2. Verify the production vapid.party app and DNS binding | Verified production | The retained app ID/key match the exact public `_vapid-party.miniapp.converge.cv` TXT record; Mini repaired and freshly verified the private exact-domain state without replacing the retained secret; the subsequent production ticket and proof succeeded. |
 | 3. Prove the two Workers together in production | In progress: enrollment proven; callback pending | Preview migration `0003` is applied and no migrations are pending. A real signed lifecycle token, opaque Mini route, Browser SDK public-context Ed25519ph proof, active vapid.party HTTPS callback subscription, and synced listener route now exist. Require one genuine XMTP envelope to produce one verified opaque callback before advancing. |
 | 4. Configure and promote production token lifecycle | Verified production | Bounded manual Neynar redirects are live on Worker `a639f300-5b00-44fd-b675-b9897e4fcfb2`; the synthetic unauthorized-key canary returns `400`; a real enable event creates exactly one encrypted `(fid, appFid)` row; and no sanitized webhook failure occurs. |
-| 5. Prove a closed-app alert in Farcaster | In progress: fresh message pending | With Converge closed, a second XMTP client sends a message in an already enrolled `Allowed` conversation; exactly one generic native alert arrives, opens the canonical app, and contains no sender, message, or conversation data. |
+| 5. Prove a closed-app alert in Farcaster | In progress: fresh `Allowed` message pending | The 11:33 message was an unenrolled-topic case and did not exercise the Mini route. With Converge closed, a second XMTP client must send a new message in an already enrolled `Allowed` conversation; exactly one generic native alert arrives, opens the canonical app, and contains no sender, message, or conversation data. |
 | 6. Prove cleanup, recovery, and operations | Planned | Disable, re-enable, remove, invalid-token, throttling, retry, route-revocation, and sampled-log checks pass; the runbook records rollback and health checks. |
 
 Promotion rules:

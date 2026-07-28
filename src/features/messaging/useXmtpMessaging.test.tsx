@@ -1289,6 +1289,46 @@ describe('useXmtpMessaging', () => {
     expect(session.startMessageStream).toHaveBeenCalledOnce()
   })
 
+  it('serializes a cached-ready manual refresh behind the initial inbox sync', async () => {
+    const sync = deferred<ConversationSummary[]>()
+    const cachedRead = deferred<void>()
+    const session = createSession({
+      loadInbox: vi.fn((onCached?: (items: ConversationSummary[]) => void) => {
+        onCached?.([cachedConversation])
+        cachedRead.resolve()
+        return sync.promise
+      }),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+
+    let connectPromise!: Promise<void>
+    await act(async () => {
+      connectPromise = result.current.connect()
+      await cachedRead.promise
+    })
+    expect(result.current.connection.phase).toBe('ready')
+
+    let refreshPromise!: Promise<void>
+    act(() => {
+      refreshPromise = result.current.refresh()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(session.loadInbox).toHaveBeenCalledOnce()
+    expect(session.startMessageStream).not.toHaveBeenCalled()
+
+    await act(async () => {
+      sync.resolve([cachedConversation])
+      await Promise.all([connectPromise, refreshPromise])
+    })
+
+    expect(session.loadInbox).toHaveBeenCalledOnce()
+    expect(session.startMessageStream).toHaveBeenCalledOnce()
+    expect(result.current.connection.phase).toBe('ready')
+  })
+
   it('opens saved messages without sync while offline and refreshes once online', async () => {
     const sentinel = 'OFFLINE_SENTINEL_DO_NOT_COPY_TO_WEB_STORAGE'
     const savedMessage = message('saved-offline', sentinel, '2026-07-14T12:00:00Z')
@@ -2505,6 +2545,91 @@ describe('useXmtpMessaging', () => {
     expect(mocks.createSession.mock.calls[1]?.[2]).toBe('target-inbox')
     expect(targetSession.loadInbox).toHaveBeenCalledOnce()
     expect(result.current.conversations).toEqual([movedConversation])
+  })
+
+  it('refreshes the authoritative inbox after an Allowed stream message', async () => {
+    let onMessage: ((message: MessageItem) => void) | undefined
+    const updatedConversation = {
+      ...cachedConversation,
+      preview: 'Arrived from the live stream',
+      updatedAt: new Date('2026-07-14T12:02:00Z'),
+    }
+    const loadInbox = vi.fn()
+      .mockResolvedValueOnce([cachedConversation])
+      .mockResolvedValueOnce([updatedConversation])
+    const session = createSession({
+      loadInbox,
+      startMessageStream: vi.fn(async (
+        nextOnMessage: (message: MessageItem) => void,
+      ) => {
+        onMessage = nextOnMessage
+      }),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    act(() => onMessage?.(message(
+      'live-stream-message',
+      updatedConversation.preview,
+      '2026-07-14T12:02:00Z',
+    )))
+
+    await waitFor(() => expect(loadInbox).toHaveBeenCalledTimes(2), {
+      timeout: 2_000,
+    })
+    expect(result.current.conversations).toEqual([updatedConversation])
+  })
+
+  it('drains an Allowed stream refresh that overlaps a manual refresh', async () => {
+    let onMessage: ((message: MessageItem) => void) | undefined
+    const manualRefresh = deferred<ConversationSummary[]>()
+    const updatedConversation = {
+      ...cachedConversation,
+      preview: 'Recovered after the overlapping refresh',
+      updatedAt: new Date('2026-07-14T12:03:00Z'),
+    }
+    const loadInbox = vi.fn()
+      .mockResolvedValueOnce([cachedConversation])
+      .mockReturnValueOnce(manualRefresh.promise)
+      .mockResolvedValueOnce([updatedConversation])
+    const session = createSession({
+      loadInbox,
+      startMessageStream: vi.fn(async (
+        nextOnMessage: (message: MessageItem) => void,
+      ) => {
+        onMessage = nextOnMessage
+      }),
+    })
+    mocks.createSession.mockResolvedValue(session)
+    const { result } = renderHook(() => useXmtpMessaging())
+    await act(async () => result.current.connect())
+
+    let refreshing!: Promise<void>
+    act(() => {
+      refreshing = result.current.refresh()
+    })
+    await waitFor(() => expect(loadInbox).toHaveBeenCalledTimes(2))
+
+    act(() => onMessage?.(message(
+      'overlapping-stream-message',
+      updatedConversation.preview,
+      '2026-07-14T12:03:00Z',
+    )))
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 350))
+    })
+    expect(loadInbox).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      manualRefresh.resolve([cachedConversation])
+      await refreshing
+    })
+
+    await waitFor(() => expect(loadInbox).toHaveBeenCalledTimes(3), {
+      timeout: 2_000,
+    })
+    expect(result.current.conversations).toEqual([updatedConversation])
   })
 
   it('does not render an old-stream message after the identity moves', async () => {

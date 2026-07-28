@@ -99,7 +99,7 @@ export function useXmtpMessaging({
   const cleanupPromiseRef = useRef<Promise<void> | null>(null)
   const connectingRef = useRef(false)
   const creatingDmRef = useRef(false)
-  const refreshingRef = useRef(false)
+  const inboxRefreshPromiseRef = useRef<Promise<void> | null>(null)
   const visibleRefreshRef = useRef(false)
   const onlineRefreshPendingRef = useRef(false)
   const foregroundCheckRef = useRef<symbol | null>(null)
@@ -275,7 +275,7 @@ export function useXmtpMessaging({
     operationGenerationRef.current += 1
     inboxRequestRef.current += 1
     loadedMessageWindowRef.current = 0
-    refreshingRef.current = false
+    inboxRefreshPromiseRef.current = null
     visibleRefreshRef.current = false
     onlineRefreshPendingRef.current = false
     foregroundCheckRef.current = null
@@ -358,53 +358,67 @@ export function useXmtpMessaging({
     }
   }, [])
 
-  const loadInbox = useCallback(async (showSpinner = true) => {
+  const loadInbox = useCallback(async (showSpinner = true): Promise<boolean> => {
     const session = sessionRef.current
-    if (!session || refreshingRef.current) return
+    if (!session) return false
+    const activeRefresh = inboxRefreshPromiseRef.current
+    if (activeRefresh) {
+      await activeRefresh.catch(() => undefined)
+      return false
+    }
     const generation = operationGenerationRef.current
     const request = ++inboxRequestRef.current
 
-    refreshingRef.current = true
-    if (showSpinner) setRefreshing(true)
-    try {
-      let offline = browserIsKnownOffline()
-      let next: ConversationSummary[]
-      if (offline) {
-        next = await session.readInbox()
-      } else {
-        const outcome = await settleUntilOffline(session.loadInbox())
-        if (outcome.status === 'offline') {
-          offline = true
+    const refresh = (async () => {
+      if (showSpinner) setRefreshing(true)
+      try {
+        let offline = browserIsKnownOffline()
+        let next: ConversationSummary[]
+        if (offline) {
           next = await session.readInbox()
         } else {
-          next = outcome.value
+          const outcome = await settleUntilOffline(session.loadInbox())
+          if (outcome.status === 'offline') {
+            offline = true
+            next = await session.readInbox()
+          } else {
+            next = outcome.value
+          }
+        }
+        if (
+          mountedRef.current &&
+          operationGenerationRef.current === generation &&
+          inboxRequestRef.current === request &&
+          sessionRef.current === session
+        ) {
+          setConversations(next)
+          applyConvosAccessSnapshot(session.convosAccessSnapshot)
+          if (offline) setStreamHealth('offline')
+          updateNotice(null)
+          if (alertsEnabledRef.current) void syncAlerts().catch(() => undefined)
+        }
+      } catch (error) {
+        if (
+          mountedRef.current &&
+          operationGenerationRef.current === generation &&
+          inboxRequestRef.current === request &&
+          sessionRef.current === session
+        ) {
+          updateNotice(readableMessagingError(error, 'The inbox could not refresh.'))
+        }
+      } finally {
+        if (operationGenerationRef.current === generation) {
+          if (mountedRef.current) setRefreshing(false)
         }
       }
-      if (
-        mountedRef.current &&
-        operationGenerationRef.current === generation &&
-        inboxRequestRef.current === request &&
-        sessionRef.current === session
-      ) {
-        setConversations(next)
-        applyConvosAccessSnapshot(session.convosAccessSnapshot)
-        if (offline) setStreamHealth('offline')
-        updateNotice(null)
-        if (alertsEnabledRef.current) void syncAlerts().catch(() => undefined)
-      }
-    } catch (error) {
-      if (
-        mountedRef.current &&
-        operationGenerationRef.current === generation &&
-        inboxRequestRef.current === request &&
-        sessionRef.current === session
-      ) {
-        updateNotice(readableMessagingError(error, 'The inbox could not refresh.'))
-      }
+    })()
+    inboxRefreshPromiseRef.current = refresh
+    try {
+      await refresh
+      return true
     } finally {
-      if (operationGenerationRef.current === generation) {
-        refreshingRef.current = false
-        if (mountedRef.current) setRefreshing(false)
+      if (inboxRefreshPromiseRef.current === refresh) {
+        inboxRefreshPromiseRef.current = null
       }
     }
   }, [applyConvosAccessSnapshot, syncAlerts, updateNotice])
@@ -805,59 +819,67 @@ export function useXmtpMessaging({
       failureStage = 'sync'
       const finalNoticeRevision = noticeRevisionRef.current
       const inboxRequest = ++inboxRequestRef.current
-      refreshingRef.current = true
       let cachedInboxRead = false
-      try {
-        const onCachedInbox = (cached: ConversationSummary[]) => {
+      const initialInboxRefresh = (async () => {
+        try {
+          const onCachedInbox = (cached: ConversationSummary[]) => {
+            if (
+              !mountedRef.current ||
+              sessionRef.current !== session ||
+              inboxRequestRef.current !== inboxRequest
+            ) return
+            cachedInboxRead = true
+            setConversations(cached)
+            applyConvosAccessSnapshot(session.convosAccessSnapshot)
+            if (cached.length) {
+              setRefreshing(true)
+              setConnection({ error: null, phase: 'ready' })
+            }
+          }
+          let nextConversations: ConversationSummary[]
+          if (offline) {
+            nextConversations = await session.readInbox()
+          } else {
+            const outcome = await settleUntilOffline(session.loadInbox(onCachedInbox))
+            if (outcome.status === 'offline') {
+              offline = true
+              setStreamHealth('offline')
+              nextConversations = await session.readInbox()
+            } else {
+              nextConversations = outcome.value
+            }
+          }
+          if (offline) {
+            cachedInboxRead = true
+            onCachedInbox(nextConversations)
+          }
           if (
             !mountedRef.current ||
             sessionRef.current !== session ||
             inboxRequestRef.current !== inboxRequest
           ) return
-          cachedInboxRead = true
-          setConversations(cached)
+          setConversations(nextConversations)
           applyConvosAccessSnapshot(session.convosAccessSnapshot)
-          if (cached.length) {
-            setRefreshing(true)
-            setConnection({ error: null, phase: 'ready' })
+        } catch (error) {
+          if (!mountedRef.current || sessionRef.current !== session) return
+          if (!cachedInboxRead) throw error
+          recoveryNotice = readableMessagingError(
+            error,
+            'Network sync paused. Showing the inbox saved in this browser.',
+          )
+          setStreamHealth('failed')
+        } finally {
+          if (sessionRef.current === session && inboxRequestRef.current === inboxRequest) {
+            if (mountedRef.current) setRefreshing(false)
           }
         }
-        let nextConversations: ConversationSummary[]
-        if (offline) {
-          nextConversations = await session.readInbox()
-        } else {
-          const outcome = await settleUntilOffline(session.loadInbox(onCachedInbox))
-          if (outcome.status === 'offline') {
-            offline = true
-            setStreamHealth('offline')
-            nextConversations = await session.readInbox()
-          } else {
-            nextConversations = outcome.value
-          }
-        }
-        if (offline) {
-          cachedInboxRead = true
-          onCachedInbox(nextConversations)
-        }
-        if (
-          !mountedRef.current ||
-          sessionRef.current !== session ||
-          inboxRequestRef.current !== inboxRequest
-        ) return
-        setConversations(nextConversations)
-        applyConvosAccessSnapshot(session.convosAccessSnapshot)
-      } catch (error) {
-        if (!mountedRef.current || sessionRef.current !== session) return
-        if (!cachedInboxRead) throw error
-        recoveryNotice = readableMessagingError(
-          error,
-          'Network sync paused. Showing the inbox saved in this browser.',
-        )
-        setStreamHealth('failed')
+      })()
+      inboxRefreshPromiseRef.current = initialInboxRefresh
+      try {
+        await initialInboxRefresh
       } finally {
-        if (sessionRef.current === session && inboxRequestRef.current === inboxRequest) {
-          refreshingRef.current = false
-          if (mountedRef.current) setRefreshing(false)
+        if (inboxRefreshPromiseRef.current === initialInboxRefresh) {
+          inboxRefreshPromiseRef.current = null
         }
       }
 
@@ -1861,7 +1883,15 @@ export function useXmtpMessaging({
     onlineRefreshPendingRef.current = false
     if (offline) setStreamHealth('offline')
     try {
-      await loadInbox(false)
+      const inboxRefreshed = await loadInbox(false)
+      if (!inboxRefreshed) {
+        if (
+          mountedRef.current &&
+          operationGenerationRef.current === generation &&
+          sessionRef.current === session
+        ) onlineRefreshPendingRef.current = true
+        return
+      }
       offline = browserIsKnownOffline()
 
       const conversation = activeRef.current
