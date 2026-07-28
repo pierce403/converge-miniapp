@@ -378,6 +378,7 @@ Quick Auth also protects stateless recipient ENS forward resolution and a public
 | Remember the ENS choice by trusted Farcaster FID | Committed | Quick Auth supplies the authoritative FID; D1 stores only `accepted` or `dismissed` plus an update timestamp. |
 | Resolve known peer addresses as display hints | Committed | Prefer ENS, then Basename, and always retain the wallet address. Show a registered fname only as a separately labeled best-effort hint, never for authorization. |
 | Use Git and GitHub from the beginning | Committed | Each coherent task is verified, committed, and pushed before the next task begins. |
+| Adapt the live `recurse.bot` operating guide into repository-local memory and skills | Committed | Keep `AGENTS.md` canonical, add privacy-bounded memory and reusable workflow indexes, and support compatible harness aliases. Adapt the guide to this public Node repository: Codex/current harness identity instead of a forced persona, `rg` while `qmd` is unavailable, small Node tools instead of Python helpers, and an on-touch review instead of a write-capable scheduled workflow. |
 
 ### Important backend clarification
 
@@ -1490,6 +1491,62 @@ Exit criteria:
 - the canonical hostname is recorded; and
 - the revised decision/spec checkpoint is committed and pushed before runtime work.
 
+### Task 0d: repo-local memory, skills, and harness compatibility — planned 2026-07-28
+
+Source: [Sparkle's live Agent Etiquette Guide](https://recurse.bot/), reviewed
+2026-07-28. The guide is an adaptable example, not a persona or process mandate.
+
+Deliverables:
+
+- keep `AGENTS.md` as the canonical shared instruction file, add explicit
+  responsibilities and knowledge-routing rules, and expose `CLAUDE.md` and
+  `GEMINI.md` as symlinks to it;
+- add a compact `MEMORY.md` index and privacy-bounded
+  `agent-memory/{notes,people,logs}` shelves without duplicating product,
+  operations, or privacy truth from their canonical documents;
+- add a compact `SKILLS.md` catalog with validated, class-level workflows for
+  curation, project-context search, verified main delivery, end-to-end message
+  and alert diagnosis, and later `recurse.bot` reviews;
+- add a dated adopt/adapt/decline review log and repeatable Node-based
+  validation/fetch tooling, while keeping generated search state out of Git;
+- document repository-local memory's public-data boundary and link the new
+  operating indexes from the README and operations runbook; and
+- preserve the existing read-only GitHub CI and Cloudflare Workers Builds
+  production-delivery boundary.
+
+Exit criteria:
+
+- both harness aliases resolve to the canonical `AGENTS.md`;
+- every cataloged skill passes the skill validator and forward-use review;
+- tracked Markdown remains visible to Git, including the dated nested log,
+  while generated `.qmd` and `.codex` state is ignored;
+- local knowledge validation catches broken aliases, missing indexes, and
+  catalog/skill drift; the live advice check verifies the expected guide and
+  records its content hash without becoming a network dependency of CI;
+- memory and logs contain no credentials, wallet/FID/inbox/installation/topic
+  identifiers, private conversation material, browser-session state, raw
+  production payloads, or hidden reasoning;
+- no product behavior or product scope changes as part of this task; and
+- `git diff --check`, the full repository gate, staged-content review,
+  commit/push, Cloudflare build, and live root/health checks all pass.
+
+Explicit adaptations and exclusions:
+
+- use the active harness identity; do not impose the guide's example name or
+  require repetitive introductions;
+- use targeted `rg` search now. The installed `qmd` currently has a native
+  Node-ABI mismatch and is optional until separately repaired and verified;
+- prefer purpose-built connectors, with `mcporter` only as an optional
+  shell-mediated MCP fallback;
+- keep collaborator memory limited to explicit, stable workflow preferences
+  and a privacy policy; do not create personal dossiers merely to populate a
+  shelf;
+- review the live guide when touched and at least weekly before related work,
+  but do not add an autonomous write-capable GitHub workflow or duplicate
+  Cloudflare deployment from read-only CI; and
+- curate a small set of reusable workflow classes rather than one skill or
+  permanent log for every incident.
+
 ### Task 1: runtime feasibility spike
 
 Deliverables:
@@ -2032,5 +2089,6 @@ Current integration facts in this plan were checked through 2026-07-15 against p
 - [Cloudflare storage options](https://developers.cloudflare.com/workers/platform/storage-options/)
 - [Cloudflare Containers](https://developers.cloudflare.com/containers/)
 - [Content Security Policy WebAssembly integration](https://www.w3.org/TR/CSP3/#wasm-integration)
+- [Sparkle's Agent Etiquette Guide](https://recurse.bot/)
 
 SDK, network, payment, host-client, and platform behavior can drift. Recheck these sources when each integration task begins rather than relying only on this snapshot.
