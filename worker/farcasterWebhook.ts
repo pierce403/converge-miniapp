@@ -1,10 +1,13 @@
 import {
-  createVerifyAppKeyWithHub,
   parseWebhookEvent,
   type ParseWebhookEventResult,
   type VerifyAppKey,
 } from '@farcaster/miniapp-node'
 
+import {
+  createWorkerVerifyAppKeyWithHub,
+  FarcasterAppKeyVerifierError,
+} from './farcasterAppKeyVerifier.js'
 import {
   encryptNotificationDetails,
   type EncryptedNotificationDetails,
@@ -59,7 +62,7 @@ type FarcasterWebhookFailureDiagnostic = {
 }
 
 const defaultDependencies: FarcasterWebhookDependencies = {
-  createVerifyAppKeyWithHub,
+  createVerifyAppKeyWithHub: createWorkerVerifyAppKeyWithHub,
   encryptNotificationDetails,
   logFailure: (diagnostic) => {
     console.error('farcaster_webhook_failure', diagnostic)
@@ -403,6 +406,8 @@ function verificationFailureKind(
   error: unknown,
 ): FarcasterWebhookFailureDiagnostic['kind'] {
   if (errorCauseHasName(error, 'AbortError')) return 'current_network_timeout'
+  const verifierFailure = findVerifierFailure(error)
+  if (verifierFailure) return verifierFailure
   if (errorCauseHasMessagePrefix(error, 'Non-200 response received:')) {
     return 'current_network_non_200'
   }
@@ -418,6 +423,20 @@ function verificationFailureKind(
     'VerifyJsonFarcasterSignature.VerifyAppKeyError',
   )) return 'current_network_verifier'
   return 'unexpected_verification'
+}
+
+function findVerifierFailure(
+  error: unknown,
+): FarcasterWebhookFailureDiagnostic['kind'] | null {
+  let failure: FarcasterWebhookFailureDiagnostic['kind'] | null = null
+  errorCauseMatches(error, (current) => {
+    if (current instanceof FarcasterAppKeyVerifierError) {
+      failure = current.failure
+      return true
+    }
+    return false
+  })
+  return failure
 }
 
 function errorCauseHasName(error: unknown, expectedName: string): boolean {
