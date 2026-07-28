@@ -108,20 +108,25 @@ readiness, and production bundle inspection pass. Live two-client group
 discovery, send, receive, and re-entry remain the named acceptance boundary.
 
 The 2026-07-28 interoperable-names and compact-contacts checkpoint is
-**implemented locally**. Convos `profile_update` and `profile_snapshot`
-protobuf content types are registered as silent, non-push metadata. A DM uses
-only its peer's self-authored Convos profile name as the primary label, then
-retains ENS, Basename, registered-fname, and address information as secondary
-context/fallback. Opening a conversation publishes the user's bounded
-Farcaster display hint back as a non-push Convos profile update once per
-mounted session. A bounded, inbox-scoped on-device contacts directory is
-populated by real DMs. The explicit **Import Farcaster follows** action obtains
-one no-store, Quick Auth-bound Neynar page of up to 100 profiles, resolves
-their verified EVM addresses to XMTP inboxes on-device, and saves only
-reachable contacts. The full local gate passes with 51 test files/687 tests,
-the production build, and six production-shaped mobile Playwright checks;
-publication, canonical import proof, and two-client Convos-profile proof
-remain.
+deployed from main commit `2224956` as immutable Worker
+`c5dc4b60-e911-48d3-b4ad-1b74ee32e6d6`. Convos `profile_update` and
+`profile_snapshot` protobuf content types are registered as silent, non-push
+metadata. A DM uses only its peer's self-authored Convos profile name as the
+primary label, then retains ENS, Basename, registered-fname, and address
+information as secondary context/fallback. Opening a conversation publishes
+the user's bounded Farcaster display hint back as a non-push Convos profile
+update once per mounted session. A bounded, inbox-scoped on-device contacts
+directory is populated by real DMs and reachable group members. The explicit
+**Import Farcaster follows** action obtains one no-store, Quick Auth-bound
+Neynar page of up to 100 profiles, resolves their verified EVM addresses to
+XMTP inboxes on-device, and saves only reachable contacts. The full local gate
+passes with 51 test files/687 tests, the production build, and six
+production-shaped mobile Playwright checks. GitHub run `30398195891` passed
+for the exact commit; live root and health checks serve the immutable version,
+the production bundle contains the contacts and import UI, the protected
+follow route returns `401` without Quick Auth, and notification readiness
+remains available. Canonical authenticated import/pagination and two-client
+Convos-profile interoperability remain the named acceptance boundaries.
 
 The notification bridge is the active P1 milestone. Its production status and
 manifest webhook are enabled, and the encryption, D1, DNS, and vapid.party
@@ -465,6 +470,7 @@ Quick Auth also protects stateless recipient ENS forward resolution, a public-id
 | Remember the ENS choice by trusted Farcaster FID | Committed | Quick Auth supplies the authoritative FID; D1 stores only `accepted` or `dismissed` plus an update timestamp. |
 | Resolve known peer identities as display hints | Committed | Prefer the peer's self-authored Convos `profile_update` name. Retain ENS, then Basename, registered fname, and wallet address as secondary context/fallback; none authorize message delivery. |
 | Keep a compact on-device contact directory | Committed | Scope contacts by the active XMTP inbox, add real DM peers automatically, and let the user explicitly import paginated Farcaster follows only after a verified EVM address resolves to a reachable XMTP inbox. No server-side contact database or background social sync. |
+| Leave delivered-notification feed cleanup to the Farcaster host | Out | The current [official Mini App specification](https://miniapps.farcaster.xyz/docs/specification) and installed SDK expose delivery, launch context, permission events, and host-owned notification controls, but no delete, dismiss, or mark-read action. Reconsider if Farcaster adds a supported host capability; do not call undocumented client endpoints. |
 | Surface and alert on new XMTP DMs without an accept step | Committed | Fresh burner identities are a required acceptance path. Include `Unknown` DMs in the primary inbox and alert snapshot, register the installation welcome topic for the first message, and continue excluding explicitly `Denied` conversations. Revisit reputation filtering only through a separate privacy/identity design. |
 | Use Git and GitHub from the beginning | Committed | Each coherent task is verified, committed, and pushed before the next task begins. |
 | Adapt the live `recurse.bot` operating guide into repository-local memory and skills | Committed | Keep `AGENTS.md` canonical, add privacy-bounded memory and reusable workflow indexes, and support compatible harness aliases. Adapt the guide to this public Node repository: Codex/current harness identity instead of a forced persona, `rg` while `qmd` is unavailable, small Node tools instead of Python helpers, and an on-touch review instead of a write-capable scheduled workflow. |
@@ -692,7 +698,7 @@ Success condition: the optional label flow never moves identity state; the expli
 | Identity | Stable XMTP inbox/installation reuse | P0 | Deployed; acceptance pending | Persistent OPFS defaults and a single-owner Web Lock exist; launch, confirmed foreground re-entry, online actions, streams, and push enrollment resolve the Farcaster identity from the XMTP network, and a changed assignment closes/recreates the mounted client before old-inbox use. Canonical-origin host re-entry proof remains. |
 | Identity | Forward-verified ENS primary-name offer | P1 | Deployed; acceptance pending | Trusted-FID discovery, reverse/forward ENS proof, read-only XMTP relationship checks, remembered acceptance/dismissal, safe label-only use, and truthful separate-inbox states are tested; canonical-host proof remains. |
 | Identity | Peer fname, ENS, and Basename labels | P1 | Deployed; acceptance pending | Bounded, rate-limited protected batches resolve public wallet metadata without persistence; ambiguous/broken sources fall back to the visible address. A registered fname is secondary registry metadata, not a canonical profile or authorization. |
-| Identity | Convos-compatible XMTP profile names | P1 | Implemented locally | The exact `convos.org/profile_update:1.0` and `profile_snapshot:1.0` protobuf types are registered as silent/non-push codecs. A DM accepts only its peer's self-authored bounded profile name as primary and keeps wallet names as context; opening a conversation publishes the user's bounded Farcaster display hint once per mounted session. Publish/deployment and two-client Convos interoperability proof remain. |
+| Identity | Convos-compatible XMTP profile names | P1 | Deployed; acceptance pending | The exact `convos.org/profile_update:1.0` and `profile_snapshot:1.0` protobuf types are registered as silent/non-push codecs. A DM accepts only its peer's self-authored bounded profile name as primary and keeps wallet names as context; opening a conversation publishes the user's bounded Farcaster display hint once per mounted session. Production bundle/version proof passes; two-client Convos interoperability remains. |
 | Identity | Compact identity/privacy menu | P0 | Deployed; acceptance pending | Full active wallet and authoritative XMTP inbox ID, network, local-storage disclosure, ENS recheck, label selection/deletion, and an explicit signer-backed identity binding remain available after onboarding. Full-value wrapping is covered locally and the canonical bundle contains the disclosure; short-viewport host proof remains. |
 | Identity | ENS-backed Farcaster identity binding | P1 | Deployed; acceptance pending | A fresh different-inbox candidate requires exact external ENS-owner authorization plus explicit permanent/no-merge confirmation; the target is journaled before mutation, old-inbox recovery authority is preserved, and XMTP's stateless network assignment plus target state must both confirm the Farcaster identity on B. WalletConnect disconnects and later sessions use only Farcaster. Canonical-host repair of the existing `deanpierce.eth` migration plus two-client send/receive proof remains. |
 | Inbox | DM conversation list, including new senders | P0 | Deployed; acceptance pending | Cached-first sync/list/open/stream includes `Allowed` and `Unknown` DMs without acceptance and keeps `Denied` hidden. The full gate and deployment checks pass; fresh-burner and offline-host acceptance remain. |
@@ -707,16 +713,17 @@ Success condition: the optional label flow never moves identity state; the expli
 | Local data | Offline cached reading | P0 | Deployed; acceptance pending | The installed static shell can reopen without network, an already resumable XMTP client reads its OPFS inbox/messages without attempting sync while the browser reports offline, and network-only actions are clearly unavailable. Cold offline XMTP client construction remains an SDK boundary until the pinned Browser SDK exposes a supported offline-init path. |
 | Local data | Storage-loss/install-limit recognition | P0 | Deployed; acceptance pending | Browser primitives are checked before wallet access; curated storage, installation, and permanent inbox-limit states never auto-revoke or expose raw database identifiers. |
 | Local data | Installation management/revocation UI | P1 | Later | User can deliberately inspect and revoke an old installation when required. |
-| Local data | Compact inbox-scoped contacts | P1 | Implemented locally | Real DM peers populate a bounded local directory. Convos profile names outrank imported Farcaster names; clearing site data removes contacts, and the Worker never stores them. Publish/deployment and canonical re-entry proof remain. |
+| Local data | Compact inbox-scoped contacts | P1 | Deployed; acceptance pending | Real DM peers and reachable group members populate a bounded local directory. Convos profile names outrank imported Farcaster names; clearing site data removes contacts, and the Worker never stores them. Production bundle/version proof passes; canonical re-entry proof remains. |
 | Design | Converge-derived compact visual system | P0 | Deployed; acceptance pending | Palette, bubbles, surfaces, inputs, focus states, and empty states are deployed; embedded-device review remains. |
 | Backend | Cloudflare Worker Static Assets | P0 | Deployed | The Worker, `miniapp.converge.cv` Custom Domain, and Farcaster ownership are live; Cloudflare Workers Builds deploys verified `main` commits. Production XMTP remains a separate release gate. |
 | Backend | Authenticated XMTP payer Gateway | P0 | Blocked | A decentralized-mainnet move must prove Gateway selection/auth, per-user quotas, viable container hosting, and one funded send. Legacy `production` inbox testing can proceed independently. |
 | Backend | Protected API and minimal identity data | P1 | Deployed; acceptance pending | Exact-host Quick Auth routes keep identity tables limited to ENS `accepted`/`dismissed` choice by FID; separate notification tables contain only the documented encrypted token and opaque route/replay state. Canonical-host interactive identity proof remains. |
-| Backend | Explicit Farcaster-follow contact import | P1 | Implemented locally | A no-store Quick Auth route derives the FID, requests at most 100 Neynar follows with the same `viewer_fid`, minimizes public profile/verified-EVM fields, and leaves XMTP resolution plus storage to the browser. Publish/deployment, pagination, and canonical interactive proof remain. |
+| Backend | Explicit Farcaster-follow contact import | P1 | Deployed; acceptance pending | A no-store Quick Auth route derives the FID, requests at most 100 Neynar follows with the same `viewer_fid`, minimizes public profile/verified-EVM fields, and leaves XMTP resolution plus storage to the browser. The live route rejects missing auth and the production bundle contains the explicit import action; pagination and canonical interactive proof remain. |
 | Backend | Notification token data model | P1 | Verified production | Signed lifecycle tokens stay encrypted in Mini D1; production secrets, migrations, current-app-key verification, one real signed enable event, and canonical-host storage are proven. Disable/remove and invalid-token cleanup remain in gate 6. |
 | Operations | Redacted logs, health, and error visibility | P0 | Deployed; acceptance pending | Health/version and redaction-safe failures are implemented. Subscription and revocation stages now emit only fixed stage, numeric upstream status, and an allowlisted provider code; sampled production-log review remains. |
 | Notifications | Add Mini App and store notification permission | P1 | Verified production | The exact manifest webhook is live; a real signed enable event passed current app-key verification and created one encrypted native token plus one active opaque Mini route. Disable/remove cleanup acceptance remains in gate 6. |
 | Notifications | Notify on incoming XMTP message | P1 | Deployed; acceptance pending | The browser supplies one exact installation welcome topic plus `Allowed`/`Unknown` topic/HMAC state while excluding `Denied`; Mini validates the welcome topic against the installation proof, and vapid.party's existing global listener matches only enrolled routes and signs opaque callbacks. A fresh-sender test produced the exact fixed-copy native Farcaster alert without message plaintext or sender metadata, proving gate 3. Gate 5 still needs the client/platform, exact-count, tap-target, and resulting-DM details. |
+| Notifications | Clear delivered Farcaster feed entries when Mini opens | — | Out | Farcaster hosts own the delivered notification feed. The current specification and installed SDK provide no Mini App action to delete, dismiss, or mark those entries read; revisit only if a documented host capability appears. |
 | Convos | Import a signed Convos invite | P1 | Deployed; acceptance pending | Exact production invite URLs and raw slugs are validated locally, a typed XMTP join request is sent only after an explicit tap, and only an active exact-tag group added by the declared creator to the current inbox completes the import. |
 | Convos | Read and send in an imported group | P1 | Deployed; acceptance pending | Verified allowed groups share the cached-first timeline, pagination, send/retry path, and live-stream reliability of DMs without weakening consent or exposing invite/control traffic as ordinary chat. |
 | Convos | Re-share and open an imported invite | P1 | Later | URL builders exist, but QR/share/handoff UI is not implemented. Task 11d remains a separate post-import slice. |
