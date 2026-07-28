@@ -37,6 +37,7 @@ export type FarcasterWebhookDependencies = {
     requestOptions?: RequestInit,
   ) => VerifyAppKey
   encryptNotificationDetails: typeof encryptNotificationDetails
+  logFailure: (diagnostic: FarcasterWebhookFailureDiagnostic) => void
   parseWebhookEvent: (
     rawData: unknown,
     verifyAppKey: VerifyAppKey,
@@ -44,9 +45,22 @@ export type FarcasterWebhookDependencies = {
   revokeNotificationRoute: typeof revokeNotificationRoute
 }
 
+type FarcasterWebhookFailureDiagnostic = {
+  kind:
+    | 'configuration'
+    | 'current_network_timeout'
+    | 'current_network_verifier'
+    | 'lifecycle_apply'
+    | 'unexpected_verification'
+  stage: 'configuration' | 'lifecycle_apply' | 'verification'
+}
+
 const defaultDependencies: FarcasterWebhookDependencies = {
   createVerifyAppKeyWithHub,
   encryptNotificationDetails,
+  logFailure: (diagnostic) => {
+    console.error('farcaster_webhook_failure', diagnostic)
+  },
   parseWebhookEvent,
   revokeNotificationRoute,
 }
@@ -76,6 +90,10 @@ export async function handleFarcasterWebhook(
   const configuration = notificationConfiguration(env)
   const database = env.PREFERENCES
   if (!configuration || !database) {
+    dependencies.logFailure({
+      kind: 'configuration',
+      stage: 'configuration',
+    })
     return jsonError('notification_unavailable', 503)
   }
 
@@ -99,6 +117,10 @@ export async function handleFarcasterWebhook(
     parsed = await dependencies.parseWebhookEvent(body.value, verifyAppKey)
   } catch (error) {
     if (isInvalidWebhookError(error)) return jsonError('invalid_request', 400)
+    dependencies.logFailure({
+      kind: verificationFailureKind(error),
+      stage: 'verification',
+    })
     return jsonError('notification_unavailable', 503)
   } finally {
     clearTimeout(timeout)
@@ -153,6 +175,10 @@ export async function handleFarcasterWebhook(
       )
     }
   } catch {
+    dependencies.logFailure({
+      kind: 'lifecycle_apply',
+      stage: 'lifecycle_apply',
+    })
     return jsonError('notification_unavailable', 503)
   }
 
@@ -368,6 +394,28 @@ function isInvalidWebhookError(error: unknown): boolean {
   return error.name === 'VerifyJsonFarcasterSignature.InvalidDataError' ||
     error.name === 'VerifyJsonFarcasterSignature.InvalidAppKeyError' ||
     error.name === 'VerifyJsonFarcasterSignature.InvalidEventDataError'
+}
+
+function verificationFailureKind(
+  error: unknown,
+): FarcasterWebhookFailureDiagnostic['kind'] {
+  if (errorCauseHasName(error, 'AbortError')) return 'current_network_timeout'
+  if (errorCauseHasName(
+    error,
+    'VerifyJsonFarcasterSignature.VerifyAppKeyError',
+  )) return 'current_network_verifier'
+  return 'unexpected_verification'
+}
+
+function errorCauseHasName(error: unknown, expectedName: string): boolean {
+  let current = error
+  const visited = new Set<object>()
+  while (current && typeof current === 'object' && !visited.has(current)) {
+    visited.add(current)
+    if ('name' in current && current.name === expectedName) return true
+    current = 'cause' in current ? current.cause : undefined
+  }
+  return false
 }
 
 function hasControlCharacters(value: string): boolean {

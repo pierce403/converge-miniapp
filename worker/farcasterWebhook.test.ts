@@ -230,7 +230,35 @@ describe('Farcaster notification webhook', () => {
 
     expect(invalid.status).toBe(400)
     expect(unavailable.status).toBe(503)
+    expect(unavailableDependencies.logFailure).toHaveBeenCalledWith({
+      kind: 'current_network_verifier',
+      stage: 'verification',
+    })
     expect(storage.size()).toBe(0)
+  })
+
+  it('classifies a nested verifier timeout without logging the raw error', async () => {
+    const storage = fakeNotificationDatabase()
+    const dependencies = webhookDependencies()
+    const timeout = new DOMException('sensitive provider detail', 'AbortError')
+    dependencies.verifyAppKey.mockRejectedValue(
+      Object.assign(new Error('sensitive wrapper detail'), { cause: timeout }),
+    )
+
+    const response = await handleFarcasterWebhook(
+      webhookRequest({ event: 'miniapp_removed' }),
+      webhookEnvironment(storage.database),
+      dependencies.value,
+    )
+
+    expect(response.status).toBe(503)
+    expect(dependencies.logFailure).toHaveBeenCalledWith({
+      kind: 'current_network_timeout',
+      stage: 'verification',
+    })
+    expect(JSON.stringify(dependencies.logFailure.mock.calls)).not.toContain(
+      'sensitive',
+    )
   })
 
   it('rejects a signing app key that is no longer active', async () => {
@@ -315,17 +343,22 @@ describe('Farcaster notification webhook', () => {
 
   it('returns a retryable failure without plaintext when encrypted persistence fails', async () => {
     const storage = fakeNotificationDatabase({ failWrites: true })
+    const dependencies = webhookDependencies()
     const response = await handleFarcasterWebhook(
       webhookRequest({
         event: 'notifications_enabled',
         notificationDetails: { token, url: deliveryUrl },
       }),
       webhookEnvironment(storage.database),
-      webhookDependencies().value,
+      dependencies.value,
     )
 
     expect(response.status).toBe(503)
     expect(await response.text()).not.toContain(token)
+    expect(dependencies.logFailure).toHaveBeenCalledWith({
+      kind: 'lifecycle_apply',
+      stage: 'lifecycle_apply',
+    })
     expect(storage.size()).toBe(0)
   })
 })
@@ -349,11 +382,14 @@ function webhookDependencies(appFid = 9152) {
   })
   const createVerifier = vi.fn(() => verifyAppKey)
   const revokeRoute = vi.fn().mockResolvedValue(false)
+  const logFailure = vi.fn()
   return {
     createVerifier,
+    logFailure,
     value: {
       createVerifyAppKeyWithHub: createVerifier,
       encryptNotificationDetails,
+      logFailure,
       parseWebhookEvent,
       revokeNotificationRoute: revokeRoute,
     } satisfies FarcasterWebhookDependencies,
