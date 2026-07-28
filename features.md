@@ -95,6 +95,18 @@ and production notification-readiness check pass. Because the copy is emitted
 only during a real delivery, the next incoming-message alert remains the honest
 Farcaster-rendering check for the new title.
 
+The 2026-07-28 ordinary-group interoperability checkpoint is deployed from
+main commit `8c700dd` as immutable Worker
+`e7d2b3c5-bb28-4e65-9368-979eb3ec2690`. Active `Allowed` and `Unknown` XMTP
+groups now use the normal inbox, read, send/retry, pagination, and live-stream
+paths without requiring a Convos invite; `Denied` and inactive groups remain
+excluded. Ordinary groups are labeled **XMTP group**, while only a verified
+signed import is classified **Convos group** or may complete a Convos access
+request. The 671-test full gate, six production-shaped Playwright checks,
+exact-SHA GitHub and Cloudflare checks, live root/health, notification
+readiness, and production bundle inspection pass. Live two-client group
+discovery, send, receive, and re-entry remain the named acceptance boundary.
+
 The notification bridge is the active P1 milestone. Its production status and
 manifest webhook are enabled, and the encryption, D1, DNS, and vapid.party
 dependencies are configured. Signed Farcaster lifecycle events now create the
@@ -665,7 +677,7 @@ Success condition: the optional label flow never moves identity state; the expli
 | Identity | Compact identity/privacy menu | P0 | Deployed; acceptance pending | Full active wallet and authoritative XMTP inbox ID, network, local-storage disclosure, ENS recheck, label selection/deletion, and an explicit signer-backed identity binding remain available after onboarding. Full-value wrapping is covered locally and the canonical bundle contains the disclosure; short-viewport host proof remains. |
 | Identity | ENS-backed Farcaster identity binding | P1 | Deployed; acceptance pending | A fresh different-inbox candidate requires exact external ENS-owner authorization plus explicit permanent/no-merge confirmation; the target is journaled before mutation, old-inbox recovery authority is preserved, and XMTP's stateless network assignment plus target state must both confirm the Farcaster identity on B. WalletConnect disconnects and later sessions use only Farcaster. Canonical-host repair of the existing `deanpierce.eth` migration plus two-client send/receive proof remains. |
 | Inbox | DM conversation list, including new senders | P0 | Deployed; acceptance pending | Cached-first sync/list/open/stream includes `Allowed` and `Unknown` DMs without acceptance and keeps `Denied` hidden. The full gate and deployment checks pass; fresh-burner and offline-host acceptance remain. |
-| Inbox | Existing XMTP group conversations | P1 | Implemented locally | Active `Allowed` and `Unknown` groups appear, open, send/retry, paginate, and stream through the shared conversation path; `Denied` and inactive groups remain excluded. Ordinary groups are labeled **XMTP group**. Only a group that passes the signed Convos-import proof receives the **Convos group** classification or satisfies an invite request. Full local and live two-client acceptance remain. |
+| Inbox | Existing XMTP group conversations | P1 | Deployed; acceptance pending | Active `Allowed` and `Unknown` groups appear, open, send/retry, paginate, and stream through the shared conversation path; `Denied` and inactive groups remain excluded. Ordinary groups are labeled **XMTP group**. Only a group that passes the signed Convos-import proof receives the **Convos group** classification or satisfies an invite request. The full local and deployment gates pass; live two-client discovery, send, receive, and re-entry remain. |
 | Inbox | Separate message requests | — | Out | The first release deliberately puts `Unknown` DMs in the primary inbox. Future spam/reputation filtering requires a separate privacy and identity design rather than restoring an acceptance gate by default. |
 | Compose | Address-or-ENS recipient reachability | P0 | Deployed; acceptance pending | Addresses are checksummed directly; bounded ENS names are normalized and forward-resolved through the protected Worker before the full name/address pair is confirmed and checked with `canMessage()`. Canonical-host and two-client network proof remain. |
 | Compose | Farcaster handle/name recipient search | P1 | Later | Trusted directory lookup maps profile to verified candidate identity before `canMessage()`. |
