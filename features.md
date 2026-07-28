@@ -54,13 +54,15 @@ from the saved migration journal, and clears that value on disconnect or
 reassignment quarantine. The 623-test full local gate and canonical
 bundle-content check pass.
 
-The 2026-07-28 receive-path follow-up is implemented locally pending its
-Cloudflare build. A stream event remains only a hint until the current network
-inbox assignment is rechecked, but overlapping manual, foreground, and stream
-refreshes now use a single-flight drain instead of silently dropping the stream
-hint when another inbox refresh is active. Focused regression coverage proves
-both an ordinary `Allowed` stream refresh and the overlapping-refresh case while
-preserving the stale-inbox quarantine behavior.
+The 2026-07-28 receive-path follow-up is deployed from main commit `43b350f`
+as immutable Worker `12629fd9-b1e1-4349-a55c-994074902ea8`. A stream event
+remains only a hint until the current network inbox assignment is rechecked, but
+overlapping initial, manual, foreground, and stream refreshes now use a
+single-flight drain instead of silently dropping the stream hint when another
+inbox refresh is active. Regression coverage proves the cached-first setup race,
+an ordinary `Allowed` stream refresh, and the overlapping-refresh case while
+preserving stale-inbox quarantine. The 658-test local gate, GitHub `verify`
+gate, end-to-end suite, Cloudflare build, and live `/api/health` check pass.
 
 The notification bridge is the active P1 milestone. Its production status and
 manifest webhook are enabled, and the encryption, D1, DNS, and vapid.party
