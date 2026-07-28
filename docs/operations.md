@@ -24,7 +24,7 @@ This runbook covers the Cloudflare-hosted SPA and Worker API at `https://miniapp
 
 The production `PREFERENCES` database is `converge-miniapp-preferences`; preview uses the separate `converge-miniapp-preview-preferences` database. Mini has no KV, R2, Queue, Durable Object, identity-link table, plaintext notification token store, or persistent application session store. Retryable XMTP observation and callback delivery run in vapid.party's separate queue-backed service.
 
-## Current deployment state (2026-07-27)
+## Current deployment state (2026-07-28)
 
 The Cloudflare Worker and its `miniapp.converge.cv` Custom Domain are live. Cloudflare Workers Builds pulls and deploys verified `main` commits through the Cloudflare GitHub App; use `/api/health` and `wrangler deployments list` for the current immutable deployment ID instead of recording a value here that changes on every release.
 
@@ -180,7 +180,21 @@ subscription row. Never use a real notification token in the canary.
 
 Production now keeps `FARCASTER_NOTIFICATIONS_ENABLED` at the committed exact string `"true"` while preview remains exactly `"false"`. Values such as `"TRUE"`, `"1"`, or whitespace-padded `"true"` do not enable rollout. Preview remains unavailable even with the flag and credentials because the structural bridge is production-only. Revert production to exact `"false"` to suppress status, webhook discovery, and the browser prompt if live acceptance exposes an unsafe failure.
 
-The verified code-bearing production alert checkpoint shipped through Cloudflare Workers Builds in commit `0228ea5` and immutable Worker version `0226899b-3b08-401e-a1a0-fd5dad9b0b59`. Production returns `{"available":true}`, the manifest contains `https://miniapp.converge.cv/api/farcaster/webhook`, and the deployed browser signs the exact returned `signatureText`. The Worker requires exact provider and first-party success envelopes and emits only a structured fixed stage, numeric upstream status, and allowlisted provider code for subscription/revocation failures. ENS-only deletion is separate from full account deletion and cannot remove alert state. Arbitrary response bodies and caught SDK details are neither logged nor rendered. Complete one genuine callback, one closed-app delivery, signed-token rotation, disable/removal, installation replacement, callback replay, invalid-token deletion, upstream throttling, and app-side route revocation acceptance. Review D1 only for ciphertext, opaque handles, and delivery IDs, and inspect sampled logs for token, URL, FID, signature, topic, HMAC, inbox, installation, sender, or message leakage. Reverting production to `"false"` withdraws public availability but does not erase existing encrypted tokens or replace route-level revocation.
+Task 10a shipped through Cloudflare Workers Builds in commit `ae21679` and
+immutable Worker version `d825462f-a62f-4bd2-83bb-5d16bf646140`. The exact
+commit's local gate, GitHub CI, and Cloudflare Build pass; production returns
+`{"available":true}`, `/api/health` identifies that version, the manifest
+contains `https://miniapp.converge.cv/api/farcaster/webhook`, and live client
+chunks contain the new inbox copy and welcome-topic registration. Reopen the
+Mini once to replace any older active vapid.party snapshot before a
+fresh-burner test. Complete one genuine callback, one closed-app delivery,
+signed-token rotation, disable/removal, installation replacement, callback
+replay, invalid-token deletion, upstream throttling, and app-side route
+revocation acceptance. Review D1 only for ciphertext, opaque handles, and
+delivery IDs, and inspect sampled logs for token, URL, FID, signature, topic,
+HMAC, inbox, installation, sender, or message leakage. Reverting production to
+`"false"` withdraws public availability but does not erase existing encrypted
+tokens or replace route-level revocation.
 
 ## Farcaster account association
 
