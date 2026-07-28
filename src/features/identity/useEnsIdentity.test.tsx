@@ -68,7 +68,7 @@ describe('useEnsIdentity', () => {
     })
   })
 
-  it('deletes the account-wide preference through the authenticated API', async () => {
+  it('deletes only the ENS preference through the authenticated API', async () => {
     mocks.fetch
       .mockResolvedValueOnce(Response.json({
         ...availableResponse,
@@ -86,7 +86,7 @@ describe('useEnsIdentity', () => {
     await act(async () => result.current.clearPreference())
 
     expect(result.current.preference).toBeNull()
-    expect(mocks.fetch).toHaveBeenLastCalledWith('/api/me', {
+    expect(mocks.fetch).toHaveBeenLastCalledWith('/api/me/ens-preference', {
       method: 'DELETE',
     })
   })

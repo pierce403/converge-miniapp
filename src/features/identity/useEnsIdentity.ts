@@ -166,7 +166,7 @@ export function useEnsIdentity({
 
   const clearPreference = useCallback(async () => {
     const { sdk } = await import('@farcaster/miniapp-sdk')
-    const response = await sdk.quickAuth.fetch('/api/me', {
+    const response = await sdk.quickAuth.fetch('/api/me/ens-preference', {
       method: 'DELETE',
     })
     if (!response.ok) {

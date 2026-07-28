@@ -501,8 +501,12 @@ async function identityApi(
   if (url.pathname === '/api/me/ens' && request.method !== 'GET') {
     return methodNotAllowed('GET')
   }
-  if (url.pathname === '/api/me/ens-preference' && request.method !== 'PUT') {
-    return methodNotAllowed('PUT')
+  if (
+    url.pathname === '/api/me/ens-preference' &&
+    request.method !== 'PUT' &&
+    request.method !== 'DELETE'
+  ) {
+    return methodNotAllowed('PUT, DELETE')
   }
   if (url.pathname === '/api/me' && request.method !== 'DELETE') {
     return methodNotAllowed('DELETE')
@@ -542,6 +546,15 @@ async function identityApi(
     }
 
     if (url.pathname === '/api/me/ens-preference') {
+      if (request.method === 'DELETE') {
+        await env.PREFERENCES.prepare(
+          'DELETE FROM ens_identity_preferences WHERE fid = ?1',
+        ).bind(fid).run()
+        return new Response(null, {
+          status: 204,
+          headers: { ...securityHeaders, 'cache-control': 'no-store' },
+        })
+      }
       const choice = await preferenceChoice(request)
       if (!choice) return jsonError('invalid_request', 400)
       await env.PREFERENCES.prepare(`

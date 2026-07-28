@@ -735,7 +735,7 @@ describe('worker API', () => {
     )
   })
 
-  it('stores an idempotent account-wide choice and deletes it on request', async () => {
+  it('clears an ENS preference without deleting notification state', async () => {
     const preferences = fakePreferences()
     const dependencies = identityDependencies()
     const preferencesOnlyEnvironment = environment({
@@ -755,15 +755,33 @@ describe('worker API', () => {
     expect(preferences.choice()).toBe('accepted')
 
     const deleted = await handleRequest(
-      authorizedRequest('/api/me', { method: 'DELETE' }),
+      authorizedRequest('/api/me/ens-preference', { method: 'DELETE' }),
       preferencesOnlyEnvironment,
       dependencies,
     )
     expect(deleted.status).toBe(204)
     expect(preferences.choice()).toBeNull()
+    expect(preferences.notificationRows()).toBe(1)
+    expect(dependencies.revokeNotificationRoute).not.toHaveBeenCalled()
+  })
+
+  it('deletes all server-side account metadata only through /api/me', async () => {
+    const preferences = fakePreferences('accepted')
+    const dependencies = identityDependencies()
+    const accountEnvironment = environment({
+      PREFERENCES: preferences.database,
+    })
+    const deleted = await handleRequest(
+      authorizedRequest('/api/me', { method: 'DELETE' }),
+      accountEnvironment,
+      dependencies,
+    )
+
+    expect(deleted.status).toBe(204)
+    expect(preferences.choice()).toBeNull()
     expect(preferences.notificationRows()).toBe(0)
     expect(dependencies.revokeNotificationRoute).toHaveBeenCalledWith(
-      preferencesOnlyEnvironment,
+      accountEnvironment,
       8531,
     )
   })
