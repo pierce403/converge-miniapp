@@ -251,13 +251,14 @@ describe('XMTP to Farcaster notification bridge', () => {
       error: 'invalid_app_secret',
       diagnostics: { credential: 'do-not-reflect-this' },
     }, { status: 401 }))
+    const logFailure = vi.fn()
     const response = await handleNotificationUserApi(
       jsonRequest('/api/me/notifications/xmtp-ticket', {
         registration: requestedRegistration(),
       }),
       environment(storage.database),
       8531,
-      dependencies({ fetch: upstreamFetch }),
+      dependencies({ fetch: upstreamFetch, logFailure }),
     )
 
     expect(response.status).toBe(503)
@@ -266,6 +267,13 @@ describe('XMTP to Farcaster notification bridge', () => {
       error: 'notification_unavailable',
     })
     expect(responseText).not.toContain('do-not-reflect-this')
+    expect(logFailure).toHaveBeenCalledWith({
+      stage: 'ticket_upstream',
+      status: 401,
+    })
+    expect(JSON.stringify(logFailure.mock.calls)).not.toContain(
+      'do-not-reflect-this',
+    )
   })
 
   it('keeps the vapid.party timeout active while reading the response body', async () => {
@@ -284,13 +292,14 @@ describe('XMTP to Farcaster notification bridge', () => {
           return stalledJsonResponse(signal)
         },
       )
+      const logFailure = vi.fn()
       const pendingResponse = handleNotificationUserApi(
         jsonRequest('/api/me/notifications/xmtp-ticket', {
           registration: requestedRegistration(),
         }),
         environment(storage.database),
         8531,
-        dependencies({ fetch: upstreamFetch }),
+        dependencies({ fetch: upstreamFetch, logFailure }),
       )
 
       await fetchStarted
@@ -298,6 +307,9 @@ describe('XMTP to Farcaster notification bridge', () => {
       const response = await pendingResponse
 
       expect(response.status).toBe(503)
+      expect(logFailure).toHaveBeenCalledWith({
+        stage: 'ticket_response',
+      })
       expect(upstreamFetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
     } finally {
       vi.useRealTimers()

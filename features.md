@@ -107,10 +107,13 @@ Live baseline recorded on 2026-07-27:
   handling. The verifier now follows only bounded HTTPS redirects within
   `neynar.com` and never forwards its API key through an automatic or
   cross-domain redirect;
-- production D1 remains at zero native subscriptions and zero XMTP routes even
-  though the Farcaster host reports alerts enabled for the affected
-  installation. Its open-app ticket request therefore ends at
-  `425 notification_token_pending` before XMTP signing or vapid.party;
+- production D1 remained at zero native subscriptions and zero XMTP routes
+  through the pre-fix baseline. After bounded Neynar redirect handling shipped,
+  a real enable event created one encrypted native subscription and one active
+  opaque route, with no webhook failure. The old `425` is resolved; enrollment
+  now reaches the vapid.party ticket boundary and returns `503`. Sanitized
+  ticket diagnostics distinguish transport, upstream status, and invalid
+  success-shape failures without logging credentials or registration data;
 - the deployed browser now preserves only allowlisted registration stage,
   error code, and HTTP status in its user-facing diagnostic. For this live
   failure it displays `ticket request`, `notification_token_pending`, and
@@ -136,8 +139,8 @@ Delivery sequence and gates:
 | --- | --- | --- |
 | 1. Freeze the live contracts and repair Converge safety issues | Deployed; acceptance pending | The current wrapped Farcaster outcomes parse correctly; only HMAC-backed `Allowed` topics are registered; a client-local disable cannot revoke another client's route; zero account-wide allowed topics revoke the shared route; valid ownership is required for readiness; and an exact rollout flag keeps credentials separate from public enablement. The 595-test full gate, sequential preview-config dry run, immutable production deployment, and automated rollout-boundary checks pass. Real delivery remains in gate 5. |
 | 2. Verify the production vapid.party app and DNS binding | Deployed; acceptance pending | The retained app ID/key match the exact public `_vapid-party.miniapp.converge.cv` TXT record, and all three Worker app-secret names remain configured. The first production enrollment must make vapid.party report fresh verification without replacing its retained secret. |
-| 3. Prove the two Workers together in production | Deployed; acceptance pending | Preview migration `0003` is applied, no migrations are pending, and the empty table baseline is verified. A real Browser SDK installation must still enroll; a listener event must yield one verified opaque callback; callback replay and wrong-key cases must fail; no alert prompt may appear outside the supported canonical Farcaster host. |
-| 4. Configure and promote production token lifecycle | In progress: authenticated redirect repair | Migrations, rollout, manifest, and exact webhook are deployed. The Worker-native verifier proved both Neynar hostnames throw before an HTTP response when automatic redirects are forbidden. Deploy bounded manual HTTPS redirects within `neynar.com`, require the synthetic unauthorized-key canary to return `400`, then require a real add/enable event to create one encrypted `(fid, appFid)` row. |
+| 3. Prove the two Workers together in production | In progress: ticket boundary | Preview migration `0003` is applied and no migrations are pending. The first native token and opaque route now exist, but vapid.party ticket issuance returns `503`. Use only the sanitized request/upstream-status/response-shape diagnostic to repair it, then require Browser SDK enrollment and one verified opaque callback. |
+| 4. Configure and promote production token lifecycle | Verified production | Bounded manual Neynar redirects are live on Worker `a639f300-5b00-44fd-b675-b9897e4fcfb2`; the synthetic unauthorized-key canary returns `400`; a real enable event creates exactly one encrypted `(fid, appFid)` row; and no sanitized webhook failure occurs. |
 | 5. Prove a closed-app alert in Farcaster | Planned | With Converge closed, a second XMTP client sends a message; exactly one generic native alert arrives, opens the canonical app, and contains no sender, message, or conversation data. |
 | 6. Prove cleanup, recovery, and operations | Planned | Disable, re-enable, remove, invalid-token, throttling, retry, route-revocation, and sampled-log checks pass; the runbook records rollback and health checks. |
 

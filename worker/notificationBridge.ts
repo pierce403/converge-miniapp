@@ -130,14 +130,23 @@ type DeliveryRow = {
 export type NotificationBridgeDependencies = {
   decryptNotificationDetails: typeof decryptNotificationDetails
   fetch: typeof fetch
+  logFailure?: (diagnostic: NotificationBridgeFailureDiagnostic) => void
   now: () => number
   randomBytes: (length: number) => Uint8Array
   verifyCallbackSignature: typeof verifyVapidPartySignature
 }
 
+type NotificationBridgeFailureDiagnostic = {
+  stage: 'ticket_request' | 'ticket_response' | 'ticket_upstream'
+  status?: number
+}
+
 const defaultDependencies: NotificationBridgeDependencies = {
   decryptNotificationDetails,
   fetch: (input, init) => fetch(input, init),
+  logFailure: (diagnostic) => {
+    console.error('notification_bridge_failure', diagnostic)
+  },
   now: () => Date.now(),
   randomBytes: (length) => crypto.getRandomValues(new Uint8Array(length)),
   verifyCallbackSignature: verifyVapidPartySignature,
@@ -226,15 +235,25 @@ export async function handleNotificationUserApi(
         },
         dependencies,
       )
-      if (!upstream.ok) return upstreamResponse(upstream)
+      if (!upstream.ok) {
+        dependencies.logFailure?.({
+          stage: 'ticket_upstream',
+          status: upstream.status,
+        })
+        return upstreamResponse(upstream)
+      }
       const ticket = acceptedTicketResponse(upstream.body)
-      if (!ticket) return jsonError('notification_unavailable', 503)
+      if (!ticket) {
+        dependencies.logFailure?.({ stage: 'ticket_response' })
+        return jsonError('notification_unavailable', 503)
+      }
       return Response.json({
         expiresAt: ticket.expiresAt,
         registration,
         ticket: ticket.token,
       }, { headers: responseHeaders })
     } catch {
+      dependencies.logFailure?.({ stage: 'ticket_request' })
       return jsonError('notification_unavailable', 503)
     }
   }
