@@ -2575,10 +2575,10 @@ describe('useXmtpMessaging', () => {
       '2026-07-14T12:02:00Z',
     )))
 
-    await waitFor(() => expect(loadInbox).toHaveBeenCalledTimes(2), {
-      timeout: 2_000,
-    })
-    expect(result.current.conversations).toEqual([updatedConversation])
+    await waitFor(() => {
+      expect(loadInbox).toHaveBeenCalledTimes(2)
+      expect(result.current.conversations).toEqual([updatedConversation])
+    }, { timeout: 2_000 })
   })
 
   it('drains an Allowed stream refresh that overlaps a manual refresh', async () => {
@@ -2626,10 +2626,10 @@ describe('useXmtpMessaging', () => {
       await refreshing
     })
 
-    await waitFor(() => expect(loadInbox).toHaveBeenCalledTimes(3), {
-      timeout: 2_000,
-    })
-    expect(result.current.conversations).toEqual([updatedConversation])
+    await waitFor(() => {
+      expect(loadInbox).toHaveBeenCalledTimes(3)
+      expect(result.current.conversations).toEqual([updatedConversation])
+    }, { timeout: 2_000 })
   })
 
   it('does not render an old-stream message after the identity moves', async () => {
