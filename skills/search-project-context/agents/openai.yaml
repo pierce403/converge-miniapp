@@ -1,0 +1,4 @@
+interface:
+  display_name: "Search Project Context"
+  short_description: "Recover current project decisions and evidence."
+  default_prompt: "Find the authoritative current context for this Converge Mini task and identify anything that needs live verification."

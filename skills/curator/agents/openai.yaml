@@ -1,0 +1,4 @@
+interface:
+  display_name: "Curator"
+  short_description: "Keep repository knowledge compact and current."
+  default_prompt: "Curate a durable lesson into the correct Converge Mini documentation or skill."

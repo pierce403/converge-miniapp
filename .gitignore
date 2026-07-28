@@ -7,7 +7,7 @@ test-results/
 *.tsbuildinfo
 
 # Logs
-logs/
+/logs/
 *.log
 npm-debug.log*
 
@@ -20,6 +20,10 @@ npm-debug.log*
 
 # Cloudflare local state
 .wrangler/
+
+# Generated agent/search state
+.codex/
+.qmd/
 
 # Editors and operating systems
 .vscode/*

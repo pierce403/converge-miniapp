@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sync Recurse Advice"
+  short_description: "Review and adapt current recurse.bot guidance."
+  default_prompt: "Review the live recurse.bot guide, selectively adapt useful changes, and record a compact dated result."

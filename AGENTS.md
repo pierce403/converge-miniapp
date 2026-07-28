@@ -4,6 +4,12 @@
 
 These instructions apply to the entire repository.
 
+## Persona and rapport
+
+- The active harness identity is the working collaboration name. This repository does not impose a separate agent persona or require repetitive introductions.
+- Adapt external agent guidance to this project's real constraints. Do not copy a sample personality, tool choice, or process merely because it appears in a template.
+- Preserve explicit, stable collaborator workflow preferences only when they are useful to future work and safe for a public repository. Never infer or persist personal traits.
+
 ## Project direction
 
 - Build a deliberately small XMTP messaging app that runs as a Farcaster Mini App.
@@ -12,15 +18,43 @@ These instructions apply to the entire repository.
 - Deploy the SPA and first-party API to Cloudflare Workers at `miniapp.converge.cv`. Keep the XMTP payer Gateway behind a replaceable boundary so Cloudflare Containers and an external container host can be compared independently.
 - Use the Farcaster host-provided EVM wallet as the first-release XMTP identity. Never silently substitute an app-owned private key.
 
+## Responsibilities
+
+- Keep product scope, status, decisions, acceptance gates, and immutable production evidence accurate in `features.md`.
+- Preserve the host-wallet custody boundary, current-network XMTP inbox correctness, client-side message privacy, and redacted notification diagnostics.
+- Verify drift-prone integration claims against current code, current official documentation, or live production evidence before presenting them as current.
+- Keep operations and privacy runbooks aligned with implementation and infrastructure changes.
+- Finish each authorized coherent task with proportionate verification, a reviewed commit, a push to `main`, and production proof when the change is deployable.
+- Curate durable knowledge: merge, correct, or remove stale guidance instead of only appending more notes.
+
 ## Working agreement
 
-- Start by reading this file, `features.md`, the current Git status, and any task-specific docs.
+- Start by reading this file, the introduction/current checkpoint and task-relevant sections of `features.md`, the current Git status, `MEMORY.md`, `SKILLS.md`, and any task-specific docs. Reserve a full read of the long product plan for scope-wide audits.
+- When a cataloged workflow clearly matches the task, read its `SKILL.md` completely before acting. Use the smallest matching set and do not carry a skill into an unrelated task.
 - Work in small, coherent tasks. Verify each task, commit it, and push it to GitHub before starting the next task.
 - Keep unrelated changes out of the same commit and preserve user-authored changes already in the worktree.
-- Record decisions, successful approaches, failed experiments, and important collaborator preferences while they are fresh.
+- Record durable decisions, successful approaches, failed experiments, verified commands, pitfalls, and non-sensitive collaborator workflow preferences while they are fresh and in the canonical destination described below.
 - Prefer repeatable CLI commands and repo-local configuration over undocumented dashboard steps.
 - Use GitHub CLI and HTTPS-backed GitHub authentication for repository operations; do not spend time debugging SSH first.
 - If requirements are uncertain, write the uncertainty into `features.md` as an open decision instead of silently turning an assumption into scope.
+
+## Knowledge routing and retrieval
+
+- `AGENTS.md`: mandatory repository-wide operating invariants and responsibilities.
+- `features.md`: product scope, product/architecture decisions, acceptance gates, delivery status, and immutable deployment evidence.
+- `docs/operations.md`: durable infrastructure, deployment, rollback, and operator procedures.
+- `docs/privacy.md`: data inventory, retention, logging, and repository-memory privacy boundaries.
+- `MEMORY.md` and `agent-memory/`: a compact navigation index, durable cross-task lessons, privacy policy, and dated review logs. Link to canonical documents rather than copying mutable truth.
+- `SKILLS.md` and `skills/`: compact catalog and repeatable, class-level workflows. Prefer improving an umbrella skill over creating an incident-specific souvenir.
+- Search current code and indexed Markdown with targeted `rg` before relying on memory. `qmd` is optional and currently unavailable because its installed native database module has a Node ABI mismatch; do not document or require it as working until a separate repair is verified.
+- Prefer purpose-built tools and connectors. `mcporter` is an optional shell-mediated MCP fallback, not a requirement when a direct integration exists.
+- Treat the repository as public. Store concise decisions, redacted evidence, outcomes, and reusable lessons—not transcripts, hidden reasoning, raw logs, credentials, browser-session state, private conversation data, or production identifiers.
+
+## Harness compatibility
+
+- `AGENTS.md` is canonical.
+- `CLAUDE.md` and `GEMINI.md` are compatibility symlinks to `AGENTS.md`; never edit them as independent instruction files.
+- Generated harness/search state such as `.codex/` and `.qmd/` stays untracked.
 
 ## Product guardrails
 

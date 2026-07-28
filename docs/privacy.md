@@ -67,3 +67,21 @@ The Worker does not store the ENS recipient query, ENS binding metadata, ENS nam
 Production and preview use separate D1 databases through the `PREFERENCES` binding. There is no analytics SDK, advertising tracker, contacts database, identity-link table, plaintext notification token store, or plaintext-message API. The configured ownership values are Farcaster's public account-association strings.
 
 Application code does not log the raw ENS recipient query, Quick Auth token, FID, resolved address/name, saved preference, notification URL/token, Farcaster Signature, XMTP identifiers, topics, HMAC keys, tickets, proofs, receipts, opaque handles, or delivery IDs. User-facing alert-registration failures contain only fixed allowlisted explanation text plus a registration stage, error code, and optional HTTP status; arbitrary response bodies, caught SDK messages, identifiers, tickets, signatures, and tokens are never reflected. Server-side enrollment diagnostics are one structured `notification_bridge_failure` event containing only a fixed stage, numeric upstream status, and—when present in the current vapid.party contract—an allowlisted provider code. Closed-app alerts become operational only when the separately deployed vapid.party listener/queue, Mini credentials, signed lifecycle webhook, and canonical-host delivery path all pass live verification; configured token storage or successful enrollment alone is not evidence of native display.
+
+## Repository-local agent memory
+
+The Git repository is a public data surface. `MEMORY.md`, `SKILLS.md`, and
+`agent-memory/` may contain public technical decisions, file paths, verified
+commands, redacted failure categories, compact evidence summaries, and explicit
+generic workflow preferences. They must link to canonical product/operations
+facts rather than copy mutable production state.
+
+They must never contain raw conversation transcripts, hidden reasoning, message
+content or drafts, attachments, conversation membership, private keys,
+signatures, JWTs, notification URLs/tokens, cookies, browser profiles, pairing
+URIs, wallet/FID/inbox/installation/conversation/topic/HMAC identifiers, raw D1
+exports, raw production logs/payloads, credential-bearing URLs, personal
+biography, contacts, inferred preferences, or screenshots of authenticated
+state. Retain only the concise decision, redacted evidence, outcome, and
+reusable lesson. Treat this boundary as public even if repository visibility
+later changes.

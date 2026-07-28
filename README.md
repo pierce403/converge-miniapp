@@ -5,6 +5,14 @@ A deliberately small XMTP inbox built as a Farcaster Mini App and hosted on Clou
 The product and delivery contract lives in [`features.md`](./features.md).
 Deployment, ownership, rollback, and the production Gateway blocker are in [`docs/operations.md`](./docs/operations.md). The concrete data inventory is in [`docs/privacy.md`](./docs/privacy.md).
 
+## Agent operating context
+
+[`AGENTS.md`](./AGENTS.md) is the canonical operating agreement.
+[`MEMORY.md`](./MEMORY.md) indexes durable, public-safe project knowledge, and
+[`SKILLS.md`](./SKILLS.md) catalogs reusable workflows. Compatible harnesses
+reach the same instructions through `CLAUDE.md` and `GEMINI.md` symlinks rather
+than independent copies.
+
 ## Local development
 
 Requirements: Node.js 22.13 or a supported newer even-numbered release, plus npm.
@@ -38,6 +46,17 @@ npm run test:e2e
 ```
 
 Run the deterministic type/lint/unit/build gates with `npm run check`. The browser smoke test uses the installed Chrome release and runs separately with `npm run test:e2e`.
+
+`npm run verify` is the complete local checkpoint wrapper: it checks the
+HEAD-wide diff, runs `npm run check`, starts the production-shaped preview for
+the browser suite, exercises the root and `/api/health`, and checks the diff
+again. `npm run knowledge:check` validates the repository memory, aliases, and
+skill catalog; `npm run skills:check` invokes the skill-creator validator for
+every repository skill in a Codex environment.
+`npm run advice:check -- --json` is an explicit,
+networked operator check for the current <https://recurse.bot/> guide; add
+`--include-text` when reviewing its recommendations from the same hashed
+response. It is deliberately not part of CI.
 
 ## Deployment
 

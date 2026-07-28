@@ -1,0 +1,4 @@
+interface:
+  display_name: "Diagnose Message Delivery"
+  short_description: "Trace XMTP messages and Farcaster alerts safely."
+  default_prompt: "Diagnose the earliest failing boundary in Converge Mini message receive or Farcaster alert delivery using redacted evidence."

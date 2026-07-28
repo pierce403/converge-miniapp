@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish Main Checkpoint"
+  short_description: "Verify, push, and prove one coherent change."
+  default_prompt: "Take one coherent Converge Mini change through verification, reviewed commit, push, and production proof."

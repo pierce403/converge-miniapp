@@ -217,6 +217,34 @@ Worker JSON responses add the applicable transport/browser headers directly beca
 
 Cloudflare Worker observability samples 10 percent of requests. Application code does not log raw ENS recipient queries, wallet addresses, FIDs, signatures, message text, drafts, inbox IDs, conversation IDs, or tokens. `/api/health` returns only service, environment, app version, and Cloudflare version metadata.
 
+## Repository knowledge maintenance
+
+`AGENTS.md` is canonical; `CLAUDE.md` and `GEMINI.md` must remain symlinks to it.
+Use `MEMORY.md` for compact navigation, `SKILLS.md` for repeatable workflows,
+and the ownership map under `agent-memory/notes/` before adding guidance.
+
+Search with targeted `rg`:
+
+```sh
+rg -n -i 'term|related term' AGENTS.md MEMORY.md SKILLS.md features.md docs agent-memory skills src worker scripts
+```
+
+The installed `qmd` currently fails initialization because its native database
+module targets a different Node ABI. It is not part of the working runbook
+until repaired and verified. Generated `.qmd/` and `.codex/` state remains
+ignored. When a skill changes, run `npm run knowledge:check`,
+`npm run skills:check`, and a realistic read-only forward-use review.
+For a publishable checkpoint, run `npm run verify`; its Playwright server uses
+`npm run preview` and exercises the production-shaped root and `/api/health`.
+Then review the staged diff, commit/push, correlate the Git SHA through the
+Cloudflare build to the immutable Worker version, and prove the live root and
+health response.
+
+Review <https://recurse.bot/> when the recorded guidance review is at least
+seven days old and related work touches the repository. Record a compact
+adopt/adapt/decline result in `agent-memory/logs/`; do not automate a
+write-capable GitHub workflow.
+
 ## XMTP payer Gateway blocker
 
 The pinned Browser SDK provides built-in endpoints for `local`, `dev`, and legacy `production`. Its `mainnet`, `testnet`, `testnet-dev`, and `testnet-staging` environments require a Gateway hostname. This distinction is regression-tested because incorrectly gating legacy `production` prevents `Client.create()` from running and therefore prevents every XMTP signing request.
