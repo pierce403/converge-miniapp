@@ -85,6 +85,16 @@ external app handoff. The focused 41-test regression, full 667-test local gate,
 six production-shaped Playwright checks, exact-SHA GitHub and Cloudflare
 checks, live `/api/health`, and canonical production bundle inspection pass.
 
+The 2026-07-28 alert-copy checkpoint is deployed from main commit `50e2c2c` as
+immutable Worker `22ac661c-6084-439d-b4f4-811549f9137b`. The generic native
+payload now uses **New XMTP message** while retaining **Open Converge Mini to
+read it.** and the canonical Mini root target. Its exact payload regression,
+53-test focused bridge suite, 667-test full local gate, six production-shaped
+Playwright checks, exact-SHA GitHub and Cloudflare checks, live health/version,
+and production notification-readiness check pass. Because the copy is emitted
+only during a real delivery, the next incoming-message alert remains the honest
+Farcaster-rendering check for the new title.
+
 The notification bridge is the active P1 milestone. Its production status and
 manifest webhook are enabled, and the encryption, D1, DNS, and vapid.party
 dependencies are configured. Signed Farcaster lifecycle events now create the
