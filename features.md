@@ -64,6 +64,19 @@ an ordinary `Allowed` stream refresh, and the overlapping-refresh case while
 preserving stale-inbox quarantine. The 658-test local gate, GitHub `verify`
 gate, end-to-end suite, Cloudflare build, and live `/api/health` check pass.
 
+The 2026-07-28 repository knowledge-system checkpoint is deployed from main
+commit `66b30f7` as immutable Worker
+`14698c6a-ed25-4a78-8679-66d169a17c83`. It adapts the live
+`recurse.bot` guide into one canonical instruction file with harness aliases,
+privacy-bounded memory shelves, five class-level skills, and local
+knowledge/skill/advice/checkpoint tooling without changing product behavior.
+The exact live guide hash, public-memory privacy scan, five skill validators,
+three revised forward-use tests, 658-test deterministic gate, production build,
+and six production-shaped Playwright tests pass. GitHub CI and the exact-SHA
+Cloudflare Workers Builds check succeeded; Wrangler lists the resulting Worker
+as version 70, and the canonical root plus `/api/health` serve that immutable
+version.
+
 The notification bridge is the active P1 milestone. Its production status and
 manifest webhook are enabled, and the encryption, D1, DNS, and vapid.party
 dependencies are configured. Signed Farcaster lifecycle events now create the
@@ -1491,7 +1504,7 @@ Exit criteria:
 - the canonical hostname is recorded; and
 - the revised decision/spec checkpoint is committed and pushed before runtime work.
 
-### Task 0d: repo-local memory, skills, and harness compatibility — planned 2026-07-28
+### Task 0d: repo-local memory, skills, and harness compatibility — complete 2026-07-28
 
 Source: [Sparkle's live Agent Etiquette Guide](https://recurse.bot/), reviewed
 2026-07-28. The guide is an adaptable example, not a persona or process mandate.
@@ -1546,6 +1559,26 @@ Explicit adaptations and exclusions:
   Cloudflare deployment from read-only CI; and
 - curate a small set of reusable workflow classes rather than one skill or
   permanent log for every incident.
+
+Completion evidence:
+
+- planning commit `e8284b7` captured the acceptance contract before
+  implementation;
+- code-bearing commit `66b30f7` created the canonical aliases, memory shelves,
+  skill catalog/packages, validation tools, and aligned public documentation;
+- the live advice checker verified the exact canonical no-redirect page and
+  recorded SHA-256
+  `9c7a6dd456fdf6315e6e35302535ad9631621354a201c3e6516b1b8cca722105`;
+- the knowledge checker proves both symlinks, all indexed Markdown, nested-log
+  tracking, generated-state ignores, five catalog/skill packages, current
+  review-log structure, and aligned agent metadata;
+- all five skill-creator validators and the second-pass forward-use reviews for
+  curation/advice sync, context/publishing, and message-delivery diagnosis pass;
+- `npm run verify` passed the knowledge/type/lint/658-test/build gate and all six
+  production-shaped Playwright checks; and
+- GitHub CI plus Cloudflare Workers Builds passed for exact SHA `66b30f7`,
+  producing immutable Worker `14698c6a-ed25-4a78-8679-66d169a17c83`
+  (version 70), which the live canonical health response reports.
 
 ### Task 1: runtime feasibility spike
 
