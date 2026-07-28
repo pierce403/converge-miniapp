@@ -390,6 +390,7 @@ Quick Auth also protects stateless recipient ENS forward resolution and a public
 | Never merge or silently relink separate XMTP inboxes | Committed | Only the explicitly confirmed Farcaster identity is reassigned. Histories never merge, the old inbox/database remain separate, target-inbox recovery is unchanged, and no installation is revoked automatically. |
 | Remember the ENS choice by trusted Farcaster FID | Committed | Quick Auth supplies the authoritative FID; D1 stores only `accepted` or `dismissed` plus an update timestamp. |
 | Resolve known peer addresses as display hints | Committed | Prefer ENS, then Basename, and always retain the wallet address. Show a registered fname only as a separately labeled best-effort hint, never for authorization. |
+| Surface and alert on new XMTP DMs without an accept step | Committed | Fresh burner identities are a required acceptance path. Include `Unknown` DMs in the primary inbox and alert snapshot, register the installation welcome topic for the first message, and continue excluding explicitly `Denied` conversations. Revisit reputation filtering only through a separate privacy/identity design. |
 | Use Git and GitHub from the beginning | Committed | Each coherent task is verified, committed, and pushed before the next task begins. |
 | Adapt the live `recurse.bot` operating guide into repository-local memory and skills | Committed | Keep `AGENTS.md` canonical, add privacy-bounded memory and reusable workflow indexes, and support compatible harness aliases. Adapt the guide to this public Node repository: Codex/current harness identity instead of a forced persona, `rg` while `qmd` is unavailable, small Node tools instead of Python helpers, and an on-touch review instead of a write-capable scheduled workflow. |
 
@@ -1899,6 +1900,58 @@ Exit criteria:
 - disabling/removing stops delivery and cleans both services without affecting another route;
 - target domain, fixed version/type, replay, and idempotency rules are correct;
 - notification content leaks no private message or participant data.
+
+### Task 10a: fresh-sender alerts without consent gating — committed 2026-07-28
+
+This decision supersedes the existing `Allowed`-only inbox and alert policy once
+its code-bearing checkpoint is deployed. Until then, production remains on the
+older policy described in the current alert evidence above.
+
+Deliverables:
+
+- register the current installation's exact XMTP welcome topic with no HMAC
+  keys so a first message can wake a closed Mini before that conversation
+  exists in the recipient's local database;
+- register HMAC-backed group topics for both `Allowed` and `Unknown`
+  conversations, including every stitched-DM backing group, while continuing
+  to exclude explicitly `Denied` conversations;
+- show and stream ordinary `Unknown` DMs in the primary inbox without a
+  separate accept step, while preserving the stricter signed-invite checks for
+  Convos groups and the existing explicit-denial boundary;
+- remove zero-`Allowed`-topic route revocation: a registered installation with
+  no known conversations still owns its welcome-only alert route;
+- make the Mini Worker require exactly one canonical welcome topic whose
+  installation suffix matches the installation-proved identity, require no
+  HMAC keys on that topic, and retain nonempty HMAC requirements for group
+  topics;
+- keep the callback and Farcaster notification generic: no sender, message,
+  conversation, topic, or consent metadata enters the Mini callback or native
+  notification; and
+- update inbox copy, privacy/operations documentation, diagnostic guidance,
+  and automated coverage to the new contract.
+
+Exit criteria:
+
+- a welcome-only fresh-inbox snapshot passes browser, Mini Worker, and existing
+  vapid.party validation without changing vapid.party code or storage;
+- missing, duplicate, wrong-installation, malformed, or HMAC-bearing welcome
+  topics fail closed before route allocation;
+- an existing `Unknown` DM appears in cached/live inbox and conversation paths,
+  while an explicitly `Denied` DM remains excluded;
+- the full local gate, staged review, GitHub CI, Cloudflare Workers Build, and
+  canonical root/health checks pass; and
+- with Converge Mini closed, a newly created burner identity sends the first DM
+  to the current `deanpierce.eth` XMTP inbox, exactly one generic notification
+  appears in Farcaster, tapping it opens the canonical Mini, and the new DM is
+  visible after XMTP synchronization.
+
+Deferred abuse filtering:
+
+- The current opaque callback intentionally contains no sender identity, so a
+  Neynar-score check cannot be bolted onto delivery without adding new identity
+  metadata and privacy exposure. Design that separately after first-message
+  delivery is proven; do not weaken the current no-plaintext/no-sender callback
+  merely to add an unproven score filter.
 
 ### Task 11a: Convos protocol primitives — deployed, acceptance pending
 
