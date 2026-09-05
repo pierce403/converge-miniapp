@@ -42,8 +42,12 @@ The 687-test knowledge/type/lint/unit/build gate and 24 Chromium layout checks
 passed across 360/390/760px widths, 420/844px heights, status present/absent,
 and empty/populated contacts. The production-shaped Playwright suite was blocked
 before startup by this runner's `uv_interface_addresses` permission error in
-Cloudflare's local preview; no application test failed. Production delivery is
-pending the main push and Cloudflare Workers Builds.
+Cloudflare's local preview; no application test failed. Code-bearing commit
+`ce05749d5879536bd5506cfda010f45f2dc1817c` passed GitHub CI (including all six
+production-shaped Playwright tests) and Cloudflare Workers Builds. Production
+health serves immutable Worker `5ff9230a-3ddc-4aea-9491-199075ac6c7d`, and the
+canonical root's `/assets/index-BALuNdh_.css` contains both layout corrections.
+Authenticated Farcaster device review remains a separate acceptance boundary.
 
 As of 2026-07-28 UTC, the canonical Mini deployment includes the Task 7 core
 and the active Task 10 alert bridge through code-bearing commit `0228ea5`.
