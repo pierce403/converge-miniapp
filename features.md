@@ -27,6 +27,35 @@ Status vocabulary:
 
 ## Current delivery checkpoint
 
+### Native header inset correction (2026-09-05)
+
+The reported screenshots locate the remaining gap above the populated inbox,
+group, and DM headers, inside the messaging surface. The previous spacing
+changes were deployed but did not address this band. A newly reproduced failure
+uses an omitted `client.platformType` and a 72px host top inset: the old shell
+treated the absent optional field as a web client and reserved those 72px again.
+The SDK's context type explicitly permits an omitted platform field.
+
+Acceptance: populated inbox, group, and DM headers begin at the surface's 1px
+border for both explicit mobile and legacy omitted-platform contexts with a
+nonzero top inset. Explicit web clients retain the reported top inset. Device
+safe areas, host bottom/side insets, list scrolling, and the bottom composer
+must remain intact at narrow, normal, short, and desktop viewports.
+
+The shell now reserves the additional host top inset only for explicit web
+contexts, applying the existing native-host behavior to legacy contexts too.
+The regression fails on the previous implementation with 72px instead of 0px.
+Browser coverage uses the actual populated components and synthetic public
+messages, including nonzero insets and missing platform metadata. Main CI also
+waits for its content-hashed entry on the canonical origin, runs the layout
+checks against the deployed stylesheet, and retains three mobile screenshots.
+The local knowledge/type/lint/688-test/build gate passes. Local Playwright is
+blocked before startup by Cloudflare preview's `uv_interface_addresses`
+permission error, so the same browser gate runs in GitHub CI. This is synthetic
+layout evidence; it does not sign into a user's Farcaster account or establish
+support for other native clients. Immutable deployment and browser evidence
+are pending this change's delivery.
+
 ### Shared content spacing correction (2026-09-05)
 
 The earlier Contacts-only change was confirmed deployed at Worker
@@ -53,8 +82,10 @@ serves `/assets/index-76QlDkH-.css`; visual inspection and DOM measurement show
 the standalone card now starts at 22px below the header, with the former blank
 band gone. The original six browser tests pass. The new tests initially hit
 Playwright's JSX descriptor transform rather than an app/layout failure; their
-fixtures now render through Vite in a separate Node process. Cross-screen CI
-verification is pending that harness correction. Authenticated host-specific
+fixtures now render through Vite in a separate Node process. All ten browser
+tests subsequently passed on `3c3ef035871561b38a03bf7dded894d8eb8048a6`,
+deployed as Worker `72d71f5d-01a9-45ed-a9de-befa6a740bce`. Those fixtures used
+zero insets and missed the native-header case above. Authenticated host-specific
 safe-area behavior is unchanged and cannot be inferred from standalone review.
 
 ### Contacts spacing correction (2026-09-05)

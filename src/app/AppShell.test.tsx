@@ -5,35 +5,37 @@ import { AppShell } from './AppShell'
 import type { MiniAppHostState } from './useMiniAppHost'
 
 describe('AppShell', () => {
-  function host(platformType: 'mobile' | 'web' = 'mobile') {
+  function host(platformType?: 'mobile' | 'web'): MiniAppHostState {
     return {
       capabilities: [],
       context: {
         client: {
           added: false,
-          clientFid: 1,
-          platformType,
+          notificationsEnabled: false,
+          ...(platformType ? { platformType } : {}),
           safeAreaInsets: { bottom: 18, left: 2, right: 3, top: 72 },
         },
         user: { fid: 403 },
       },
       error: null,
       status: 'embedded',
-    } as unknown as MiniAppHostState
+    }
   }
 
-  it('does not duplicate the mobile host top inset in any shell state', () => {
-    render(<AppShell host={host()}><span>content</span></AppShell>)
+  it.each(['mobile', undefined] as const)(
+    'does not duplicate native chrome with platformType=%s', (platformType) => {
+      render(<AppShell host={host(platformType)}><span>content</span></AppShell>)
 
-    const shell = screen.getByText('content').closest('.app-shell')
-    expect(shell).toHaveStyle({
-      '--host-safe-bottom': '18px',
-      '--host-safe-left': '2px',
-      '--host-messaging-safe-top': '0px',
-      '--host-safe-right': '3px',
-      '--host-safe-top': '0px',
-    })
-  })
+      const shell = screen.getByText('content').closest('.app-shell')
+      expect(shell).toHaveStyle({
+        '--host-safe-bottom': '18px',
+        '--host-safe-left': '2px',
+        '--host-messaging-safe-top': '0px',
+        '--host-safe-right': '3px',
+        '--host-safe-top': '0px',
+      })
+    },
+  )
 
   it('honors web-client safe areas', () => {
     render(<AppShell host={host('web')}><span>content</span></AppShell>)

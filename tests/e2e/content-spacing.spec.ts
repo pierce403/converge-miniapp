@@ -61,4 +61,46 @@ for (const viewport of [
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(viewport.width)
     }
   })
+
+  test(`populated headers avoid duplicate native chrome at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport)
+    await page.goto('/')
+    await expect(page.locator('.standalone')).toBeVisible()
+
+    for (const platform of ['mobile', 'web', 'unknown']) {
+      for (const name of ['inbox', 'group', 'dm']) {
+        await renderScreen(page, layouts[`insets-${platform}-${name}`])
+        const expectedGap = platform === 'web' ? 73 : 1
+        expect(await topGap(page, '.messaging-app', '.screen-header'), `${platform} ${name}`)
+          .toBe(expectedGap)
+        const layout = await page.evaluate(() => {
+          const shell = document.querySelector('.app-shell')!
+          const surface = document.querySelector('.messaging-app')!
+          const screen = document.querySelector('.messaging-screen')!
+          const composer = document.querySelector('.message-composer')
+          const style = getComputedStyle(shell)
+          return {
+            bottom: style.paddingBottom, left: style.paddingLeft, right: style.paddingRight,
+            surfaceBottom: shell.getBoundingClientRect().bottom - surface.getBoundingClientRect().bottom,
+            composerGap: composer
+              ? screen.getBoundingClientRect().bottom - composer.getBoundingClientRect().bottom
+              : 0,
+            width: document.documentElement.scrollWidth,
+          }
+        })
+        expect(layout).toMatchObject({ bottom: '18px', left: '2px', right: '3px', width: viewport.width })
+        expect(Math.abs(layout.composerGap)).toBeLessThan(1)
+        expect(layout.surfaceBottom).toBeGreaterThanOrEqual(18)
+
+        const scroller = page.locator(name === 'inbox' ? '.conversation-list' : '.message-list')
+        await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight })
+        expect(await topGap(page, '.messaging-app', '.screen-header')).toBe(expectedGap)
+        if (platform === 'unknown' && viewport.width === 390) {
+          await testInfo.attach(`${name}-native-header`, {
+            body: await page.screenshot(), contentType: 'image/png',
+          })
+        }
+      }
+    }
+  })
 }

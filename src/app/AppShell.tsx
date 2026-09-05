@@ -18,9 +18,13 @@ type SafeAreaStyle = CSSProperties & {
 
 export function AppShell({ children, host }: AppShellProps) {
   const insets = host.context?.client.safeAreaInsets
-  const hostTop = host.context?.client.platformType === 'mobile'
-    ? 0
-    : (insets?.top ?? 0)
+  // Older native hosts omit the optional platformType. Their top chrome is
+  // already outside the webview, just as for explicitly reported mobile hosts.
+  // Only an explicit web client needs the additional host top inset here;
+  // device safe areas and the host's bottom/side insets remain handled by CSS.
+  const hostTop = host.context?.client.platformType === 'web'
+    ? (insets?.top ?? 0)
+    : 0
   const style: SafeAreaStyle = {
     '--host-safe-right': `${insets?.right ?? 0}px`,
     '--host-safe-bottom': `${insets?.bottom ?? 0}px`,
