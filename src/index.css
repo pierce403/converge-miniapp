@@ -1100,6 +1100,10 @@ img { max-width: 100%; }
 
 .contacts-screen {
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.contacts-screen:has(> .contacts-screen__status) {
   grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
@@ -1652,9 +1656,12 @@ img { max-width: 100%; }
   .inbox-actions { align-items: flex-start; }
   .inbox-actions__buttons .button { width: 44px; padding: 0; font-size: 0; }
   .inbox-actions__buttons .button svg { width: 19px; height: 19px; }
+  .alert-assist { margin-inline: 8px; }
+}
+
+@media (max-width: 600px) {
   .contacts-screen__import { align-items: stretch; flex-direction: column; }
   .contacts-screen__import .button { width: 100%; }
-  .alert-assist { margin-inline: 8px; }
 }
 
 @media (min-width: 760px) {

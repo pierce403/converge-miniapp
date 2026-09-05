@@ -27,6 +27,24 @@ Status vocabulary:
 
 ## Current delivery checkpoint
 
+### Contacts spacing correction (2026-09-05)
+
+Acceptance: the contact list or empty state fills the space below the import
+panel, with no unused trailing grid row. Showing an import result adds only
+the row needed for that status; long contact lists still scroll within the
+screen at normal and keyboard-sized mobile viewport heights.
+
+The Contacts grid now reserves a status row only while a status element is
+present. Previously the list/empty state occupied an `auto` row and left the
+final flexible row empty. The import panel also stacks its button below the copy
+through 600px, avoiding the tall, squeezed text column on common mobile widths.
+The 687-test knowledge/type/lint/unit/build gate and 24 Chromium layout checks
+passed across 360/390/760px widths, 420/844px heights, status present/absent,
+and empty/populated contacts. The production-shaped Playwright suite was blocked
+before startup by this runner's `uv_interface_addresses` permission error in
+Cloudflare's local preview; no application test failed. Production delivery is
+pending the main push and Cloudflare Workers Builds.
+
 As of 2026-07-28 UTC, the canonical Mini deployment includes the Task 7 core
 and the active Task 10 alert bridge through code-bearing commit `0228ea5`.
 Cloudflare Worker version `0226899b-3b08-401e-a1a0-fd5dad9b0b59` is the
