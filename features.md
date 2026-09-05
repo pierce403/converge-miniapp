@@ -27,6 +27,28 @@ Status vocabulary:
 
 ## Current delivery checkpoint
 
+### Shared content spacing correction (2026-09-05)
+
+The earlier Contacts-only change was confirmed deployed at Worker
+`1090c047-4f17-4c95-8f66-f1b1a567316e`; it did not address the shared centering
+rules. The deployed standalone card began 160px below its header at 1363x936.
+Setup cards outside a reported mobile host, empty inbox/Contacts states, and
+empty/loading conversations also used vertical centering or automatic margins.
+
+Acceptance: content begins at its normal 14–22px shell padding, empty-state
+content begins at its normal 16–28px inner padding, and navigation, scrolling,
+safe areas, and the bottom chat composer remain usable across mobile, short,
+and desktop viewports. New DM and Join Convo must also remain at the top.
+
+Shared cards and empty states now align to the top. Empty states scroll when
+short viewports cannot fit their contents. Browser regression coverage renders
+the real presentational components with synthetic public props against the
+app stylesheet, without requiring a wallet or private message history.
+The full local knowledge/type/lint/687-test/build gate passes. Local interactive
+preview is blocked by this session's browser URL policy; the browser regressions
+will run in the existing GitHub CI, followed by direct production inspection.
+Deployment evidence is pending.
+
 ### Contacts spacing correction (2026-09-05)
 
 Acceptance: the contact list or empty state fills the space below the import

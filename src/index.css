@@ -204,11 +204,11 @@ img { max-width: 100%; }
 .standalone,
 .state-panel {
   position: relative;
-  align-self: center;
+  align-self: start;
   width: 100%;
   min-width: 0;
   max-width: 520px;
-  margin: auto;
+  margin: 0 auto;
   padding: clamp(22px, 6vw, 34px);
   overflow: hidden;
   border: 1px solid rgb(96 165 250 / 30%);
@@ -1174,10 +1174,13 @@ img { max-width: 100%; }
   min-height: 0;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  overflow-y: auto;
   padding: 28px 20px 34px;
   text-align: center;
 }
+
+.empty-inbox > * { flex-shrink: 0; }
 
 .empty-inbox__icon {
   display: grid;
@@ -1197,7 +1200,7 @@ img { max-width: 100%; }
 .screen-header--compact > div { min-width: 0; }
 
 .new-dm-screen {
-  align-self: center;
+  align-self: start;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1263,7 +1266,7 @@ img { max-width: 100%; }
 }
 
 .join-convos-screen {
-  align-self: center;
+  align-self: start;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1456,7 +1459,7 @@ img { max-width: 100%; }
   align-self: center;
   align-items: center;
   gap: 8px;
-  margin: auto;
+  margin: 0 auto;
   color: var(--primary-300);
   font-size: 0.74rem;
 }
@@ -1638,11 +1641,6 @@ img { max-width: 100%; }
   outline-offset: 3px;
 }
 
-.app-shell[data-host-platform="mobile"] .state-panel {
-  align-self: start;
-  margin: 0 auto;
-}
-
 @media (max-width: 380px) {
   .app-header { min-height: 62px; padding-inline: 12px; }
   .brand-mark { width: 38px; height: 38px; }
@@ -1666,7 +1664,6 @@ img { max-width: 100%; }
 
 @media (min-width: 760px) {
   .app-header { padding-inline: max(24px, calc((100vw - 760px) / 2)); }
-  .app-main { padding-block: 36px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
