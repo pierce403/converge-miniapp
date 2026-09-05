@@ -125,7 +125,19 @@ for (const viewport of [
         expect(layout.surfaceBottom).toBeGreaterThanOrEqual(18)
 
         const scroller = page.locator(name === 'inbox' ? '.conversation-list' : '.message-list')
-        await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight })
+        await scroller.evaluate((element) => {
+          element.scrollTo({ top: element.scrollHeight, behavior: 'instant' })
+        })
+        await expect.poll(() => scroller.evaluate((element) =>
+          Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop),
+        )).toBeLessThanOrEqual(1)
+        if (name !== 'inbox') {
+          const lastMessageGap = await scroller.evaluate((element) => {
+            const last = element.querySelector('.message-bubble:last-child')!
+            return element.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom
+          })
+          expect(Math.abs(lastMessageGap - 16)).toBeLessThanOrEqual(1)
+        }
         expect(await topGap(page, '.messaging-app', '.screen-header')).toBe(expectedGap)
         if (platform === 'unknown' && viewport.width === 390) {
           const screenshotPath = testInfo.outputPath(`${name}-native-header.png`)

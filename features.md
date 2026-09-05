@@ -66,7 +66,14 @@ tests passed all 22 production-shaped cases on
 the stable GitHub workflow creation time for Worker freshness: Cloudflare
 rewrites its check's start time on completion, after the Worker was deployed.
 Screenshots are explicitly written to test output for artifact retention.
-The live-origin review awaits its final CI result.
+Commit `6f096384cf8048d50dc319b22843cf149e800ae3` passed the 688-test build
+gate, all 22 production-shaped browser tests, and all 16 live-origin layout
+tests against Worker `38f58cf2-0f97-4897-8f93-c140cba343c3`. The canonical
+bundle contains the explicit-web inset rule. Visual review of all three
+production-rendered screenshots confirms that the blank band above the headers
+is gone: the header starts at the surface's 1px border. The review screenshots
+now use an immediate scroll and verify the last-message position before capture
+so smooth-scroll animation cannot leave an unfinished frame in the evidence.
 
 ### Shared content spacing correction (2026-09-05)
 
