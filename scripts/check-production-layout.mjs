@@ -8,6 +8,8 @@ import { setTimeout } from 'node:timers/promises'
 const origin = 'https://miniapp.converge.cv'
 const sha = process.env.GITHUB_SHA
 if (!/^[a-f0-9]{40}$/u.test(sha ?? '')) throw new Error('GITHUB_SHA is required')
+const runId = process.env.GITHUB_RUN_ID
+if (!/^[0-9]+$/u.test(runId ?? '')) throw new Error('GITHUB_RUN_ID is required')
 const repository = 'https://api.github.com/repos/pierce403/converge-miniapp'
 
 async function json(url) {
@@ -40,10 +42,14 @@ if (!deployment) throw new Error(`Cloudflare did not deploy ${sha} within the re
 
 const head = await json(`${repository}/git/ref/heads/main`)
 if (head.object?.sha !== sha) throw new Error('Main changed before production review')
+// Cloudflare rewrites its check's started_at to completion time. The workflow's
+// creation time is stable, including when a completed review job is rerun.
+const run = await json(`${repository}/actions/runs/${runId}`)
+if (run.head_sha !== sha) throw new Error('The workflow is reviewing another commit')
 const status = await json(`${origin}/api/health`)
 if (status.ok !== true || status.environment !== 'production' ||
   status.service !== 'converge-miniapp' || !status.version?.id ||
-  !(Date.parse(status.version.deployedAt) >= Date.parse(deployment.started_at))) {
+  !(Date.parse(status.version.deployedAt) >= Date.parse(run.created_at))) {
   throw new Error('Production health did not identify a healthy version')
 }
 console.log(`Reviewing commit ${sha} on Worker ${status.version.id}`)

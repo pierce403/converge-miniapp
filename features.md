@@ -61,7 +61,12 @@ support for other native clients. The application fix in
 `b8add3e7-9afa-4132-9037-e9998cf7d43d`, serving `/assets/index-CUosvlbK.js`.
 All fourteen production-shaped browser tests passed; the initial live-review
 step waited for an invalid cross-environment hash match. The revised delivery
-check and tests of the live SDK-derived insets await their CI result.
+tests passed all 22 production-shaped cases on
+`4e2d5eb8a896bde4a0f42ce0fed67661241cc266`. The final live-review gate uses
+the stable GitHub workflow creation time for Worker freshness: Cloudflare
+rewrites its check's start time on completion, after the Worker was deployed.
+Screenshots are explicitly written to test output for artifact retention.
+The live-origin review awaits its final CI result.
 
 ### Shared content spacing correction (2026-09-05)
 

@@ -128,8 +128,10 @@ for (const viewport of [
         await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight })
         expect(await topGap(page, '.messaging-app', '.screen-header')).toBe(expectedGap)
         if (platform === 'unknown' && viewport.width === 390) {
+          const screenshotPath = testInfo.outputPath(`${name}-native-header.png`)
+          await page.screenshot({ path: screenshotPath })
           await testInfo.attach(`${name}-native-header`, {
-            body: await page.screenshot(), contentType: 'image/png',
+            path: screenshotPath, contentType: 'image/png',
           })
         }
       }
