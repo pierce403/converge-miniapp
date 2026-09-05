@@ -62,14 +62,46 @@ for (const viewport of [
     }
   })
 
-  test(`populated headers avoid duplicate native chrome at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
-    await page.setViewportSize(viewport)
-    await page.goto('/')
-    await expect(page.locator('.standalone')).toBeVisible()
+  for (const platform of ['mobile', 'web', 'unknown']) {
+    test(`populated ${platform} headers avoid duplicate chrome at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+      await page.setViewportSize(viewport)
+      // Exercise the shipped SDK and AppShell with a synthetic native bridge.
+      // No wallet capability, signatures, or private messaging data are supplied.
+      await page.addInitScript((platform) => {
+        const context = {
+          client: {
+            added: true, clientFid: 1,
+            ...(platform === 'unknown' ? {} : { platformType: platform }),
+            safeAreaInsets: { top: 72, right: 3, bottom: 18, left: 2 },
+          },
+          user: { fid: 1, displayName: 'Layout review' },
+        }
+        Object.defineProperty(window, 'ReactNativeWebView', {
+          value: { postMessage(message: string) {
+            const request = JSON.parse(message) as { id: string, path: string[] }
+            const method = request.path.join('.')
+            const value = method === 'context' ? context : method === 'getCapabilities' ? [] : undefined
+            queueMicrotask(() => document.dispatchEvent(new MessageEvent('FarcasterFrameCallback', {
+              data: { id: request.id, type: 'RAW', value },
+            })))
+          } },
+        })
+      }, platform)
+      await page.goto('/')
+      await expect(page.getByRole('heading', { name: 'This Farcaster client cannot open XMTP' })).toBeVisible()
 
-    for (const platform of ['mobile', 'web', 'unknown']) {
       for (const name of ['inbox', 'group', 'dm']) {
-        await renderScreen(page, layouts[`insets-${platform}-${name}`])
+        const markup = layouts[`insets-${platform}-${name}`]
+        if (!markup) throw new Error('Populated layout fixture is missing')
+        await page.evaluate((markup) => {
+          const fixture = new DOMParser().parseFromString(markup, 'text/html')
+          const messaging = fixture.querySelector('.messaging-app')
+          const main = document.querySelector('.app-main')
+          if (!messaging || !main) throw new Error('Messaging layout is missing')
+          // Keep the live AppShell and its SDK-derived inset values. Replace
+          // only the wallet-unavailable panel with synthetic screen content.
+          main.replaceChildren(messaging)
+        }, markup)
         const expectedGap = platform === 'web' ? 73 : 1
         expect(await topGap(page, '.messaging-app', '.screen-header'), `${platform} ${name}`)
           .toBe(expectedGap)
@@ -101,6 +133,6 @@ for (const viewport of [
           })
         }
       }
-    }
-  })
+    })
+  }
 }

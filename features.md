@@ -47,14 +47,21 @@ contexts, applying the existing native-host behavior to legacy contexts too.
 The regression fails on the previous implementation with 72px instead of 0px.
 Browser coverage uses the actual populated components and synthetic public
 messages, including nonzero insets and missing platform metadata. Main CI also
-waits for its content-hashed entry on the canonical origin, runs the layout
-checks against the deployed stylesheet, and retains three mobile screenshots.
+waits for Cloudflare's successful check on its Git SHA and healthy production
+version, then exercises the deployed SDK/AppShell with a synthetic native bridge.
+Only screen content is substituted; the live shell and its host-derived inset
+values stay intact. The checks retain three mobile screenshots. Do not compare
+CI and Cloudflare bundle hashes: their public WalletConnect configuration differs.
 The local knowledge/type/lint/688-test/build gate passes. Local Playwright is
 blocked before startup by Cloudflare preview's `uv_interface_addresses`
 permission error, so the same browser gate runs in GitHub CI. This is synthetic
 layout evidence; it does not sign into a user's Farcaster account or establish
-support for other native clients. Immutable deployment and browser evidence
-are pending this change's delivery.
+support for other native clients. The application fix in
+`63cb95cb8f4d5d0e736218352923ee1f1c22ab4d` deployed successfully as Worker
+`b8add3e7-9afa-4132-9037-e9998cf7d43d`, serving `/assets/index-CUosvlbK.js`.
+All fourteen production-shaped browser tests passed; the initial live-review
+step waited for an invalid cross-environment hash match. The revised delivery
+check and tests of the live SDK-derived insets await their CI result.
 
 ### Shared content spacing correction (2026-09-05)
 
