@@ -22,6 +22,14 @@ The same restricted sandbox can make Cloudflare Vite preview startup fail at
 can enumerate loopback interfaces. Do not delete the browser gate or treat the
 sandbox failure as an application regression.
 
+## React layout fixtures in Playwright
+
+Playwright transforms imported app JSX into component descriptors with
+`__pw_type`; React server rendering cannot consume those descriptors. Use
+`scripts/render-layout-fixtures.mjs` to compile/render the real components
+through Vite in a separate Node process, then measure that markup against the
+app stylesheet. Changing only Playwright's `tsconfig` does not fix this.
+
 ## Nested knowledge logs
 
 The root runtime log directory is ignored as `/logs/`. Keep that pattern

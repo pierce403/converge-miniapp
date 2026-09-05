@@ -47,7 +47,15 @@ app stylesheet, without requiring a wallet or private message history.
 The full local knowledge/type/lint/687-test/build gate passes. Local interactive
 preview is blocked by this session's browser URL policy; the browser regressions
 will run in the existing GitHub CI, followed by direct production inspection.
-Deployment evidence is pending.
+Code-bearing commit `5da83c455941f027c43168730f449bb3c0226022` deployed as
+Worker `88f92e6d-8855-4adc-bcfd-6ad815700bc5`. A fresh production browser load
+serves `/assets/index-76QlDkH-.css`; visual inspection and DOM measurement show
+the standalone card now starts at 22px below the header, with the former blank
+band gone. The original six browser tests pass. The new tests initially hit
+Playwright's JSX descriptor transform rather than an app/layout failure; their
+fixtures now render through Vite in a separate Node process. Cross-screen CI
+verification is pending that harness correction. Authenticated host-specific
+safe-area behavior is unchanged and cannot be inferred from standalone review.
 
 ### Contacts spacing correction (2026-09-05)
 
