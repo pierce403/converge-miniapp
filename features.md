@@ -2,7 +2,7 @@
 
 > Working title: **Converge Mini**
 > Status: deployed implementation; release acceptance in progress
-> Last reviewed: 2026-07-28
+> Last reviewed: 2026-10-14
 > Canonical scope: this file
 > Canonical production origin: `https://miniapp.converge.cv`
 
@@ -26,6 +26,32 @@ Status vocabulary:
 | Out | Explicitly excluded from this product direction for now. |
 
 ## Current delivery checkpoint
+
+### Dependency security checkpoint (2026-10-14 UTC)
+
+The dependency update in `0c7c890a415e2a7249b214eff613843aacf8d0e5`
+advanced Cloudflare build tooling, Sharp, Vitest, Axios, and compatible locked
+packages without changing the direct XMTP, Farcaster, wallet, or Viem runtime
+versions. GitHub CI and Workers Builds rejected its npm 11 lockfile because
+their npm 10 clean install required three nested optional/peer entries. The
+minimal lockfile correction in `fbc0a6bddeea1c7fd1270d72cf63c79d47f6ac52`
+passed a real npm 10 clean install, the local knowledge/type/lint/688-test/build
+gate, and all 22 local production-shaped Playwright cases.
+
+The [exact-commit GitHub CI](https://github.com/pierce403/converge-miniapp/actions/runs/38488737065)
+passed clean install, the repository gate, Playwright, and live-origin layout
+review. The [exact-commit Cloudflare Workers Build](https://dash.cloudflare.com/b6d1478423f0bb0c0477df387305e46b/workers/services/view/converge-miniapp/production/builds/647fbfee-43c8-426a-b473-74a8467dc644)
+succeeded and deployed immutable Worker
+`1ee0d341-086d-4043-a24c-6c0b086b931a` to 100% traffic. The canonical
+`/` and `/api/health` returned HTTP 200; health reported `ok: true`,
+`environment: "production"`, app `0.1.0`, and that exact Worker ID.
+
+Default-branch Dependabot alerts fell from 30 to three. All three remaining
+moderate `stream-json` advisories trace through
+`@farcaster/miniapp-core → @solana/web3.js → jayson 4.3.0 → stream-json 1.9.1`.
+The compatible `jayson` 4.x line still requires `stream-json` 1.x; a forced
+major override lacks wallet/Solana interoperability proof and is not recorded
+as a fix. Existing named release acceptance gates below remain open.
 
 ### Native header inset correction (2026-09-05)
 
