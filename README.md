@@ -63,3 +63,7 @@ response. It is deliberately not part of CI.
 The production Worker and `miniapp.converge.cv` Custom Domain are live. Pushes to `main` are the ordinary production delivery path: a main-only Cloudflare Workers Builds trigger pulls through the Cloudflare GitHub App, runs `npm run check`, and then runs `npx wrangler deploy`. GitHub Actions remains read-only CI; do not store Cloudflare API tokens or account credentials in GitHub secrets. The `npm run deploy` and `npm run deploy:preview` scripts are reserved for explicit operator-owned manual work.
 
 The Farcaster account association is configured as Cloudflare Worker runtime secrets and the public Farcaster debugger verifies exact-domain ownership for `miniapp.converge.cv`. The manifest remains `noindex: true` until a separate launch decision. The payer Gateway remains unconfigured, so moving the public app from legacy XMTP `production` to decentralized `mainnet` is still blocked.
+
+## Licensing scope
+
+Original project code and documentation are licensed under the [Apache License, Version 2.0](LICENSE). Third-party dependencies, vendored code, quoted material, data, fonts, media, and other third-party assets retain their respective licenses and rights; this grant does not relicense them. Existing license notices and attribution must be preserved.
